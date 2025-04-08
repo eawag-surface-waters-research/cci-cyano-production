@@ -1,0 +1,7 @@
+{
+  "variable": "chla_mean",
+  "shapefile": "/media/runnalja/My Passport/Documents/Phenology/data/CCI_lakes_ShpFls/lakes_cci_v2.0.2_data_availability_shp/lakescci_v2.0.2_data-availability.shp",
+  "images": "/media/runnalja/My Passport/Documents/Phenology/data/CCI_lakes_nc/v2.0.2/2020",
+  "start_index": 10,
+  "end_index": 12
+}
