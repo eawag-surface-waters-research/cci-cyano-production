@@ -3,19 +3,22 @@ import sys
 import logging
 from datetime import datetime
 
-def process_lake(lake, args):
-    print(lake)
-
 def parse_args(args):
     default_args = {
         "variable": "chla_mean",
         "shapefile": "metadata.shp",
         "start_index": False,
         "end_index": False,
+        "out": "",
+        "time_chunk": 10,
         "min_date": "",
         "max_date": ""
     }
     return default_args | args
+
+def chunked(iterable, n):
+    for i in range(0, len(iterable), n):
+        yield iterable[i:i + n]
 
 def set_logging(save):
     if save:
