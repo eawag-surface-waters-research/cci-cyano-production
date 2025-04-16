@@ -9,10 +9,8 @@ def parse_args(args):
         "shapefile": "metadata.shp",
         "start_index": False,
         "end_index": False,
-        "out": "",
-        "time_chunk": 10,
-        "min_date": "",
-        "max_date": ""
+        "out_folder": "",
+        "threads": 1
     }
     return default_args | args
 
