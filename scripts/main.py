@@ -98,7 +98,6 @@ def process_lake(args):
                 elapsed = time.time() - start_time
                 avg_time = (elapsed / (i + 1) * 1000) / args["threads"]
                 logging.info(f"Average time per file: {avg_time:.2f} ms")
-
         summary_var[:] = summary
 
     os.rename(output_temp, output_path)
