@@ -5,12 +5,24 @@ from datetime import datetime
 
 def parse_args(args):
     default_args = {
-        "variable": "chla_mean",
+        "variable": "chla_mean", #
+        "qa": "lwlr_quality_flag",
         "shapefile": "metadata.shp",
         "start_index": False,
         "end_index": False,
+        "lakes": [],
         "out_folder": "",
-        "threads": 1
+        "threads": 1,
+        "extract": True,
+        "phenology": True,
+        "qa_filter": True, # Only accept qa_flag = 0
+        "spline_min_phase_length": 14,
+        "spline_min_relative_amplitude": 0,
+        "spline_min_phase_data": 0,
+        "spline_data_gap_size": 31,
+        "spline_date_gap_size_buffer": 0,
+        "subs_peak_win_size": 365,
+        "subs_peak_ampl_frac_list": [0.05, 0.35]
     }
     return default_args | args
 

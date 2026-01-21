@@ -343,3 +343,5 @@ logs/*
 
 data/*
 !data/.gitkeep
+
+matlab
