@@ -31,9 +31,6 @@ def phenology(lake, p, threads=1):
         - spline_subs_peak_ampl_frac : float - amplitude fraction for substantial peak check
         - spline_data_gap_size : int - minimum gap size to flag (days)
         - spline_data_gap_size_buffer : int - buffer around data gaps (days)
-        - parallel : str - 'lakes' (parallelise across lakes) or 'pixels' (parallelise
-          pixels within each lake); defaults to 'lakes'
-        - threads : int - number of parallel workers
     """
     input_file = os.path.join(p["out_folder"], "extract", p["variable"], "{}.nc".format(lake["id"]))
     output_file = os.path.join(p["out_folder"], "phenology", p["variable"], "{}.nc".format(lake["id"]))
@@ -43,6 +40,7 @@ def phenology(lake, p, threads=1):
         return
 
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    output_file_temp = output_file.replace(".nc", "_tmp.nc")
 
     if os.path.isfile(input_file):
         logging.info(f"Starting phenology computation for {lake['id']}")
@@ -67,7 +65,7 @@ def phenology(lake, p, threads=1):
                 x, y, result, pheno = future.result()
                 if result is not None:
                     if out is None:
-                        out = netCDF4.Dataset(output_file, 'w', format='NETCDF4')
+                        out = netCDF4.Dataset(output_file_temp, 'w', format='NETCDF4')
                         functions.init_phenology_output(out, lat, lon)
                     functions.append_pixel_phenology(out, x, y, result, pheno)
     else:
@@ -75,12 +73,14 @@ def phenology(lake, p, threads=1):
             x, y, result, pheno = compute_pixel(input_file, x, y, t, smooth_x_axis, p)
             if result is not None:
                 if out is None:
-                    out = netCDF4.Dataset(output_file, 'w', format='NETCDF4')
+                    out = netCDF4.Dataset(output_file_temp, 'w', format='NETCDF4')
                     functions.init_phenology_output(out, lat, lon)
                 functions.append_pixel_phenology(out, x, y, result, pheno)
 
     if out is not None:
         out.close()
+        os.rename(output_file_temp, output_file)
+        logging.info(f"Completed phenology computation for {lake['id']}")
     else:
         logging.info(f"No valid phenology results for {lake['id']}")
 

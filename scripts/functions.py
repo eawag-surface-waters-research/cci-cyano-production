@@ -73,7 +73,7 @@ def _datenum_to_unix(datenum):
                      for b, f in zip(base, frac)])
 
 
-def init_phenology_output(out, lat, lon):
+def init_phenology_output(out, lat, lon, p=None):
     """Initialise a streaming phenology NetCDF file.
 
     Variables are shaped (lat, lon, record) where 'record' is an unlimited
@@ -90,7 +90,23 @@ def init_phenology_output(out, lat, lon):
         1-D array of latitude values for the grid.
     lon : array-like
         1-D array of longitude values for the grid.
+    p : dict, optional
+        Parameters dict.  If provided, spline parameters are written as global
+        attributes so the settings used to produce the file are self-documented.
     """
+    if p is not None:
+        out.setncatts({
+            'variable':                    p['variable'],
+            'qa':                          p['qa'],
+            'qa_filter':                   int(p['qa_filter']),
+            'spline_min_phase_length':     p['spline_min_phase_length'],
+            'spline_min_relative_amplitude': p['spline_min_relative_amplitude'],
+            'spline_min_phase_data':       p['spline_min_phase_data'],
+            'spline_data_gap_size':        p['spline_data_gap_size'],
+            'spline_data_gap_size_buffer': p['spline_data_gap_size_buffer'],
+            'spline_subs_peak_win_size':   p['spline_subs_peak_win_size'],
+            'spline_subs_peak_ampl_frac':  p['spline_subs_peak_ampl_frac'],
+        })
     out.createDimension('lat', len(lat))
     out.createDimension('lon', len(lon))
     out.createDimension('record', None)  # unlimited

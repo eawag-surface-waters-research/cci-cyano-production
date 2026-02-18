@@ -70,7 +70,7 @@ def extract(lake, parameters, files, threads=1):
                 all_touched=True,
                 dtype="uint8"
             ).astype(bool)
-            mask = np.flipud(rasterized) if lat_sub[0] > lat_sub[-1] else rasterized
+            mask = np.flipud(rasterized) if lat_sub[0] < lat_sub[-1] else rasterized
 
         summary = np.zeros_like(mask, dtype=int)
 
