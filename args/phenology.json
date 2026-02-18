@@ -4,8 +4,7 @@
   "shapefile": "/home/runnalja/git/cci-cyano-production/shapefiles/lakes_cci_v2.0.2_data_availability_shp/lakescci_v2.0.2_data-availability.shp",
   "images": "/media/runnalja/MyPassport/Documents/Phenology/data/CCI_lakes_nc/v2.1.0",
   "out_folder": "/home/runnalja/git/cci-cyano-production/data/v2.1",
-  "threads": 1,
-  "lakes": [327],
-  "extract": false,
-  "qa_filter": false
+  "lakes": [327, 2317, 300013962, 300013966],
+  "extract": true,
+  "qa_filter": true
 }

@@ -345,3 +345,4 @@ data/*
 !data/.gitkeep
 
 matlab
+.claude
