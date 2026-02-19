@@ -78,6 +78,12 @@ def extract(lake, parameters, files, threads=1):
         lon_dim = lon_sub.shape[0]
 
         with netCDF4.Dataset(output_temp, "w", format="NETCDF4") as out_nc:
+            out_nc.setncatts({
+                'variable': parameters['variable'],
+                'qa': parameters['qa'],
+                'qa_filter': int(parameters['qa_filter']),
+                "shapefile": parameters["shapefile"]
+            })
             out_nc.createDimension("time", None)
             out_nc.createDimension("lat", lat_dim)
             out_nc.createDimension("lon", lon_dim)

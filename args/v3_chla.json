@@ -1,0 +1,10 @@
+{
+  "variable": "chla",
+  "qa": "lwlr_quality_flags",
+  "shapefile": "/home/runnalja/git/cci-cyano-production/shapefiles/lakes_cci_v2.0.2_data_availability_shp/lakescci_v2.0.2_data-availability.shp",
+  "images": "/media/runnalja/PortableSSD/Documents/Phenology",
+  "out_folder": "/home/runnalja/git/cci-cyano-production/data/v3.1",
+  "lakes": [327, 2317, 300013962, 300013966],
+  "extract": true,
+  "qa_filter": true
+}

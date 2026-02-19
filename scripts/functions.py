@@ -5,7 +5,7 @@ import netCDF4
 import numpy as np
 from csaps import csaps
 from scipy.signal import find_peaks
-from datetime import datetime
+from datetime import datetime, timezone
 import warnings
 from scipy.sparse import SparseEfficiencyWarning
 
@@ -71,6 +71,20 @@ def _datenum_to_unix(datenum):
     frac = ordinals - base
     return np.array([datetime.fromordinal(int(b)).timestamp() + f * 86400
                      for b, f in zip(base, frac)])
+
+
+def unix_to_datenum(arr):
+    return np.array([datetime.utcfromtimestamp(int(ts)).toordinal() + 366 for ts in np.array(arr)])
+
+def datenum_to_datetime(arr):
+    return np.array([datetime.fromordinal(int(dn) - 366).replace(tzinfo=timezone.utc) for dn in np.array(arr)])
+
+def unix_to_datetime(arr):
+    return np.array([datetime.fromtimestamp(int(ts), tz=timezone.utc) for ts in np.array(arr)])
+
+def remove_nan(arr):
+    arr = np.array(arr)
+    return arr[~np.isnan(arr)]
 
 
 def init_phenology_output(out, lat, lon, p=None):

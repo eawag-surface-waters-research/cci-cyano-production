@@ -444,11 +444,11 @@ def _plot_comparison(py, mat, pix, lat_idx, lon_idx,
 
 
 if __name__ == '__main__':
-    python_file = "/home/runnalja/git/cci-cyano-production/data/v3.1/phenology/phycocyanin/327.nc"
-    input_file = "/home/runnalja/git/cci-cyano-production/data/v3.1/extract/phycocyanin/327.nc"
+    python_file = "/home/runnalja/git/cci-cyano-production/data/v3.1/phenology/chla/327.nc"
+    input_file = "/home/runnalja/git/cci-cyano-production/data/v3.1/extract/chla/327.nc"
     matlab_file = "/home/runnalja/git/bgb-jelle/data/CCISTEP3_phenoMETs_ss/Lake_297_327_GLWD00000327/pixFileDataList_chla_mean_731335_738886/cubicSpline_1_14_0_0_31_0_365_5_pixNRs_1_982.mat"
     matlab_data = "/home/runnalja/git/bgb-jelle/data/CCISTEP1_timeSeriesAndNullInfo/Lake_297_327_GLWD00000327/CCI_Data_chla_mean_731335_738886_pixNRs_1_982.mat"
     matlab_info = "/home/runnalja/git/bgb-jelle/data/CCISTEP1_timeSeriesAndNullInfo/Lake_297_327_GLWD00000327/CCI_NullInfo_chla_mean_731335_738886.mat"
     pixel = 600
 
-    compare(python_file, matlab_file, input_file, matlab_data_file=matlab_data, matlab_info_file=matlab_info, pixel=pixel, plot=True, variable="phycocyanin")
+    compare(python_file, matlab_file, input_file, matlab_data_file=matlab_data, matlab_info_file=matlab_info, pixel=pixel, plot=True, variable="chla")

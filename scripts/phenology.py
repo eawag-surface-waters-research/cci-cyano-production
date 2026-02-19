@@ -66,7 +66,7 @@ def phenology(lake, p, threads=1):
                 if result is not None:
                     if out is None:
                         out = netCDF4.Dataset(output_file_temp, 'w', format='NETCDF4')
-                        functions.init_phenology_output(out, lat, lon)
+                        functions.init_phenology_output(out, lat, lon, p=p)
                     functions.append_pixel_phenology(out, x, y, result, pheno)
     else:
         for x, y in tqdm(valid_coords, desc=str(lake['id']), unit='px'):
@@ -74,7 +74,7 @@ def phenology(lake, p, threads=1):
             if result is not None:
                 if out is None:
                     out = netCDF4.Dataset(output_file_temp, 'w', format='NETCDF4')
-                    functions.init_phenology_output(out, lat, lon)
+                    functions.init_phenology_output(out, lat, lon, p=p)
                 functions.append_pixel_phenology(out, x, y, result, pheno)
 
     if out is not None:
