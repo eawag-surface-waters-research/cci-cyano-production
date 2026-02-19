@@ -15,7 +15,7 @@ def unix_to_datenum(unix_ts):
 
 
 def compare(python_file, matlab_file, input_file, matlab_data_file=None, matlab_info_file=None,
-            pixel=None, rtol=1e-6, plot=False):
+            pixel=None, rtol=1e-6, plot=False, variable=None):
     """Compare Python and MATLAB phenology outputs.
 
     Parameters
@@ -225,7 +225,8 @@ def compare(python_file, matlab_file, input_file, matlab_data_file=None, matlab_
 
                 if plot and matlab_data_file and matlab_info_file:
                     _plot_comparison(py, mat, pix, lat_idx, lon_idx,
-                                     matlab_data_file, matlab_info_file)
+                                     matlab_data_file, matlab_info_file,
+                                     input_file=input_file, variable=variable)
 
         # Summary
         print(f"\n{'='*60}")
@@ -256,27 +257,8 @@ def _get_padded(nc, var_name, lat_idx, lon_idx, fill=np.nan):
     return data[data != fill]
 
 
-def _plot_comparison(py, mat, pix, lat_idx, lon_idx,
-                     matlab_data_file, matlab_info_file):
-    """Plot Python vs MATLAB results for a single pixel."""
-    from matplotlib import pyplot as plt
-    from csaps import csaps
-
-    def get_cell(key, idx):
-        cell = mat[key]
-        val = cell[idx, 0]
-        if val.size == 0:
-            return np.array([])
-        return val.flatten()
-
-    m_sm = get_cell("cubicSpline_smPar", pix)[0]
-    m_smooth_x = mat["cubicSpline_smoothXaxis"].flatten()
-    m_pks_x = get_cell("phenoMETs_pks_X", pix)
-    m_pks_y = get_cell("phenoMETs_pks_Y", pix)
-    m_trgs_x = get_cell("phenoMETs_trgs_X", pix)
-    m_trgs_y = get_cell("phenoMETs_trgs_Y", pix)
-
-    # Load MATLAB raw data
+def _load_matlab_raw(mat, pix, matlab_data_file, matlab_info_file):
+    """Load and filter raw MATLAB time-series data for a single pixel."""
     m_info = loadmat(matlab_info_file)
     m_data = loadmat(matlab_data_file)
     m_time_all = np.array(m_info["timeSeries_dateNR"][0])
@@ -285,21 +267,66 @@ def _plot_comparison(py, mat, pix, lat_idx, lon_idx,
     m_values_all[m_qa_all == 1] = np.nan
     m_time_filt = m_time_all[~np.isnan(m_values_all)]
     m_values_filt = m_values_all[~np.isnan(m_values_all)]
+    m_smooth_x = mat["cubicSpline_smoothXaxis"].flatten()
+    return m_smooth_x, m_time_filt, m_values_filt
 
-    # Re-evaluate MATLAB spline
-    m_smooth_y = csaps(m_time_filt, m_values_filt, m_smooth_x, smooth=m_sm)
 
-    # Get Python results
+def _plot_netcdf(py, lat_idx, lon_idx, input_file, variable, ax=None):
+    """Plot Python NetCDF phenology results for a single pixel.
+
+    Parameters
+    ----------
+    py : netCDF4.Dataset
+        Open Python phenology output dataset.
+    lat_idx, lon_idx : int
+        Pixel coordinates.
+    input_file : str
+        Path to Python input NetCDF (for raw observations and spline evaluation).
+    variable : str
+        Variable name in input_file to plot as raw observations.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on. If None, a new figure is created and shown.
+    """
+    from matplotlib import pyplot as plt
+    from csaps import csaps
+
+    standalone = ax is None
+    if standalone:
+        _, ax = plt.subplots(figsize=(16, 5))
+
+    qa_var = getattr(py, 'qa', None)
+    qa_filter = bool(getattr(py, 'qa_filter', 0))
+
+    with netCDF4.Dataset(input_file) as nc:
+        py_time_unix = np.array(nc.variables["time"][:], dtype=np.float64)
+        py_values_all = np.array(nc.variables[variable][:, lat_idx, lon_idx])
+        py_mask = py_values_all != -9999
+        if qa_filter and qa_var and qa_var in nc.variables:
+            qa = np.array(nc.variables[qa_var][:, lat_idx, lon_idx])
+            py_mask = py_mask & (qa == 0)
+        # Reproduce the exact arrays used by the processing code:
+        # - t_all: integer-only datenum for all (unfiltered) timestamps
+        # - smooth_x: daily integer grid over the FULL dataset time range
+        # phenology.py builds smooth_x_axis once from all timestamps (line 57)
+        # and passes it into every pixel's spline fit, so we must do the same.
+        t_all = np.array([datetime.utcfromtimestamp(int(ts)).toordinal() + 366
+                          for ts in py_time_unix])
+    t = t_all[py_mask]
+    py_values_filt = py_values_all[py_mask]
+    smooth_x = np.arange(t_all.min(), t_all.max() + 1, 1)
+
     py_pks_x_unix = _get_padded(py, 'pks_x', lat_idx, lon_idx)
     py_pks_y = _get_padded(py, 'pks_y', lat_idx, lon_idx)
     py_trgs_x_unix = _get_padded(py, 'trgs_x', lat_idx, lon_idx)
     py_trgs_y = _get_padded(py, 'trgs_y', lat_idx, lon_idx)
     py_sm = float(np.ma.filled(py.variables['smoothing_parameter'][lat_idx, lon_idx], np.nan))
+    # Peak/trough x positions are stored as unix; convert using the same integer
+    # datenum formula so they map to exact grid points on smooth_x.
+    _to_int_datenum = lambda ts_arr: np.array(
+        [datetime.utcfromtimestamp(int(ts)).toordinal() + 366 for ts in ts_arr])
+    py_pks_x = _to_int_datenum(py_pks_x_unix) if len(py_pks_x_unix) > 0 else np.array([])
+    py_trgs_x = _to_int_datenum(py_trgs_x_unix) if len(py_trgs_x_unix) > 0 else np.array([])
 
-    py_pks_x = unix_to_datenum(py_pks_x_unix) if len(py_pks_x_unix) > 0 else np.array([])
-    py_trgs_x = unix_to_datenum(py_trgs_x_unix) if len(py_trgs_x_unix) > 0 else np.array([])
-
-    # Get Python green-up/down metrics
     py_gu = {}
     py_gd = {}
     for suffix in ['onset', 'mid', 'advanced']:
@@ -310,24 +337,10 @@ def _plot_comparison(py, mat, pix, lat_idx, lon_idx,
         py_gd[f'{suffix}_x'] = unix_to_datenum(x_unix) if len(x_unix) > 0 else np.array([])
         py_gd[f'{suffix}_y'] = _get_padded(py, f'green_down_{suffix}_y', lat_idx, lon_idx)
 
-    # Get MATLAB green-up/down metrics
-    m_gu = {}
-    m_gd = {}
-    for name, suffix in [("Onset", "onset"), ("Mid", "mid"), ("Advanced", "advanced")]:
-        m_gu[f'{suffix}_x'] = get_cell(f"phenoMETs_GreenUp_{name}_X", pix)
-        m_gu[f'{suffix}_y'] = get_cell(f"phenoMETs_GreenUp_{name}_Y", pix)
-        m_gd[f'{suffix}_x'] = get_cell(f"phenoMETs_GreenDown_{name}_X", pix)
-        m_gd[f'{suffix}_y'] = get_cell(f"phenoMETs_GreenDown_{name}_Y", pix)
+    py_smooth_y = csaps(t, py_values_filt, smooth_x, smooth=py_sm)
 
-    # Re-evaluate Python spline in datenum space
-    py_smooth_y = csaps(m_time_filt, m_values_filt, m_smooth_x, smooth=py_sm)
-
-    fig, axes = plt.subplots(2, 1, figsize=(16, 10), sharex=True, sharey=True)
-
-    # Python
-    ax = axes[0]
-    ax.scatter(m_time_filt, m_values_filt, color='grey', alpha=0.3, s=10, label='Data')
-    ax.plot(m_smooth_x, py_smooth_y, color='blue', linewidth=1, label='Python spline')
+    ax.scatter(t, py_values_filt, color='grey', alpha=0.3, s=10, label='Data')
+    ax.plot(smooth_x, py_smooth_y, color='blue', linewidth=1, label='Python spline')
     if len(py_pks_x) > 0:
         ax.scatter(py_pks_x, py_pks_y, color='red', s=60, marker='^', zorder=4, label='Peaks')
     if len(py_trgs_x) > 0:
@@ -342,8 +355,59 @@ def _plot_comparison(py, mat, pix, lat_idx, lon_idx,
     ax.legend(loc='upper right', fontsize=8)
     ax.grid(True, alpha=0.3)
 
-    # MATLAB
-    ax = axes[1]
+    if standalone:
+        plt.tight_layout()
+        plt.show()
+
+
+def _plot_matlab(mat, pix, matlab_data_file, matlab_info_file, ax=None):
+    """Plot MATLAB phenology results for a single pixel.
+
+    Parameters
+    ----------
+    mat : dict
+        Loaded MATLAB .mat output.
+    pix : int
+        MATLAB pixel index.
+    matlab_data_file : str
+        Path to MATLAB input data file.
+    matlab_info_file : str
+        Path to MATLAB input info file.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on. If None, a new figure is created and shown.
+    """
+    from matplotlib import pyplot as plt
+    from csaps import csaps
+
+    standalone = ax is None
+    if standalone:
+        _, ax = plt.subplots(figsize=(16, 5))
+
+    m_smooth_x, m_time_filt, m_values_filt = _load_matlab_raw(mat, pix, matlab_data_file, matlab_info_file)
+
+    def get_cell(key, idx):
+        cell = mat[key]
+        val = cell[idx, 0]
+        if val.size == 0:
+            return np.array([])
+        return val.flatten()
+
+    m_sm = get_cell("cubicSpline_smPar", pix)[0]
+    m_pks_x = get_cell("phenoMETs_pks_X", pix)
+    m_pks_y = get_cell("phenoMETs_pks_Y", pix)
+    m_trgs_x = get_cell("phenoMETs_trgs_X", pix)
+    m_trgs_y = get_cell("phenoMETs_trgs_Y", pix)
+
+    m_gu = {}
+    m_gd = {}
+    for name, suffix in [("Onset", "onset"), ("Mid", "mid"), ("Advanced", "advanced")]:
+        m_gu[f'{suffix}_x'] = get_cell(f"phenoMETs_GreenUp_{name}_X", pix)
+        m_gu[f'{suffix}_y'] = get_cell(f"phenoMETs_GreenUp_{name}_Y", pix)
+        m_gd[f'{suffix}_x'] = get_cell(f"phenoMETs_GreenDown_{name}_X", pix)
+        m_gd[f'{suffix}_y'] = get_cell(f"phenoMETs_GreenDown_{name}_Y", pix)
+
+    m_smooth_y = csaps(m_time_filt, m_values_filt, m_smooth_x, smooth=m_sm)
+
     ax.scatter(m_time_filt, m_values_filt, color='grey', alpha=0.3, s=10, label='Data')
     ax.plot(m_smooth_x, m_smooth_y, color='blue', linewidth=1, label='MATLAB spline')
     if len(m_pks_x) > 0:
@@ -360,16 +424,31 @@ def _plot_comparison(py, mat, pix, lat_idx, lon_idx,
     ax.legend(loc='upper right', fontsize=8)
     ax.grid(True, alpha=0.3)
 
+    if standalone:
+        plt.tight_layout()
+        plt.show()
+
+
+def _plot_comparison(py, mat, pix, lat_idx, lon_idx,
+                     matlab_data_file, matlab_info_file, input_file=None, variable=None):
+    """Plot Python vs MATLAB results for a single pixel."""
+    from matplotlib import pyplot as plt
+
+    fig, axes = plt.subplots(2, 1, figsize=(16, 10), sharex=True, sharey=True)
+
+    _plot_netcdf(py, lat_idx, lon_idx, input_file, variable, ax=axes[0])
+    _plot_matlab(mat, pix, matlab_data_file, matlab_info_file, ax=axes[1])
+
     plt.tight_layout()
     plt.show()
 
 
 if __name__ == '__main__':
-    python_file = "/home/runnalja/git/cci-cyano-production/data/v3.1/phenology/chla/327.nc"
-    input_file = "/home/runnalja/git/cci-cyano-production/data/v3.1/extract/chla/327.nc"
+    python_file = "/home/runnalja/git/cci-cyano-production/data/v3.1/phenology/phycocyanin/327.nc"
+    input_file = "/home/runnalja/git/cci-cyano-production/data/v3.1/extract/phycocyanin/327.nc"
     matlab_file = "/home/runnalja/git/bgb-jelle/data/CCISTEP3_phenoMETs_ss/Lake_297_327_GLWD00000327/pixFileDataList_chla_mean_731335_738886/cubicSpline_1_14_0_0_31_0_365_5_pixNRs_1_982.mat"
     matlab_data = "/home/runnalja/git/bgb-jelle/data/CCISTEP1_timeSeriesAndNullInfo/Lake_297_327_GLWD00000327/CCI_Data_chla_mean_731335_738886_pixNRs_1_982.mat"
     matlab_info = "/home/runnalja/git/bgb-jelle/data/CCISTEP1_timeSeriesAndNullInfo/Lake_297_327_GLWD00000327/CCI_NullInfo_chla_mean_731335_738886.mat"
     pixel = 600
 
-    compare(python_file, matlab_file, input_file, matlab_data_file=matlab_data, matlab_info_file=matlab_info, pixel=pixel, plot=True)
+    compare(python_file, matlab_file, input_file, matlab_data_file=matlab_data, matlab_info_file=matlab_info, pixel=pixel, plot=True, variable="phycocyanin")
