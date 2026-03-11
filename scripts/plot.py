@@ -5,11 +5,7 @@ from csaps import csaps
 from matplotlib import pyplot as plt
 from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan
 
-
-def plot(folder, variable, lake):
-    p_file = f"{folder}/phenology/{variable}/{lake}.nc"
-    e_file = f"{folder}/extract/{variable}/{lake}.nc"
-
+def plot(e_file, p_file):
     with netCDF4.Dataset(e_file) as nc:
         summary = np.array(nc.variables["summary"][:, :])   # (lat=37, lon=95)
         lat = np.array(nc.variables["lat"])
@@ -46,6 +42,7 @@ def plot(folder, variable, lake):
 
 
             with netCDF4.Dataset(e_file) as nc:
+                variable = getattr(nc, "variable")
                 values = np.array(nc.variables[variable][:, x, y])
                 mask = (values != -9999) & (np.array(nc.variables[getattr(nc, 'qa')][:, x, y]) == 0)
                 values_m = values[mask]
@@ -100,9 +97,8 @@ def plot(folder, variable, lake):
     plt.show()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Parse data from satellite images')
-    parser.add_argument('--out_folder', '-f', help='Output folder from arguments file')
-    parser.add_argument('--variable', '-v', help='Variable to plot')
-    parser.add_argument('--lake', '-l', help='Lake ID')
+    parser = argparse.ArgumentParser(description='Plot results of phenology computation')
+    parser.add_argument('--extract_file', '-e', help='Absolute path of extract file')
+    parser.add_argument('--phenology_file', '-p', help='Absolute path of phenology file')
     args = parser.parse_args()
-    plot(args.out_folder, args.variable, args.lake)
+    plot(args.extract_file, args.phenology_file)
