@@ -11,7 +11,7 @@ from functions import set_logging, verify_arg_file, parse_args
 from extract import extract
 from phenology import phenology
 
-def main(args, log=False, threads=1, parallel="lake"):
+def main(args, log=False, threads=1, parallel="lake", batch_size=100):
     set_logging(log)
     args = parse_args(args)
 
@@ -42,10 +42,11 @@ def main(args, log=False, threads=1, parallel="lake"):
         logging.info("Calculating pixelwise phenology metrics")
         if parallel == "pixels" or threads == 1:
             for lake in lakes:
-                phenology(lake, args, threads=threads)
+                phenology(lake, args, threads=threads, batch_size=batch_size)
         else:
             with ProcessPoolExecutor(max_workers=threads) as executor:
-                executor.map(phenology, lakes, itertools.repeat(args))
+                executor.map(phenology, lakes, itertools.repeat(args),
+                             itertools.repeat(1), itertools.repeat(batch_size))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Parse data from satellite images')
@@ -53,7 +54,8 @@ if __name__ == "__main__":
     parser.add_argument('--logs', '-l', help="Write logs to file", action='store_true')
     parser.add_argument('--threads', '-t', help="Number of threads", default=1)
     parser.add_argument('--parallel', '-p', help="Run parallelisation on lakes or pixels", choices=['lakes', 'pixels'], default='lake')
+    parser.add_argument('--batch-size', '-b', help="Number of pixels per batch for phenology I/O", type=int, default=100)
     args = parser.parse_args()
     with open(args.file) as f:
         file_args = json.load(f)
-    main(file_args, log=args.logs, threads=int(args.threads), parallel=args.parallel)
+    main(file_args, log=args.logs, threads=int(args.threads), parallel=args.parallel, batch_size=args.batch_size)
