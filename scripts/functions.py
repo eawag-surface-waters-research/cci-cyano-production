@@ -600,7 +600,7 @@ def extract_phenology_metrics(x_pks, y_pks, x_trgs, y_trgs,
         return {
             'pks_x': pks_x, 'pks_y': pks_y,
             'trgs_x': trgs_x, 'trgs_y': trgs_y,
-            'pks_qa': np.array([]), 'trgs_qa': np.array([]),
+            'pks_qa': np.zeros(nr_pks, dtype=int), 'trgs_qa': np.zeros(nr_trgs, dtype=int),
             'green_up': [], 'green_down': [],
             'data_gap_start_days': np.array([]),
             'data_gap_end_days': np.array([]),
