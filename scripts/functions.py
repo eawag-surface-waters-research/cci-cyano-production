@@ -69,7 +69,7 @@ def _datenum_to_unix(datenum):
     ordinals = datenum - 366
     base = np.floor(ordinals).astype(int)
     frac = ordinals - base
-    return np.array([datetime.fromordinal(int(b)).timestamp() + f * 86400
+    return np.array([datetime.fromordinal(int(b)).replace(tzinfo=timezone.utc).timestamp() + f * 86400
                      for b, f in zip(base, frac)])
 
 
