@@ -77,7 +77,12 @@ def phenology(lake, p, threads=1, batch_size=100):
             futures = {executor.submit(compute_pixel_batch, batch, smooth_x_axis, p): None
                        for batch in batches}
             for future in tqdm(as_completed(futures), total=len(futures), desc=str(lake['id']), unit='batch'):
-                for x, y, result, pheno in future.result():
+                try:
+                    batch_result = future.result()
+                except Exception as e:
+                    print(f"Worker failed: {e}", flush=True)
+                    continue
+                for x, y, result, pheno in batch_result:
                     if result is not None:
                         if out is None:
                             out = netCDF4.Dataset(output_file_temp, 'w', format='NETCDF4')
