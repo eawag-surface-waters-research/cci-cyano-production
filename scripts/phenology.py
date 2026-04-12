@@ -138,27 +138,27 @@ def compute_pixel_batch(coord_batch, smooth_x_axis, p, input_file, t):
         values = values[mask]
         time = t[mask]
 
-            if len(time) < 2:
+        if len(time) < 2:
+            batch_results.append((x, y, None, None))
+            continue
+        try:
+            result = functions.smooth_cubic_spline(
+                time, values, p["spline_min_phase_length"], p["spline_min_relative_amplitude"],
+                p["spline_min_phase_data"], smoothing_change=1e-12, max_iterations=1e5,
+                smooth_x_axis=smooth_x_axis
+            )
+            if not result['conditions_satisfied']:
                 batch_results.append((x, y, None, None))
                 continue
-            try:
-                result = functions.smooth_cubic_spline(
-                    time, values, p["spline_min_phase_length"], p["spline_min_relative_amplitude"],
-                    p["spline_min_phase_data"], smoothing_change=1e-12, max_iterations=1e5,
-                    smooth_x_axis=smooth_x_axis
-                )
-                if not result['conditions_satisfied']:
-                    batch_results.append((x, y, None, None))
-                    continue
-                pheno = functions.extract_phenology_metrics(
-                    result['x_pks'], result['y_pks'], result['x_trgs'], result['y_trgs'],
-                    time, result['smooth_x_axis'], result['smooth_y_data'],
-                    p["spline_subs_peak_win_size"], p["spline_subs_peak_ampl_frac"],
-                    p["spline_data_gap_size"], p["spline_data_gap_size_buffer"]
-                )
-                batch_results.append((x, y, result, pheno))
-            except Exception as e:
-                logging.warning("Pixel (%d, %d) failed: %s", x, y, e)
-                batch_results.append((x, y, None, None))
+            pheno = functions.extract_phenology_metrics(
+                result['x_pks'], result['y_pks'], result['x_trgs'], result['y_trgs'],
+                time, result['smooth_x_axis'], result['smooth_y_data'],
+                p["spline_subs_peak_win_size"], p["spline_subs_peak_ampl_frac"],
+                p["spline_data_gap_size"], p["spline_data_gap_size_buffer"]
+            )
+            batch_results.append((x, y, result, pheno))
+        except Exception as e:
+            logging.warning("Pixel (%d, %d) failed: %s", x, y, e)
+            batch_results.append((x, y, None, None))
 
     return batch_results
