@@ -123,14 +123,20 @@ def compute_pixel_batch(coord_batch, smooth_x_axis, p, input_file, t):
         if the spline conditions are not satisfied for that pixel.
     """
     batch_results = []
+    xs = [xy[0] for xy in coord_batch]
+    ys = [xy[1] for xy in coord_batch]
+    x_min, x_max = min(xs), max(xs)
+    y_min, y_max = min(ys), max(ys)
     with netCDF4.Dataset(input_file, 'r') as nc:
-        for x, y in coord_batch:
-            values = np.array(nc.variables[p["variable"]][:, x, y])
-            mask = values != -9999
-            if p["qa_filter"]:
-                mask = (np.array(nc.variables[p["qa"]][:, x, y]) == 0) & mask
-            values = values[mask]
-            time = t[mask]
+        var_slice = np.array(nc.variables[p["variable"]][:, x_min:x_max + 1, y_min:y_max + 1])
+        qa_slice = np.array(nc.variables[p["qa"]][:, x_min:x_max + 1, y_min:y_max + 1]) if p["qa_filter"] else None
+    for x, y in coord_batch:
+        values = var_slice[:, x - x_min, y - y_min]
+        mask = values != -9999
+        if p["qa_filter"]:
+            mask = (qa_slice[:, x - x_min, y - y_min] == 0) & mask
+        values = values[mask]
+        time = t[mask]
 
             if len(time) < 2:
                 batch_results.append((x, y, None, None))
