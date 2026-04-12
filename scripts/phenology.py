@@ -1,5 +1,7 @@
 import os
 import sys
+import glob
+import shutil
 import signal
 import faulthandler
 import netCDF4
@@ -17,7 +19,7 @@ _QA_DATA = None
 
 def _worker_init():
     """Initialiser run once in each worker process at startup."""
-    faulthandler.enable()  # prints traceback to stderr on segfault
+    faulthandler.enable()
 
     def _sigterm_handler(signum, frame):
         print(f"Worker {os.getpid()} received SIGTERM", flush=True)
@@ -25,13 +27,52 @@ def _worker_init():
 
     signal.signal(signal.SIGTERM, _sigterm_handler)
 
+
+def _write_from_checkpoints(checkpoint_dir, output_file_temp, output_file, lat, lon, p, lake_id):
+    """Write the final netCDF4 output from saved batch checkpoints.
+
+    Reads each .npy checkpoint in order and writes all valid pixel results
+    to the output file in a single sequential pass.
+
+    Parameters
+    ----------
+    checkpoint_dir : str
+        Directory containing batch_NNNN.npy checkpoint files.
+    output_file_temp : str
+        Temporary output path (renamed to output_file on success).
+    output_file : str
+        Final output netCDF4 path.
+    lat, lon : ndarray
+        Coordinate arrays for initialising the output file.
+    p : dict
+        Parameters dict.
+    lake_id : str or int
+        Lake identifier used for tqdm label.
+    """
+    checkpoint_files = sorted(glob.glob(os.path.join(checkpoint_dir, 'batch_*.npy')))
+    out = None
+    for cp_file in tqdm(checkpoint_files, desc=f"{lake_id} writing", unit='batch'):
+        for x, y, smoothing, pheno in np.load(cp_file, allow_pickle=True):
+            if out is None:
+                out = netCDF4.Dataset(output_file_temp, 'w', format='NETCDF4')
+                functions.init_phenology_output(out, lat, lon, p=p)
+            functions.append_pixel_phenology(out, x, y, {'smoothing': smoothing}, pheno)
+    if out is not None:
+        out.close()
+        os.rename(output_file_temp, output_file)
+        logging.info(f"Completed phenology computation for {lake_id}")
+    else:
+        logging.info(f"No valid phenology results for {lake_id}")
+
+
 def phenology(lake, p, threads=1, batch_size=100):
     """Extract phenology metrics for a single lake from time series data.
 
     Reads extracted time series, applies a smoothing cubic spline, and extracts
     phenology metrics (green-up/green-down onset, mid, advanced) for each pixel.
-    var_data and qa_data are stored as module-level globals before workers are
-    forked so they are inherited via copy-on-write without pickling.
+    Batch results are saved as .npy checkpoints so the run can be resumed if
+    interrupted. The final netCDF4 is written in one sequential pass after all
+    batches complete.
 
     Parameters
     ----------
@@ -57,12 +98,14 @@ def phenology(lake, p, threads=1, batch_size=100):
 
     input_file = os.path.join(p["out_folder"], "extract", p["variable"], "{}.nc".format(lake["id"]))
     output_file = os.path.join(p["out_folder"], "phenology", p["variable"], "{}.nc".format(lake["id"]))
+    checkpoint_dir = os.path.join(p["out_folder"], "phenology", p["variable"], "checkpoints", str(lake["id"]), f"bs{batch_size}")
 
     if os.path.isfile(output_file):
         logging.info(f"File {lake['id']}.nc already exists")
         return
 
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    os.makedirs(checkpoint_dir, exist_ok=True)
     output_file_temp = output_file.replace(".nc", "_tmp.nc")
 
     if os.path.isfile(input_file):
@@ -83,42 +126,43 @@ def phenology(lake, p, threads=1, batch_size=100):
 
     coord_list = [(int(x), int(y)) for x, y in valid_coords]
     batches = [coord_list[i:i + batch_size] for i in range(0, len(coord_list), batch_size)]
-    out = None
+
+    # Find already completed batches for restart
+    completed = {int(os.path.splitext(os.path.basename(f))[0].split('_')[1])
+                 for f in glob.glob(os.path.join(checkpoint_dir, 'batch_*.npy'))}
+    logging.info(f"Lake {lake['id']}: {len(completed)}/{len(batches)} batches already complete")
 
     if threads > 1:
         with ProcessPoolExecutor(max_workers=threads, initializer=_worker_init) as executor:
-            futures = {executor.submit(compute_pixel_batch, batch, smooth_x_axis, p, t): None
-                       for batch in batches}
-            for future in tqdm(as_completed(futures), total=len(futures), desc=str(lake['id']), unit='batch'):
+            futures = {executor.submit(compute_pixel_batch, batch, smooth_x_axis, p, t): i
+                       for i, batch in enumerate(batches) if i not in completed}
+            for future in tqdm(as_completed(futures), total=len(batches),
+                               initial=len(completed), desc=str(lake['id']), unit='batch'):
+                batch_idx = futures[future]
                 try:
                     batch_result = future.result()
                 except Exception as e:
-                    print(f"Worker failed: {e}", flush=True)
+                    print(f"Worker failed on batch {batch_idx}: {e}", flush=True)
                     continue
-                for x, y, result, pheno in batch_result:
-                    if result is not None:
-                        if out is None:
-                            out = netCDF4.Dataset(output_file_temp, 'w', format='NETCDF4')
-                            functions.init_phenology_output(out, lat, lon, p=p)
-                        functions.append_pixel_phenology(out, x, y, result, pheno)
+                checkpoint = [(x, y, result['smoothing'], pheno)
+                              for x, y, result, pheno in batch_result if result is not None]
+                np.save(os.path.join(checkpoint_dir, f'batch_{batch_idx:04d}.npy'),
+                        checkpoint, allow_pickle=True)
     else:
-        for batch in tqdm(batches, desc=str(lake['id']), unit='batch'):
-            for x, y, result, pheno in compute_pixel_batch(batch, smooth_x_axis, p, t):
-                if result is not None:
-                    if out is None:
-                        out = netCDF4.Dataset(output_file_temp, 'w', format='NETCDF4')
-                        functions.init_phenology_output(out, lat, lon, p=p)
-                    functions.append_pixel_phenology(out, x, y, result, pheno)
-
-    if out is not None:
-        out.close()
-        os.rename(output_file_temp, output_file)
-        logging.info(f"Completed phenology computation for {lake['id']}")
-    else:
-        logging.info(f"No valid phenology results for {lake['id']}")
+        for i, batch in enumerate(tqdm(batches, desc=str(lake['id']), unit='batch')):
+            if i in completed:
+                continue
+            batch_result = compute_pixel_batch(batch, smooth_x_axis, p, t)
+            checkpoint = [(x, y, result['smoothing'], pheno)
+                          for x, y, result, pheno in batch_result if result is not None]
+            np.save(os.path.join(checkpoint_dir, f'batch_{i:04d}.npy'),
+                    checkpoint, allow_pickle=True)
 
     _VAR_DATA = None
     _QA_DATA = None
+
+    _write_from_checkpoints(checkpoint_dir, output_file_temp, output_file, lat, lon, p, lake["id"])
+    shutil.rmtree(checkpoint_dir)
 
 
 def compute_pixel_batch(coord_batch, smooth_x_axis, p, t):
