@@ -7,13 +7,18 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 import functions
 
+# Module-level globals set in the main process before forking workers.
+# Forked workers inherit these via copy-on-write without pickling.
+_VAR_DATA = None
+_QA_DATA = None
+
 def phenology(lake, p, threads=1, batch_size=100):
     """Extract phenology metrics for a single lake from time series data.
 
     Reads extracted time series, applies a smoothing cubic spline, and extracts
     phenology metrics (green-up/green-down onset, mid, advanced) for each pixel.
-    Only metadata is read upfront; workers open the input file themselves and
-    read their own pixel data to avoid large memory allocations before forking.
+    var_data and qa_data are stored as module-level globals before workers are
+    forked so they are inherited via copy-on-write without pickling.
 
     Parameters
     ----------
@@ -35,6 +40,8 @@ def phenology(lake, p, threads=1, batch_size=100):
     batch_size : int
         Number of pixels per batch dispatched to each worker.
     """
+    global _VAR_DATA, _QA_DATA
+
     input_file = os.path.join(p["out_folder"], "extract", p["variable"], "{}.nc".format(lake["id"]))
     output_file = os.path.join(p["out_folder"], "phenology", p["variable"], "{}.nc".format(lake["id"]))
 
@@ -56,6 +63,8 @@ def phenology(lake, p, threads=1, batch_size=100):
         lat = np.array(nc.variables["lat"])
         lon = np.array(nc.variables["lon"])
         t = np.array([datetime.utcfromtimestamp(int(ts)).toordinal() + 366 for ts in np.array(nc.variables["time"])])
+        _VAR_DATA = np.array(nc.variables[p["variable"]])
+        _QA_DATA = np.array(nc.variables[p["qa"]]) if p["qa_filter"] else None
 
     smooth_x_axis = np.arange(t.min(), t.max() + 1, 1)
 
@@ -65,7 +74,7 @@ def phenology(lake, p, threads=1, batch_size=100):
 
     if threads > 1:
         with ProcessPoolExecutor(max_workers=threads) as executor:
-            futures = {executor.submit(compute_pixel_batch, batch, smooth_x_axis, p, input_file, t): None
+            futures = {executor.submit(compute_pixel_batch, batch, smooth_x_axis, p, t): None
                        for batch in batches}
             for future in tqdm(as_completed(futures), total=len(futures), desc=str(lake['id']), unit='batch'):
                 try:
@@ -81,7 +90,7 @@ def phenology(lake, p, threads=1, batch_size=100):
                         functions.append_pixel_phenology(out, x, y, result, pheno)
     else:
         for batch in tqdm(batches, desc=str(lake['id']), unit='batch'):
-            for x, y, result, pheno in compute_pixel_batch(batch, smooth_x_axis, p, input_file, t):
+            for x, y, result, pheno in compute_pixel_batch(batch, smooth_x_axis, p, t):
                 if result is not None:
                     if out is None:
                         out = netCDF4.Dataset(output_file_temp, 'w', format='NETCDF4')
@@ -95,13 +104,17 @@ def phenology(lake, p, threads=1, batch_size=100):
     else:
         logging.info(f"No valid phenology results for {lake['id']}")
 
-def compute_pixel_batch(coord_batch, smooth_x_axis, p, input_file, t):
+    _VAR_DATA = None
+    _QA_DATA = None
+
+
+def compute_pixel_batch(coord_batch, smooth_x_axis, p, t):
     """Compute spline and phenology metrics for a batch of pixels.
 
-    Opens the input NetCDF4 file read-only, reads only the pixel columns
-    needed for this batch, then performs spline fitting and phenology
-    extraction.  Defined at module level so it can be pickled by
-    ProcessPoolExecutor.
+    Reads pixel data from the module-level _VAR_DATA and _QA_DATA arrays
+    inherited from the parent process via fork copy-on-write, then performs
+    spline fitting and phenology extraction. Defined at module level so it
+    can be pickled by ProcessPoolExecutor.
 
     Parameters
     ----------
@@ -111,8 +124,6 @@ def compute_pixel_batch(coord_batch, smooth_x_axis, p, input_file, t):
         Regular daily grid used for spline evaluation.
     p : dict
         Parameters dict (see phenology docstring).
-    input_file : str
-        Path to the input NetCDF4 file (opened read-only).
     t : ndarray
         Pre-computed time ordinal array for all time steps.
 
@@ -123,18 +134,11 @@ def compute_pixel_batch(coord_batch, smooth_x_axis, p, input_file, t):
         if the spline conditions are not satisfied for that pixel.
     """
     batch_results = []
-    xs = [xy[0] for xy in coord_batch]
-    ys = [xy[1] for xy in coord_batch]
-    x_min, x_max = min(xs), max(xs)
-    y_min, y_max = min(ys), max(ys)
-    with netCDF4.Dataset(input_file, 'r') as nc:
-        var_slice = np.array(nc.variables[p["variable"]][:, x_min:x_max + 1, y_min:y_max + 1])
-        qa_slice = np.array(nc.variables[p["qa"]][:, x_min:x_max + 1, y_min:y_max + 1]) if p["qa_filter"] else None
     for x, y in coord_batch:
-        values = var_slice[:, x - x_min, y - y_min]
+        values = _VAR_DATA[:, x, y]
         mask = values != -9999
         if p["qa_filter"]:
-            mask = (qa_slice[:, x - x_min, y - y_min] == 0) & mask
+            mask = (_QA_DATA[:, x, y] == 0) & mask
         values = values[mask]
         time = t[mask]
 
