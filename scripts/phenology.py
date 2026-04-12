@@ -1,4 +1,7 @@
 import os
+import sys
+import signal
+import faulthandler
 import netCDF4
 import logging
 import numpy as np
@@ -11,6 +14,16 @@ import functions
 # Forked workers inherit these via copy-on-write without pickling.
 _VAR_DATA = None
 _QA_DATA = None
+
+def _worker_init():
+    """Initialiser run once in each worker process at startup."""
+    faulthandler.enable()  # prints traceback to stderr on segfault
+
+    def _sigterm_handler(signum, frame):
+        print(f"Worker {os.getpid()} received SIGTERM", flush=True)
+        sys.exit(1)
+
+    signal.signal(signal.SIGTERM, _sigterm_handler)
 
 def phenology(lake, p, threads=1, batch_size=100):
     """Extract phenology metrics for a single lake from time series data.
@@ -73,7 +86,7 @@ def phenology(lake, p, threads=1, batch_size=100):
     out = None
 
     if threads > 1:
-        with ProcessPoolExecutor(max_workers=threads) as executor:
+        with ProcessPoolExecutor(max_workers=threads, initializer=_worker_init) as executor:
             futures = {executor.submit(compute_pixel_batch, batch, smooth_x_axis, p, t): None
                        for batch in batches}
             for future in tqdm(as_completed(futures), total=len(futures), desc=str(lake['id']), unit='batch'):
