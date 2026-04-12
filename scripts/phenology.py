@@ -29,10 +29,15 @@ def _worker_init():
 
 
 def _write_from_checkpoints(checkpoint_dir, output_file_temp, output_file, lat, lon, p, lake_id):
-    """Write the final netCDF4 output from saved batch checkpoints.
+    """Write the final netCDF4 output from saved batch checkpoints using bulk array writes.
 
-    Reads each .npy checkpoint in order and writes all valid pixel results
-    to the output file in a single sequential pass.
+    Three-pass approach to avoid per-pixel netCDF4 I/O:
+    1. Load all checkpoints into memory and find the max record size for each
+       feature type (peaks, troughs, green-up, green-down, data gaps).
+    2. Pre-allocate numpy arrays filled with the appropriate fill values and
+       populate them from the in-memory pixel data (no I/O).
+    3. Write each variable to netCDF4 in a single bulk assignment (~20 writes
+       total instead of N_valid_pixels × 20 individual writes).
 
     Parameters
     ----------
@@ -50,19 +55,142 @@ def _write_from_checkpoints(checkpoint_dir, output_file_temp, output_file, lat, 
         Lake identifier used for tqdm label.
     """
     checkpoint_files = sorted(glob.glob(os.path.join(checkpoint_dir, 'batch_*.npy')))
-    out = None
-    for cp_file in tqdm(checkpoint_files, desc=f"{lake_id} writing", unit='batch'):
-        for x, y, smoothing, pheno in np.load(cp_file, allow_pickle=True):
-            if out is None:
-                out = netCDF4.Dataset(output_file_temp, 'w', format='NETCDF4')
-                functions.init_phenology_output(out, lat, lon, p=p)
-            functions.append_pixel_phenology(out, x, y, {'smoothing': smoothing}, pheno)
-    if out is not None:
-        out.close()
-        os.rename(output_file_temp, output_file)
-        logging.info(f"Completed phenology computation for {lake_id}")
-    else:
+
+    # Pass 1: load all pixel results into memory and find max record sizes
+    all_pixels = []
+    for cp_file in tqdm(checkpoint_files, desc=f"{lake_id} loading", unit='batch'):
+        for row in np.load(cp_file, allow_pickle=True):
+            all_pixels.append(row)
+
+    if not all_pixels:
         logging.info(f"No valid phenology results for {lake_id}")
+        return
+
+    max_pks = max_trgs = max_gu = max_gd = max_gaps = 0
+    for _x, _y, _sm, pheno in all_pixels:
+        max_pks  = max(max_pks,  len(pheno['pks_x']))
+        max_trgs = max(max_trgs, len(pheno['trgs_x']))
+        max_gu   = max(max_gu,   len(pheno['green_up']))
+        max_gd   = max(max_gd,   len(pheno['green_down']))
+        max_gaps = max(max_gaps, len(pheno['data_gap_start_days']))
+
+    nlat, nlon = len(lat), len(lon)
+
+    def _af(*shape):
+        return np.full(shape, np.nan, dtype=np.float64)
+
+    def _ai(*shape):
+        return np.full(shape, -1, dtype=np.int16)
+
+    sm_arr = np.full((nlat, nlon), np.nan, dtype=np.float64)
+
+    pks_x_arr  = _af(nlat, nlon, max_pks)  if max_pks  else None
+    pks_y_arr  = _af(nlat, nlon, max_pks)  if max_pks  else None
+    pks_qa_arr = _ai(nlat, nlon, max_pks)  if max_pks  else None
+
+    trgs_x_arr  = _af(nlat, nlon, max_trgs) if max_trgs else None
+    trgs_y_arr  = _af(nlat, nlon, max_trgs) if max_trgs else None
+    trgs_qa_arr = _ai(nlat, nlon, max_trgs) if max_trgs else None
+
+    gu_ox = _af(nlat, nlon, max_gu) if max_gu else None
+    gu_oy = _af(nlat, nlon, max_gu) if max_gu else None
+    gu_mx = _af(nlat, nlon, max_gu) if max_gu else None
+    gu_my = _af(nlat, nlon, max_gu) if max_gu else None
+    gu_ax = _af(nlat, nlon, max_gu) if max_gu else None
+    gu_ay = _af(nlat, nlon, max_gu) if max_gu else None
+
+    gd_ox = _af(nlat, nlon, max_gd) if max_gd else None
+    gd_oy = _af(nlat, nlon, max_gd) if max_gd else None
+    gd_mx = _af(nlat, nlon, max_gd) if max_gd else None
+    gd_my = _af(nlat, nlon, max_gd) if max_gd else None
+    gd_ax = _af(nlat, nlon, max_gd) if max_gd else None
+    gd_ay = _af(nlat, nlon, max_gd) if max_gd else None
+
+    gap_s_arr = _af(nlat, nlon, max_gaps) if max_gaps else None
+    gap_e_arr = _af(nlat, nlon, max_gaps) if max_gaps else None
+
+    # Pass 2: fill numpy arrays from pixel data (no I/O)
+    for x, y, smoothing, pheno in tqdm(all_pixels, desc=f"{lake_id} filling", unit='px'):
+        sm_arr[x, y] = smoothing
+
+        n_pk = len(pheno['pks_x'])
+        if n_pk > 0:
+            pks_x_arr[x, y, :n_pk]  = functions._datenum_to_unix(pheno['pks_x'])
+            pks_y_arr[x, y, :n_pk]  = pheno['pks_y']
+            pks_qa_arr[x, y, :n_pk] = pheno['pks_qa']
+
+        n_trg = len(pheno['trgs_x'])
+        if n_trg > 0:
+            trgs_x_arr[x, y, :n_trg]  = functions._datenum_to_unix(pheno['trgs_x'])
+            trgs_y_arr[x, y, :n_trg]  = pheno['trgs_y']
+            trgs_qa_arr[x, y, :n_trg] = pheno['trgs_qa']
+
+        n_gu = len(pheno['green_up'])
+        if n_gu > 0:
+            gux = np.array([[g['onset_x'], g['mid_x'], g['advanced_x']] for g in pheno['green_up']])
+            gux_u = functions._datenum_to_unix(gux.ravel()).reshape(n_gu, 3)
+            gu_ox[x, y, :n_gu] = gux_u[:, 0]
+            gu_oy[x, y, :n_gu] = [g['onset_y']    for g in pheno['green_up']]
+            gu_mx[x, y, :n_gu] = gux_u[:, 1]
+            gu_my[x, y, :n_gu] = [g['mid_y']      for g in pheno['green_up']]
+            gu_ax[x, y, :n_gu] = gux_u[:, 2]
+            gu_ay[x, y, :n_gu] = [g['advanced_y'] for g in pheno['green_up']]
+
+        n_gd = len(pheno['green_down'])
+        if n_gd > 0:
+            gdx = np.array([[g['onset_x'], g['mid_x'], g['advanced_x']] for g in pheno['green_down']])
+            gdx_u = functions._datenum_to_unix(gdx.ravel()).reshape(n_gd, 3)
+            gd_ox[x, y, :n_gd] = gdx_u[:, 0]
+            gd_oy[x, y, :n_gd] = [g['onset_y']    for g in pheno['green_down']]
+            gd_mx[x, y, :n_gd] = gdx_u[:, 1]
+            gd_my[x, y, :n_gd] = [g['mid_y']      for g in pheno['green_down']]
+            gd_ax[x, y, :n_gd] = gdx_u[:, 2]
+            gd_ay[x, y, :n_gd] = [g['advanced_y'] for g in pheno['green_down']]
+
+        n_gap = len(pheno['data_gap_start_days'])
+        if n_gap > 0:
+            gap_s_arr[x, y, :n_gap] = functions._datenum_to_unix(pheno['data_gap_start_days'])
+            gap_e_arr[x, y, :n_gap] = functions._datenum_to_unix(pheno['data_gap_end_days'])
+
+    # Pass 3: write all variables to netCDF4 in bulk (~20 writes total)
+    out = netCDF4.Dataset(output_file_temp, 'w', format='NETCDF4')
+    functions.init_phenology_output(out, lat, lon, p=p)
+
+    out.variables['smoothing_parameter'][:] = sm_arr
+
+    if max_pks > 0:
+        out.variables['pks_x'][:, :, :max_pks]  = pks_x_arr
+        out.variables['pks_y'][:, :, :max_pks]  = pks_y_arr
+        out.variables['pks_qa'][:, :, :max_pks] = pks_qa_arr
+
+    if max_trgs > 0:
+        out.variables['trgs_x'][:, :, :max_trgs]  = trgs_x_arr
+        out.variables['trgs_y'][:, :, :max_trgs]  = trgs_y_arr
+        out.variables['trgs_qa'][:, :, :max_trgs] = trgs_qa_arr
+
+    if max_gu > 0:
+        out.variables['green_up_onset_x'][:, :, :max_gu]    = gu_ox
+        out.variables['green_up_onset_y'][:, :, :max_gu]    = gu_oy
+        out.variables['green_up_mid_x'][:, :, :max_gu]      = gu_mx
+        out.variables['green_up_mid_y'][:, :, :max_gu]      = gu_my
+        out.variables['green_up_advanced_x'][:, :, :max_gu] = gu_ax
+        out.variables['green_up_advanced_y'][:, :, :max_gu] = gu_ay
+
+    if max_gd > 0:
+        out.variables['green_down_onset_x'][:, :, :max_gd]    = gd_ox
+        out.variables['green_down_onset_y'][:, :, :max_gd]    = gd_oy
+        out.variables['green_down_mid_x'][:, :, :max_gd]      = gd_mx
+        out.variables['green_down_mid_y'][:, :, :max_gd]      = gd_my
+        out.variables['green_down_advanced_x'][:, :, :max_gd] = gd_ax
+        out.variables['green_down_advanced_y'][:, :, :max_gd] = gd_ay
+
+    if max_gaps > 0:
+        out.variables['data_gap_start'][:, :, :max_gaps] = gap_s_arr
+        out.variables['data_gap_end'][:, :, :max_gaps]   = gap_e_arr
+
+    out.close()
+    os.rename(output_file_temp, output_file)
+    logging.info(f"Completed phenology computation for {lake_id}")
 
 
 def phenology(lake, p, threads=1, batch_size=100):
