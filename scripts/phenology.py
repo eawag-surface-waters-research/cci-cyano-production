@@ -12,8 +12,8 @@ def phenology(lake, p, threads=1, batch_size=100):
 
     Reads extracted time series, applies a smoothing cubic spline, and extracts
     phenology metrics (green-up/green-down onset, mid, advanced) for each pixel.
-    All pixel data is read from the input file once upfront, then distributed to
-    workers as pure-compute batches to avoid I/O contention between processes.
+    Only metadata is read upfront; workers open the input file themselves and
+    read their own pixel data to avoid large memory allocations before forking.
 
     Parameters
     ----------
@@ -56,25 +56,16 @@ def phenology(lake, p, threads=1, batch_size=100):
         lat = np.array(nc.variables["lat"])
         lon = np.array(nc.variables["lon"])
         t = np.array([datetime.utcfromtimestamp(int(ts)).toordinal() + 366 for ts in np.array(nc.variables["time"])])
-        var_data = np.array(nc.variables[p["variable"]])
-        qa_data = np.array(nc.variables[p["qa"]]) if p["qa_filter"] else None
 
     smooth_x_axis = np.arange(t.min(), t.max() + 1, 1)
 
-    all_pixel_data = []
-    for x, y in valid_coords:
-        values = var_data[:, x, y]
-        mask = values != -9999
-        if p["qa_filter"]:
-            mask = (qa_data[:, x, y] == 0) & mask
-        all_pixel_data.append((x, y, values[mask], t[mask]))
-
-    batches = [all_pixel_data[i:i + batch_size] for i in range(0, len(all_pixel_data), batch_size)]
+    coord_list = [(int(x), int(y)) for x, y in valid_coords]
+    batches = [coord_list[i:i + batch_size] for i in range(0, len(coord_list), batch_size)]
     out = None
 
     if threads > 1:
         with ProcessPoolExecutor(max_workers=threads) as executor:
-            futures = {executor.submit(compute_pixel_batch, batch, smooth_x_axis, p): None
+            futures = {executor.submit(compute_pixel_batch, batch, smooth_x_axis, p, input_file, t): None
                        for batch in batches}
             for future in tqdm(as_completed(futures), total=len(futures), desc=str(lake['id']), unit='batch'):
                 try:
@@ -90,7 +81,7 @@ def phenology(lake, p, threads=1, batch_size=100):
                         functions.append_pixel_phenology(out, x, y, result, pheno)
     else:
         for batch in tqdm(batches, desc=str(lake['id']), unit='batch'):
-            for x, y, result, pheno in compute_pixel_batch(batch, smooth_x_axis, p):
+            for x, y, result, pheno in compute_pixel_batch(batch, smooth_x_axis, p, input_file, t):
                 if result is not None:
                     if out is None:
                         out = netCDF4.Dataset(output_file_temp, 'w', format='NETCDF4')
@@ -104,21 +95,26 @@ def phenology(lake, p, threads=1, batch_size=100):
     else:
         logging.info(f"No valid phenology results for {lake['id']}")
 
-def compute_pixel_batch(pixel_data, smooth_x_axis, p):
+def compute_pixel_batch(coord_batch, smooth_x_axis, p, input_file, t):
     """Compute spline and phenology metrics for a batch of pixels.
 
-    Pure compute function — receives pre-read pixel data and performs spline
-    fitting and phenology extraction.  Defined at module level so it can be
-    pickled by ProcessPoolExecutor.
+    Opens the input NetCDF4 file read-only, reads only the pixel columns
+    needed for this batch, then performs spline fitting and phenology
+    extraction.  Defined at module level so it can be pickled by
+    ProcessPoolExecutor.
 
     Parameters
     ----------
-    pixel_data : list of (x, y, values, time)
-        Pre-read and masked pixel time series.
+    coord_batch : list of (x, y)
+        Pixel coordinates to process.
     smooth_x_axis : ndarray
         Regular daily grid used for spline evaluation.
     p : dict
         Parameters dict (see phenology docstring).
+    input_file : str
+        Path to the input NetCDF4 file (opened read-only).
+    t : ndarray
+        Pre-computed time ordinal array for all time steps.
 
     Returns
     -------
@@ -127,28 +123,36 @@ def compute_pixel_batch(pixel_data, smooth_x_axis, p):
         if the spline conditions are not satisfied for that pixel.
     """
     batch_results = []
-    for x, y, values, time in pixel_data:
-        if len(time) < 2:
-            batch_results.append((x, y, None, None))
-            continue
-        try:
-            result = functions.smooth_cubic_spline(
-                time, values, p["spline_min_phase_length"], p["spline_min_relative_amplitude"],
-                p["spline_min_phase_data"], smoothing_change=1e-12, max_iterations=1e5,
-                smooth_x_axis=smooth_x_axis
-            )
-            if not result['conditions_satisfied']:
+    with netCDF4.Dataset(input_file, 'r') as nc:
+        for x, y in coord_batch:
+            values = np.array(nc.variables[p["variable"]][:, x, y])
+            mask = values != -9999
+            if p["qa_filter"]:
+                mask = (np.array(nc.variables[p["qa"]][:, x, y]) == 0) & mask
+            values = values[mask]
+            time = t[mask]
+
+            if len(time) < 2:
                 batch_results.append((x, y, None, None))
                 continue
-            pheno = functions.extract_phenology_metrics(
-                result['x_pks'], result['y_pks'], result['x_trgs'], result['y_trgs'],
-                time, result['smooth_x_axis'], result['smooth_y_data'],
-                p["spline_subs_peak_win_size"], p["spline_subs_peak_ampl_frac"],
-                p["spline_data_gap_size"], p["spline_data_gap_size_buffer"]
-            )
-            batch_results.append((x, y, result, pheno))
-        except Exception as e:
-            logging.warning("Pixel (%d, %d) failed: %s", x, y, e)
-            batch_results.append((x, y, None, None))
+            try:
+                result = functions.smooth_cubic_spline(
+                    time, values, p["spline_min_phase_length"], p["spline_min_relative_amplitude"],
+                    p["spline_min_phase_data"], smoothing_change=1e-12, max_iterations=1e5,
+                    smooth_x_axis=smooth_x_axis
+                )
+                if not result['conditions_satisfied']:
+                    batch_results.append((x, y, None, None))
+                    continue
+                pheno = functions.extract_phenology_metrics(
+                    result['x_pks'], result['y_pks'], result['x_trgs'], result['y_trgs'],
+                    time, result['smooth_x_axis'], result['smooth_y_data'],
+                    p["spline_subs_peak_win_size"], p["spline_subs_peak_ampl_frac"],
+                    p["spline_data_gap_size"], p["spline_data_gap_size_buffer"]
+                )
+                batch_results.append((x, y, result, pheno))
+            except Exception as e:
+                logging.warning("Pixel (%d, %d) failed: %s", x, y, e)
+                batch_results.append((x, y, None, None))
 
     return batch_results
