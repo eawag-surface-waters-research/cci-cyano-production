@@ -86,6 +86,10 @@ def remove_nan(arr):
     arr = np.array(arr)
     return arr[~np.isnan(arr)]
 
+def define_year_range(start, end, years):
+                return(years.min() if start == 0 else start, 
+                       years.max() if end == 9999 else end)
+
 
 def init_phenology_output(out, lat, lon, p=None):
     """Initialise a streaming phenology NetCDF file.
