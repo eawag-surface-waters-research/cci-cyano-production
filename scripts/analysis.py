@@ -124,7 +124,7 @@ class PhenologyEDA:
                 self.variable = os.path.basename(os.path.dirname(phenology_path))
                 self.methods = [method for method in dir(PhenologyEDA) if callable(getattr(PhenologyEDA, method)) and not method.startswith("__")]
                 self.valid_coords = self.valid_index_pairs()
-                self.out_folder = os.path.dirname(self.p_path)
+                self.out_folder =  os.path.dirname(os.path.dirname(os.path.dirname(self.p_path)))
                 self.aggregation_df = None
                 self.geom_shrunk = None
 
@@ -476,7 +476,7 @@ class PhenologyEDA:
                 return self.compute_and_cache_metric(metric_name="correlation", col_name="correlation_scores", compute_fn=PhenologyEDA.compute_metric_score, start=start, end=end)
         
         def values_per_pixel(self, start=0, end=9999):
-                return self.compute_and_cache_metric(metric_name="values_per_pixel", col_name="number_of_values",compute_fn= PhenologyEDA.compute_values_per_pixel, start=start,end= end)
+                return self.compute_and_cache_metric(metric_name="values_per_pixel", col_name="number_of_values",compute_fn= PhenologyEDA.compute_metric_score, start=start,end= end)
 
 
 
