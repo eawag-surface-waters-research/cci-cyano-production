@@ -124,6 +124,7 @@ class PhenologyEDA:
                 self.variable = os.path.basename(os.path.dirname(phenology_path))
                 self.methods = [method for method in dir(PhenologyEDA) if callable(getattr(PhenologyEDA, method)) and not method.startswith("__")]
                 self.valid_coords = self.valid_index_pairs()
+                self.out_folder = os.path.dirname(self.p_path)
                 self.aggregation_df = None
                 self.geom_shrunk = None
 
@@ -415,12 +416,8 @@ class PhenologyEDA:
         def build_metric_path(self, metric_name, start= 0, end= 9999):
                 if metric_name == "values_per_pixel":
                         base = os.path.join(
-                        os.getcwd(),
-                        "calculated_values", metric_name,
-                        os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(self.p_path)))),
-                        os.path.basename(os.path.dirname(self.p_path)),
-                        os.path.basename(self.p_path)[:-3]
-                        )
+                        self.out_folder,
+                        "calculated_values", "metrics", metric_name, os.path.basename(os.path.dirname(self.p_path)), os.path.basename(self.p_path)[:-3])
                         if start == 0 and end == 9999:
                                 fname = "full_ts.csv"
                         elif start == 0:
@@ -433,9 +430,8 @@ class PhenologyEDA:
 
                 else:
                         base = os.path.join(
-                        os.getcwd(),
+                        self.out_folder,
                         "calculated_values", "metrics", metric_name,
-                        os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(self.p_path)))),
                         os.path.basename(os.path.dirname(self.p_path)),
                         os.path.basename(self.p_path)[:-3]
                         )
@@ -490,9 +486,9 @@ class PhenologyEDA:
                 """
                 Load or compute spatially aggregated background values for valid pixels.
                 """
-                d_path = os.getcwd()
+
                 out_dir = os.path.join(
-                        d_path,
+                        self.out_folder,
                         "calculated_values/spatial_aggregation_values",
                         os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(self.p_path)))),
                         os.path.basename(os.path.dirname(self.p_path)),
