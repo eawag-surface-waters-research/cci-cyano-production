@@ -6,10 +6,12 @@ import itertools
 import logging
 import geopandas as gpd
 from concurrent.futures import ProcessPoolExecutor
+import os
 
 from functions import set_logging, verify_arg_file, parse_args
 from extract import extract
 from phenology import phenology
+from analysis import PhenologyEDA
 
 def main(args, log=False, threads=1, parallel="lake", batch_size=100):
     set_logging(log)
@@ -47,6 +49,24 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
             with ProcessPoolExecutor(max_workers=threads) as executor:
                 executor.map(phenology, lakes, itertools.repeat(args),
                              itertools.repeat(1), itertools.repeat(batch_size))
+                
+    if args["analysis"]:
+        logging.info("Starting Analysis")
+        PhenologyEDA.set_shapefile_path(args["shapefile"])
+        for lake in lakes:
+            e_path = os.path.join(args["out_folder"], "extract", args["variable"], f"{lake['id']}.nc")
+            p_path = os.path.join(args["out_folder"], "phenology", args["variable"], f"{lake['id']}.nc")
+            if not os.path.isfile(e_path) or not os.path.isfile(p_path):
+                logging.warning(f"Skipping lake {lake['id']}: extract or phenology file missing")
+                continue
+            logging.info(f"Analysing lake {lake['id']}")
+            eda = PhenologyEDA(e_path, p_path)
+            eda.r2_scores()
+            eda.MAD_scores()
+            eda.RMSE_scores()
+            eda.correlation_scores()
+            eda.values_per_pixel()
+        logging.info("Analysis step complete")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Parse data from satellite images')
