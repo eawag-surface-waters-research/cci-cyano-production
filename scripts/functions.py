@@ -20,6 +20,7 @@ def parse_args(args):
         "end_index": False,
         "lakes": [],
         "out_folder": "",
+        "images": "",  #
         "extract": True,
         "phenology": True,
         "analysis": False,
