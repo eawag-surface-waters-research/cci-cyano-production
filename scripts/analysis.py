@@ -11,7 +11,7 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import pearsonr
 from csaps import csaps
-from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan
+from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range
 import multiprocessing
 from functools import partial
 import shapely.ops as ops
@@ -127,26 +127,6 @@ class PhenologyEDA:
                 self.aggregation_df = None
                 self.geom_shrunk = None
 
-        @classmethod
-        def set_shapefile_path(cls, path: str):
-                """
-    Set the class-level path to the shapefile.
-
-    This method assigns a file path to a class attribute so it can be
-    accessed globally by all instances of the class.
-
-    Parameters
-    ----------
-    path : str
-        Path to the shapefile (e.g., .shp file) to be used.
-
-    Notes
-    -----
-    - This updates a class attribute (`shapefile_path`), not an instance attribute.
-    - All existing and future instances of the class will use this updated path.
-    """
-                cls.shapefile_path = path
-
 
         def shortname_to_name(self, short_name:str):
                 df = self.geom
@@ -171,6 +151,28 @@ class PhenologyEDA:
                         lat = lats[lat_index]
                         lon = lons[lon_index]
                 return f"Lat, Lon: {lat}, {lon}"
+        
+        
+        @classmethod
+        def set_shapefile_path(cls, path: str):
+                """
+    Set the class-level path to the shapefile.
+
+    This method assigns a file path to a class attribute so it can be
+    accessed globally by all instances of the class.
+
+    Parameters
+    ----------
+    path : str
+        Path to the shapefile (e.g., .shp file) to be used.
+
+    Notes
+    -----
+    - This updates a class attribute (`shapefile_path`), not an instance attribute.
+    - All existing and future instances of the class will use this updated path.
+    """
+                cls.shapefile_path = path
+
 
 
         def valid_index_pairs(self):
@@ -263,241 +265,88 @@ class PhenologyEDA:
                 return geom_shrunk
         
 
-    
-
-
+       
         @staticmethod
-        def compute_r2_scores(coord, start= 0, end= 9999):
-                """
-    Compute the R² score between observed and smoothed time series
-    for a given spatial coordinate.
+        def compute_metric_score(coord, start, end, metric_to_compute= ["values_per_pixel", "r2", "MAD", "RMSE", "correlation"]):
+                if metric_to_compute==["values_per_pixel"]:
+                        i,j = coord
+                        values_all = _GLOBALS["values_all"]
+                        qa_all = _GLOBALS["qa_all"]
+                        years_all = _GLOBALS["years_all"]
 
-    This method extracts a time series at a specified (i, j) index,
-    applies a smoothing spline (using `csaps`), and evaluates the
-    coefficient of determination (R²) between the observed and
-    predicted values over a selected time range.
+                        values = values_all[:, i, j]
+                        qa_values = qa_all[:, i, j]
 
-    Parameters
-    ----------
-    coord : tuple of int
-        Spatial index pair (i, j) identifying the grid cell.
-    start : int
-        Start year for evaluation. If set to 0, the earliest available
-        year in the data is used.
-    end : int
-        End year for evaluation. If set to 9999, the latest available
-        year in the data is used.
+                        mask = (values != -9999) & (qa_values == 0)
+                        values_m = values[mask]
 
-    Returns
-    -------
-    tuple
-        A tuple of the form ((i, j), r2), where:
-        - (i, j) is the input coordinate
-        - r2 is the computed coefficient of determination (float),
-          or NaN if insufficient valid data is available
+                        years_m = years_all[mask]
 
-    Notes
-    -----
-    - Data is retrieved from the global `_GLOBALS` dictionary, which must
-      be initialized beforehand (e.g., via `_init_worker`).
-    - Invalid data points are filtered using:
-        * value != -9999 (missing value flag)
-        * QA flag == 0
-    - A cubic smoothing spline (`csaps`) is fitted using the provided
-      smoothing parameter for the pixel.
-    - R² is computed only for values within the specified year range
-      and where both observed and predicted values are finite.
-    - If fewer than two valid data points are available after filtering,
-      the function returns NaN and may issue a warning.
-    """
-
-                i,j = coord
-
-                smoothing_all = _GLOBALS["smoothing_all"]
-                values_all = _GLOBALS["values_all"]
-                qa_all = _GLOBALS["qa_all"]
-                t_all = _GLOBALS["t_all"]
-                years_all = _GLOBALS["years_all"]
-
-
-                smoothing = float(smoothing_all[i, j])
-                values = values_all[:, i, j]
-                qa_values = qa_all[:, i, j]
-
-                mask = (values != -9999) & (qa_values== 0)
-                values_m = values[mask]
-                time_m = t_all[mask]
-                years_m = years_all[mask]
-
-                if len(values_m)>1:
-
-                        function_start, function_end = PhenologyEDA.define_year_range(start= start, end = end, years = years_m)
-
-                        y_pred =csaps(time_m, values_m, time_m, smooth=smoothing)
-                        y_true = values_m
+                        function_start, function_end = define_year_range(start= start, end= end, years= years_m)
 
                         mask_sub = (years_m>= function_start) & (years_m <=function_end)
-                        valid = np.isfinite(y_true) & np.isfinite(y_pred)
 
-                        if valid.sum()<1:
-                                warnings.warn(f"Check data for lat, lon indices:{(i, j)}, perhaps smoothing parameter is nan or duplicates in time axis.")
+                        final_values = values_m[mask_sub]
 
-                        combined_mask = valid & mask_sub
-
-                        if combined_mask.sum() > 1:
-                                r2 = r2_score(y_true[combined_mask], y_pred[combined_mask])
-
-                        else:
-                                warnings.warn(f"Not enough valid data in selected date range for indices {(i,j)}")
-                                r2 = np.nan
+                        return (i,j), len(final_values)
                 else:
-                        r2 = np.nan
-                return (i,j), r2
-        
-        @staticmethod
-        def define_year_range(start, end, years):
-                return(years.min() if start == 0 else start, 
-                       years.max() if end == 9999 else end)
+                        i,j = coord
+
+                        smoothing_all = _GLOBALS["smoothing_all"]
+                        values_all = _GLOBALS["values_all"]
+                        qa_all = _GLOBALS["qa_all"]
+                        t_all = _GLOBALS["t_all"]
+                        years_all = _GLOBALS["years_all"]
 
 
+                        smoothing = float(smoothing_all[i, j])
+                        values = values_all[:, i, j]
+                        qa_values = qa_all[:, i, j]
 
-        @staticmethod
-        def compute_MAD_scores(coord, start, end):
-                i,j = coord
-
-                smoothing_all = _GLOBALS["smoothing_all"]
-                values_all = _GLOBALS["values_all"]
-                qa_all = _GLOBALS["qa_all"]
-                t_all = _GLOBALS["t_all"]
-                years_all = _GLOBALS["years_all"]
+                        mask = (values != -9999) & (qa_values== 0)
+                        values_m = values[mask]
+                        time_m = t_all[mask]
+                        years_m = years_all[mask]
 
 
-                smoothing = float(smoothing_all[i, j])
-                values = values_all[:, i, j]
-                qa_values = qa_all[:, i, j]
+                        
+                        if len(values_m)>1:
 
-                mask = (values != -9999) & (qa_values== 0)
-                values_m = values[mask]
-                time_m = t_all[mask]
-                years_m = years_all[mask]
+                                function_start, function_end = define_year_range(start= start, end = end, years = years_m)
 
-                if len(values_m)>1:
-                        function_start, function_end = PhenologyEDA.define_year_range(start= start, end= end, years= years_m)
+                                y_pred =csaps(time_m, values_m, time_m, smooth=smoothing)
+                                y_true = values_m
 
-                        y_pred =csaps(time_m, values_m, time_m, smooth=smoothing)
-                        y_true = values_m
+                                mask_sub = (years_m>= function_start) & (years_m <=function_end)
+                                valid = np.isfinite(y_true) & np.isfinite(y_pred)
 
-                        mask_sub = (years_m>= function_start) & (years_m <=function_end)
-                        valid = np.isfinite(y_true) & np.isfinite(y_pred)
+                                if valid.sum()<1:
+                                        warnings.warn(f"Check data for lat, lon indices:{(i, j)}, perhaps smoothing parameter is nan or duplicates in time axis.")
 
-                        if valid.sum()<1:
-                                warnings.warn(f"Check data for lat, lon indices:{(i, j)}, perhaps smoothing parameter is nan or duplicates in time axis.")
+                                combined_mask = valid & mask_sub
 
-                        combined_mask = valid & mask_sub
+                                if combined_mask.sum() > 1:
+                                        if metric_to_compute == ["r2"]:
+                                                metric = r2_score(y_true[combined_mask], y_pred[combined_mask])
+                                        elif metric_to_compute == ["MAD"]:
+                                                metric = np.median(np.abs(y_true[combined_mask]-y_pred[combined_mask]))
+                                        elif metric_to_compute == ["RMSE"]:
+                                                metric = np.sqrt(mean_squared_error(y_true[combined_mask], y_pred[combined_mask]))
+                                        elif metric_to_compute == ["correlation"]:
+                                                metric, _ = pearsonr(y_true[combined_mask], y_pred[combined_mask])
+                                        else:
+                                                raise ValueError("please enter a valid metric")
 
-                        if combined_mask.sum() > 1:
-                                mad = np.median(np.abs(y_true[combined_mask]-y_pred[combined_mask]))
 
+                                else:
+                                        warnings.warn(f"Not enough valid data in selected date range for indices {(i,j)}")
+                                        metric = np.nan
                         else:
-                                warnings.warn(f"Not enough valid data in selected date range for indices {(i,j)}")
-                                mad = np.nan
-                else:
-                        mad = np.nan
-                return (i,j), mad
+                                metric = np.nan
+                        return (i,j), metric
 
 
 
-        @staticmethod
-        def compute_RMSE_scores(coord, start, end):
-                i,j = coord
-
-                smoothing_all = _GLOBALS["smoothing_all"]
-                values_all = _GLOBALS["values_all"]
-                qa_all = _GLOBALS["qa_all"]
-                t_all = _GLOBALS["t_all"]
-                years_all = _GLOBALS["years_all"]
-
-
-                smoothing = float(smoothing_all[i, j])
-                values = values_all[:, i, j]
-                qa_values = qa_all[:, i, j]
-
-                mask = (values != -9999) & (qa_values== 0)
-                values_m = values[mask]
-                time_m = t_all[mask]
-                years_m = years_all[mask]
-
-                if len(values_m)>1:
-                        function_start, function_end = PhenologyEDA.define_year_range(start= start, end= end, years= years_m)
-
-                        y_pred =csaps(time_m, values_m, time_m, smooth=smoothing)
-                        y_true = values_m
-
-                        mask_sub = (years_m>= function_start) & (years_m <=function_end)
-                        valid = np.isfinite(y_true) & np.isfinite(y_pred)
-
-                        if valid.sum()<1:
-                                warnings.warn(f"Check data for lat, lon indices:{(i, j)}, perhaps smoothing parameter is nan or duplicates in time axis.")
-
-                        combined_mask = valid & mask_sub
-
-                        if combined_mask.sum() > 1:
-                                rmse = np.sqrt(mean_squared_error(y_true[combined_mask], y_pred[combined_mask]))
-
-                        else:
-                                warnings.warn(f"Not enough valid data in selected date range for indices {(i,j)}")
-                                rmse = np.nan
-                else:
-                        rmse = np.nan
-                return (i,j), rmse
-        
-
-        @staticmethod
-        def compute_correlation_scores(coord, start, end):
-                i,j = coord
-
-                smoothing_all = _GLOBALS["smoothing_all"]
-                values_all = _GLOBALS["values_all"]
-                qa_all = _GLOBALS["qa_all"]
-                t_all = _GLOBALS["t_all"]
-                years_all = _GLOBALS["years_all"]
-
-
-                smoothing = float(smoothing_all[i, j])
-                values = values_all[:, i, j]
-                qa_values = qa_all[:, i, j]
-
-                mask = (values != -9999) & (qa_values== 0)
-                values_m = values[mask]
-                time_m = t_all[mask]
-                years_m = years_all[mask]
-
-                if len(values_m)>1:
-                        function_start, function_end = PhenologyEDA.define_year_range(start= start, end= end, years= years_m)
-
-                        y_pred =csaps(time_m, values_m, time_m, smooth=smoothing)
-                        y_true = values_m
-
-                        mask_sub = (years_m>= function_start) & (years_m <=function_end)
-                        valid = np.isfinite(y_true) & np.isfinite(y_pred)
-
-                        if valid.sum()<1:
-                                warnings.warn(f"Check data for lat, lon indices:{(i, j)}, perhaps smoothing parameter is nan or duplicates in time axis.")
-
-                        combined_mask = valid & mask_sub
-
-                        if combined_mask.sum() > 1:
-                                correlation, _ = pearsonr(y_true[combined_mask], y_pred[combined_mask])
-
-                        else:
-                                warnings.warn(f"Not enough valid data in selected date range for indices {(i,j)}")
-                                correlation = np.nan
-                else:
-                        correlation = np.nan
-                return (i,j), correlation
-
-
-    
 
         def build_metric_path(self, metric_name, start= 0, end= 9999):
                 if metric_name == "values_per_pixel":
@@ -545,7 +394,7 @@ class PhenologyEDA:
                         df = pd.read_csv(file_path)
                         return dict(zip(zip(df["i"], df["j"]), df[col_name]))
                 warnings.warn(f"{metric_name} need to be calculated. Depending on the lake size this may take a while.")
-                workers = partial(compute_fn, start=start, end=end)
+                workers = partial(compute_fn, start=start, end=end, metric_to_compute = [metric_name])
                 with multiprocessing.Pool(initializer=_init_worker, initargs=(self.p_path, self.e_path), processes=3) as pool:
                         result = pool.map(workers, self.valid_coords)
                 data = dict(result)
@@ -555,16 +404,16 @@ class PhenologyEDA:
 
 
         def r2_scores(self, start=0, end=9999):
-                return self.compute_and_cache_metric(metric_name="r2_scores", col_name="r2_scores", compute_fn=PhenologyEDA.compute_r2_scores, start=start, end=end)
+                return self.compute_and_cache_metric(metric_name="r2", col_name="r2_scores", compute_fn=PhenologyEDA.compute_metric_score, start=start, end=end)
 
         def MAD_scores(self, start=0, end=9999):
-                return self.compute_and_cache_metric(metric_name="mad_scores", col_name="mad_scores",compute_fn= PhenologyEDA.compute_MAD_scores,start= start,end= end)
+                return self.compute_and_cache_metric(metric_name="MAD", col_name="mad_scores",compute_fn= PhenologyEDA.compute_metric_score,start= start,end= end)
 
         def RMSE_scores(self, start=0, end=9999):
-                return self.compute_and_cache_metric(metric_name="rmse_scores", col_name="rmse_scores", compute_fn=PhenologyEDA.compute_RMSE_scores, start=start, end=end)
+                return self.compute_and_cache_metric(metric_name="RMSE", col_name="rmse_scores", compute_fn=PhenologyEDA.compute_metric_score, start=start, end=end)
 
         def correlation_scores(self, start=0, end=9999):
-                return self.compute_and_cache_metric(metric_name="correlation_scores", col_name="correlation_scores", compute_fn=PhenologyEDA.compute_correlation_scores, start=start, end=end)
+                return self.compute_and_cache_metric(metric_name="correlation", col_name="correlation_scores", compute_fn=PhenologyEDA.compute_metric_score, start=start, end=end)
         
         def values_per_pixel(self, start=0, end=9999):
                 return self.compute_and_cache_metric(metric_name="values_per_pixel", col_name="number_of_values",compute_fn= PhenologyEDA.compute_values_per_pixel, start=start,end= end)
@@ -997,68 +846,6 @@ class PhenologyEDA:
                 cid = fig.canvas.mpl_connect("button_press_event", on_click)
                 return cid
 
-
-
-        @staticmethod
-        def compute_values_per_pixel(coord, start=0, end=9999):
-                """
-    Count the number of valid observations for a given pixel within a
-    specified time range.
-
-    This method extracts the time series for a specific spatial coordinate,
-    filters out invalid values using a fill-value and QA mask, and counts
-    how many valid observations fall within the selected year interval.
-
-    Parameters
-    ----------
-    coord : tuple of int
-        Spatial index pair `(i, j)` identifying the grid cell.
-    start : int
-        Start year for the counting interval. If set to 0, the earliest
-        available year in the pixel time series is used.
-    end : int
-        End year for the counting interval. If set to 9999, the latest
-        available year in the pixel time series is used.
-
-    Returns
-    -------
-    tuple
-        A tuple of the form `((i, j), count)`, where:
-        - `(i, j)` is the input coordinate
-        - `count` is the number of valid observations within the selected
-          time range
-
-    Notes
-    -----
-    - Data is retrieved from the global `_GLOBALS` dictionary, which must
-      be initialized beforehand (e.g., via `_init_worker`).
-    - A value is considered valid if:
-        * it is not equal to `-9999`, and
-        * its QA flag is equal to `0`.
-    - The time filtering is based on precomputed `years_all`.
-    - If no valid values exist for the pixel, this method may raise an
-      error when computing `min()`/`max()` on an empty array.
-    """
-                i,j = coord
-                values_all = _GLOBALS["values_all"]
-                qa_all = _GLOBALS["qa_all"]
-                years_all = _GLOBALS["years_all"]
-
-                values = values_all[:, i, j]
-                qa_values = qa_all[:, i, j]
-
-                mask = (values != -9999) & (qa_values == 0)
-                values_m = values[mask]
-
-                years_m = years_all[mask]
-
-                function_start, function_end = PhenologyEDA.define_year_range(start= start, end= end, years= years_m)
-
-                mask_sub = (years_m>= function_start) & (years_m <=function_end)
-
-                final_values = values_m[mask_sub]
-
-                return (i,j), len(final_values)
 
 
 
