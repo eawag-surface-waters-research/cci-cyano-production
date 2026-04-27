@@ -69,8 +69,13 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
             eda.values_per_pixel()
         logging.info(f"Analysis lake {lake['id']} complete")
 
-    if args["plot"]:
-        logging.info("Starting Plots")
+        if args["plot"]:
+            if not args["analysis"]:
+                raise ValueError("Analysis must be true for plots to run.")
+            logging.info("Starting Plots")
+           
+
+
 
 
 if __name__ == "__main__":
