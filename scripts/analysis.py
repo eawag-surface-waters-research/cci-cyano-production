@@ -212,6 +212,70 @@ class PhenologyEDA:
                         valid_counts = np.sum(valid_mask, axis=0)
 
                         return [tuple(int(x) for x in idx) for idx in np.argwhere(valid_counts > 1)]
+                
+
+        def create_DataFrame(self, latitude, longitude):
+                """
+    Create a pandas DataFrame from phenology NetCDF data for a specific location.
+
+    This method reads the phenology dataset stored at `self.p_path`, extracts
+    paired variables ending in 'x' (time) and 'y' (values), and constructs
+    individual DataFrames for each variable. The resulting DataFrames are then
+    concatenated into a single DataFrame indexed by time.
+
+    Processing steps:
+    - Excludes non-relevant variables (e.g., 'lat', 'lon', quality flags).
+    - Identifies variable pairs where:
+        - 'x' variables represent time (converted from Unix timestamps).
+        - 'y' variables represent observed values.
+    - Removes NaN values from both time and value arrays.
+    - Converts time values to datetime format.
+    - Creates a labeled DataFrame for each variable.
+    - Concatenates all variable DataFrames into a single DataFrame.
+
+    Returns:
+        pandas.DataFrame: A combined DataFrame containing all variables with:
+            - Index: DatetimeIndex labeled "Time"
+            - Columns:
+                - "Value": Observed values
+                - "Variable": Name of the variable
+
+    Notes:
+        - The method assumes that variables ending in 'x' and 'y' are paired
+          and aligned in order.
+        - Latitude and longitude are used as indices to extract point data
+          from the NetCDF dataset.
+        - Helper functions `remove_nan` and `unix_to_datetime` must be defined.
+
+    Raises:
+        KeyError: If expected variables are missing in the dataset.
+        IndexError: If latitude/longitude indices are out of bounds.
+        IOError: If the NetCDF file cannot be opened.
+    """
+                p = netCDF4.Dataset(self.p_path)
+                exclude = ['lat','lon','smoothing_parameter','trgs_qa','data_gap_start','data_gap_end']
+                l = list(set(list(p.variables))-set(exclude))
+                variables_x = sorted([i for i in l if i[-1]== "x"])
+                variables_y = sorted([i for i in l if i[-1]== "y"])
+                lat = np.array(p.variables["lat"])
+                lon = np.array(p.variables["lon"])
+
+                result = {}
+
+                for x,y in zip(variables_x, variables_y):
+                        var_x = unix_to_datetime(remove_nan(p[x][latitude,longitude,:]))
+                        var_y = remove_nan(p[y][latitude,longitude,:])
+                        var_label = [x[:-2]]*len(var_y)
+                        df = pd.DataFrame({"Value":var_y,
+                                        "Variable": var_label,
+                                        "latitude": lat[latitude],
+                                        "longitude": lon[longitude]},
+                                        index = var_x)
+                        df.index.names = ["Time"]
+                        result[y[:-2]] = df
+                combined_df = pd.concat(result.values())
+
+                return combined_df
 
 
         def shrink_geometry_by_1km(self, geom):
@@ -421,70 +485,6 @@ class PhenologyEDA:
 
 
 
-        def create_DataFrame(self, latitude, longitude):
-                """
-    Create a pandas DataFrame from phenology NetCDF data for a specific location.
-
-    This method reads the phenology dataset stored at `self.p_path`, extracts
-    paired variables ending in 'x' (time) and 'y' (values), and constructs
-    individual DataFrames for each variable. The resulting DataFrames are then
-    concatenated into a single DataFrame indexed by time.
-
-    Processing steps:
-    - Excludes non-relevant variables (e.g., 'lat', 'lon', quality flags).
-    - Identifies variable pairs where:
-        - 'x' variables represent time (converted from Unix timestamps).
-        - 'y' variables represent observed values.
-    - Removes NaN values from both time and value arrays.
-    - Converts time values to datetime format.
-    - Creates a labeled DataFrame for each variable.
-    - Concatenates all variable DataFrames into a single DataFrame.
-
-    Returns:
-        pandas.DataFrame: A combined DataFrame containing all variables with:
-            - Index: DatetimeIndex labeled "Time"
-            - Columns:
-                - "Value": Observed values
-                - "Variable": Name of the variable
-
-    Notes:
-        - The method assumes that variables ending in 'x' and 'y' are paired
-          and aligned in order.
-        - Latitude and longitude are used as indices to extract point data
-          from the NetCDF dataset.
-        - Helper functions `remove_nan` and `unix_to_datetime` must be defined.
-
-    Raises:
-        KeyError: If expected variables are missing in the dataset.
-        IndexError: If latitude/longitude indices are out of bounds.
-        IOError: If the NetCDF file cannot be opened.
-    """
-                p = netCDF4.Dataset(self.p_path)
-                exclude = ['lat','lon','smoothing_parameter','trgs_qa','data_gap_start','data_gap_end']
-                l = list(set(list(p.variables))-set(exclude))
-                variables_x = sorted([i for i in l if i[-1]== "x"])
-                variables_y = sorted([i for i in l if i[-1]== "y"])
-                lat = np.array(p.variables["lat"])
-                lon = np.array(p.variables["lon"])
-
-                result = {}
-
-                for x,y in zip(variables_x, variables_y):
-                        var_x = unix_to_datetime(remove_nan(p[x][latitude,longitude,:]))
-                        var_y = remove_nan(p[y][latitude,longitude,:])
-                        var_label = [x[:-2]]*len(var_y)
-                        df = pd.DataFrame({"Value":var_y,
-                                        "Variable": var_label,
-                                        "latitude": lat[latitude],
-                                        "longitude": lon[longitude]},
-                                        index = var_x)
-                        df.index.names = ["Time"]
-                        result[y[:-2]] = df
-                combined_df = pd.concat(result.values())
-
-                return combined_df
-
-
 
         def spatial_aggregation(self):
                 """
@@ -582,6 +582,8 @@ class PhenologyEDA:
                 aggregation_df = pd.concat(frames, ignore_index=True)
                 aggregation_df.to_csv(file_path, index=False)
                 self.aggregation_df = aggregation_df
+
+
 
         def pixel_map(self, latitude, longitude, ax):
                 """
@@ -849,266 +851,7 @@ class PhenologyEDA:
 
 
 
-        def values_map(self, scores, fig, ax):
-                """
-    Plot a spatial map of the number of valid observations per pixel.
-
-    This method creates a geographic visualization of per-pixel observation
-    counts for the current lake, restricted to pixels whose centers fall
-    within a 1 km inward-buffered version of the lake geometry. Pixels with
-    fewer than 10 values are highlighted, and pixels with zero values are
-    marked separately. The original lake outline is overlaid on the map, and
-    a colorbar is added to show the count scale.
-
-    Parameters
-    ----------
-    scores : dict[tuple[int, int], int]
-        Dictionary mapping pixel index pairs `(i, j)` to the number of valid
-        observations for each pixel.
-    fig : matplotlib.figure.Figure
-        Matplotlib figure object used to attach the colorbar.
-    ax : matplotlib.axes.Axes
-        Matplotlib axes object on which the map is drawn.
-
-    Returns
-    -------
-    matplotlib.image.AxesImage or tuple
-        Returns the image object from `imshow`. If any pixels have fewer than
-        10 values, returns a tuple `(im, low_points)`, where `low_points` is a
-        list of `(i, j)` index pairs for pixels with counts between 1 and 9.
-
-    Raises
-    ------
-    ValueError
-        If the lake ID derived from `self.p_path` is not found in
-        `self.geom`.
-
-    Notes
-    -----
-    - The lake ID is extracted from the filename of `self.p_path`.
-    - The corresponding lake geometry is retrieved from `self.geom` using
-      the `"id"` column.
-    - The lake geometry is shrunk inward by 1 km using
-      `self.shrink_geometry_by_1km` before testing whether grid-cell
-      centers should be included.
-    - Only pixels whose longitude/latitude fall within the buffered lake
-      polygon are assigned values in the output map.
-    - Pixels with:
-        * values from 1 to 9 are marked with a red dot
-        * 0 values are marked with a red star
-    - The raster is displayed using geographic coordinates via the `extent`
-      argument in `imshow`, based on the NetCDF `lat` and `lon` variables.
-    - The original lake outline is drawn in black on top of the raster.
-    - A colorbar labeled `# Values` is added to the provided figure.
-    - Although the raster is plotted in geographic coordinates, the markers
-      for low-value and zero-value pixels are currently plotted using raw
-      array indices `(j, i)`, which may not align correctly with the map
-      extent.
-    - `self.geom` is expected to be a GeoDataFrame-like object containing
-      lake geometries and an `"id"` column.
-    """
-                legend_labels = False
-                legend_labels_zero = False
-                low_points = []
-                zero_points = []
-
-                # Load necessary geometries for lake outline
-                lake_id = int(os.path.basename(self.p_path)[:-3])
-
-                lake_row = self.geom[self.geom["id"] == lake_id]
-                if lake_row.empty:
-                        raise ValueError(f"Lake ID {lake_id} not found in shapefile.")
-                geom = lake_row.geometry.iloc[0]
-                buffered_geom = self.shrink_geometry_by_1km(geom)
-                buffered_geom_prepared = prep(buffered_geom)
-
-                with netCDF4.Dataset(self.e_path) as nc:
-                        summary = np.array(nc.variables["summary"][:, :])
-                        lats = nc.variables["lat"][:]
-                        lons = nc.variables["lon"][:]
-                        map_data = np.full(summary.shape, np.nan)
-                        for (i, j), amount in scores.items():
-                                lon = lons[j]
-                                lat = lats[i]
-                                if buffered_geom_prepared.contains(Point(lon, lat)):
-                                        map_data[i, j] = amount
-                                        if amount < 10:
-                                                if amount == 0:
-                                                        zero_points.append((i,j))
-                                                else:
-                                                        low_points.append((i,j))
-
-
-                # plot as geographic map
-                im = ax.imshow(map_data, cmap="winter", aspect="auto", origin="lower",  extent=[lons.min(), lons.max(), lats.min(), lats.max()])
-                if low_points:
-                        for (x,y) in low_points:
-                                label = "# Values < 10" if not legend_labels else None
-                                ax.plot(y, x, marker = ".", c = "red", markersize=14, zorder=10, label=label, ls= "None")
-                                legend_labels = True
-
-                if zero_points:
-                        for (x,y) in zero_points:
-                                label = "0 Values" if not legend_labels_zero else None
-                                ax.plot(y, x, marker = "*", c = "red", markersize=14, zorder=10, label=label, ls = "None")
-                                legend_labels_zero = True
-
-
-                label = False
-                if geom.geom_type == "Polygon":
-                        x, y = geom.exterior.xy
-                        label = "Lake Outline" if not label else None
-                        ax.plot(x, y, color="black", linewidth=1, label = label)
-                        label = True
-                elif geom.geom_type == "MultiPolygon":
-                        for poly in geom.geoms:
-                                x, y = poly.exterior.xy
-                                label = "Lake Outline" if not label else None
-                                ax.plot(x, y, color="black", linewidth=1, label = label)
-                                label = True
-
-                ax.set_xlabel("Lon index")
-                ax.set_ylabel("Lat index")
-                text_str = f"Number of Values per Pixel\n Lake: ID {os.path.basename(self.p_path)[:-3]}"
-                ax.set_title(text_str)
-                fig.colorbar(im, ax= ax, label= "# Values")
-                ax.legend()
-                if low_points:
-                        return im, low_points
-                else:
-                        return im
-
-
-        def interactive_values_map(self, scores, fig, ax):
-                """
-    Display an interactive geographic map of the number of valid observations
-    per pixel and allow users to inspect grid cells by clicking on the map.
-
-    This method plots per-pixel observation counts for the current lake,
-    restricted to pixels whose centers fall within a 1 km inward-buffered
-    lake geometry. The original lake outline is overlaid, and an interactive
-    click handler lets the user select locations on the map and annotate the
-    nearest grid cell with its `(lat_idx, lon_idx)` indices and value count.
-
-    Parameters
-    ----------
-    scores : dict[tuple[int, int], int]
-        Dictionary mapping pixel index pairs `(i, j)` to the number of valid
-        observations for each pixel.
-    fig : matplotlib.figure.Figure
-        Matplotlib figure object used for the colorbar and event connection.
-    ax : matplotlib.axes.Axes
-        Matplotlib axes object on which the map is drawn.
-
-    Returns
-    -------
-    int
-        The Matplotlib callback connection id returned by
-        `mpl_connect("button_press_event", ...)`. This can be used later to
-        disconnect the callback if needed.
-
-    Raises
-    ------
-    ValueError
-        If the lake ID derived from `self.p_path` is not found in
-        `self.geom`.
-
-    Notes
-    -----
-    - This function requires an interactive Matplotlib backend. In Jupyter
-      environments, you must enable it using: %matplotlib widget
-    - To change it back to the original backend, use: %matplotlib inline
-    - The lake ID is extracted from the filename of `self.p_path`.
-    - The corresponding lake geometry is retrieved from `self.geom` using
-      the `"id"` column.
-    - The lake geometry is shrunk inward by 1 km using
-      `self.shrink_geometry_by_1km`, and only pixel centers inside this
-      buffered geometry are assigned values in the map.
-    - The raster is displayed in geographic coordinates using the NetCDF
-      `lat` and `lon` variables as the plotting extent.
-    - The original lake outline is plotted in black.
-    - Clicking inside the axes selects the nearest grid cell based on the
-      clicked longitude and latitude.
-    - A valid click adds:
-        * a red circular marker at the nearest grid-cell center
-        * a text label showing `((lat_idx, lon_idx), value)`
-    - The annotated value is taken from `map_data` at the selected pixel and
-      rounded for display.
-    - The method does not currently check whether the clicked pixel contains
-      a valid or non-NaN mapped value before annotating it.
-    """
-
-                # load in geometries for lake outline
-                lake_id = int(os.path.basename(self.p_path)[:-3])
-
-                lake_row = self.geom[self.geom["id"] == lake_id]
-                if lake_row.empty:
-                        raise ValueError(f"Lake ID {lake_id} not found in shapefile.")
-                geom = lake_row.geometry.iloc[0]
-                buffered_geom = self.shrink_geometry_by_1km(geom)
-                buffered_geom_prepared = prep(buffered_geom)
-
-                with netCDF4.Dataset(self.e_path) as nc:
-                        summary = np.array(nc.variables["summary"][:, :])
-                        lats = nc.variables["lat"][:]
-                        lons = nc.variables["lon"][:]
-                        map_data = np.full(summary.shape, np.nan)
-                        for (i, j), amount in scores.items():
-                                lon = lons[j]
-                                lat = lats[i]
-                                if buffered_geom_prepared.contains(Point(lon, lat)):
-                                        map_data[i, j] = amount
-
-                        # plot as geographic map
-                        im = ax.imshow(map_data, cmap="winter", aspect="auto", origin="lower",  extent=[lons.min(), lons.max(), lats.min(), lats.max()])
-
-                        label = False
-                        if geom.geom_type == "Polygon":
-                                x, y = geom.exterior.xy
-                                label = "Lake Outline" if not label else None
-                                ax.plot(x, y, color="black", linewidth=1, label = label)
-                                label = True
-                        elif geom.geom_type == "MultiPolygon":
-                                for poly in geom.geoms:
-                                        x, y = poly.exterior.xy
-                                        label = "Lake Outline" if not label else None
-                                        ax.plot(x, y, color="black", linewidth=1, label = label)
-                                        label = True
-
-                        ax.set_xlabel("Lon index")
-                        ax.set_ylabel("Lat index")
-                        text_str = f"Number of Values per Pixel for Lake: ID {os.path.basename(self.p_path)[:-3]}"
-                        ax.set_title(text_str)
-                        fig.colorbar(im, ax= ax, label= "# Values")
-                        ax.legend()
-
-
-                def on_click(event):
-                        if event.inaxes is not ax or event.xdata is None or event.ydata is None:
-                                return
-
-                        clicked_lon = event.xdata
-                        clicked_lat = event.ydata
-
-                        lon_idx = int(np.abs(lons - clicked_lon).argmin())
-                        lat_idx = int(np.abs(lats - clicked_lat).argmin())
-
-                        ax.text(
-                        lons[lon_idx], lats[lat_idx],
-                        f"({lat_idx},{lon_idx}), {round(map_data[lat_idx, lon_idx])}",
-                        color="black",
-                        fontsize=10,
-                        ha="center", va="center"
-                        )
-                        ax.plot(lons[lon_idx], lats[lat_idx], "ro", markersize=6)
-                        fig.canvas.draw_idle()
-
-                cid = fig.canvas.mpl_connect("button_press_event", on_click)
-                return cid
-
-
-
-        def peak_plot(self, latitude, longitude, ax,  aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False):
+        def extrema_plot(self, latitude, longitude, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False):
                 """
     Plot the time series and detected peak values for a selected pixel.
 
@@ -1189,12 +932,19 @@ class PhenologyEDA:
 
                 with netCDF4.Dataset(self.p_path) as nc:
                         smoothing = float(nc.variables["smoothing_parameter"][latitude, longitude])
+                        if peak:
 
-                        pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
-                        pks_y = remove_nan(nc.variables["pks_y"][latitude, longitude, :])
-                        mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
-                        pks_x_sub = pks_x[mask_pks]
-                        pks_y_sub = pks_y[mask_pks]
+                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
+                                pks_y = remove_nan(nc.variables["pks_y"][latitude, longitude, :])
+                                mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
+                                x_sub = pks_x[mask_pks]
+                                y_sub = pks_y[mask_pks]
+                        else:
+                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
+                                trgs_y = remove_nan(nc.variables["trgs_y"][latitude, longitude, :])
+                                mask_trgs = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
+                                x_sub = trgs_x[mask_trgs]
+                                y_sub = trgs_y[mask_trgs]
 
                         with netCDF4.Dataset(self.e_path) as nc:
                                 variable = getattr(nc, "variable")
@@ -1261,12 +1011,12 @@ class PhenologyEDA:
                                 else:
                                         pass
 
-
-                                ax.stem(pks_x_sub, pks_y_sub, linefmt=color, label=f"{label} Peaks", basefmt = " ")
-                                if (pks_y_sub < 0).any():
-                                        mask =  pks_y_sub<0
-                                        pks_x_neg_before = pks_x_sub[mask]
-                                        pks_y_neg_before = pks_y_sub[mask]
+                                extrema_label = "Peaks" if peak else "Troughs"
+                                ax.stem(x_sub, y_sub, linefmt=color, label=f"{label} {extrema_label}", basefmt = " ")
+                                if (y_sub < 0).any():
+                                        mask =  y_sub<0
+                                        pks_x_neg_before = x_sub[mask]
+                                        pks_y_neg_before = y_sub[mask]
                                         label = "Negative Value" if not neg_label_before else None
                                         ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
                                         neg_values_sub.append(len(pks_x_neg_before))
@@ -1275,13 +1025,16 @@ class PhenologyEDA:
 
 
                                 ax.legend(loc="upper left", ncol= 2)
-                                textstr = f"Peak Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                if peak:
+                                        textstr = f"Peak Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                else:
+                                        textstr = f"Trough Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
                                 ax.set_title(textstr)
                                 ax.set_ylabel("[ug/L]")
                                 ax.grid()
 
                                 ax.set_xlim(pd.to_datetime('01-01-' + str(function_start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(function_end), format='%d-%m-%Y'))
-                                pks_lim_sub = sorted(pks_y_sub)
+                                pks_lim_sub = sorted(y_sub)
                                 if max(pks_lim_sub)> 10:
                                         ymax = pks_lim_sub[-2]+0.5
                                         ax.set_ylim(-0.5, ymax)
@@ -1292,159 +1045,11 @@ class PhenologyEDA:
                         else:
                                 warnings.warn("No data to plot (check valid indices)")
                                 return None
-
-        def trough_plot(self, latitude, longitude, ax,  aggregation= False, start = 0, end = 9999, background_pts= True):
-                """
-    Plot the time series and detected trough values for a selected pixel.
-
-    This method visualizes observed data for a single pixel together with
-    detected trough magnitudes and dates from the phenology parameter file.
-    Optionally, it can plot spatially aggregated background values instead
-    of the raw pixel time series. The displayed troughs and x-axis range can
-    be restricted to a selected year interval.
-
-    Parameters
-    ----------
-    latitude : int
-        Row index of the selected pixel.
-    longitude : int
-        Column index of the selected pixel.
-    ax : matplotlib.axes.Axes
-        Matplotlib axes object on which the plot is drawn.
-    aggregation : bool, optional
-        If True, plot spatially aggregated background values from
-        `self.aggregation_df` instead of the raw pixel time series.
-        If False, plot the raw valid observations for the selected pixel.
-        Default is False.
-    start : int, optional
-        Start year for the displayed period. If set to 0, the earliest
-        available year in the valid time series is used. Default is 0.
-    end : int, optional
-        End year for the displayed period. If set to 9999, the latest
-        available year in the valid time series is used. Default is 9999.
-
-    Returns
-    -------
-    None
-        This method plots directly onto `ax` and does not return a value.
-
-    Notes
-    -----
-    - The method reads latitude, longitude, and time information from
-      `self.e_path`, and trough information from `self.p_path`.
-    - Trough dates are read from `trgs_x` and converted from Unix time to
-      datetime objects.
-    - Trough magnitudes are read from `trgs_y`.
-    - Only troughs whose years fall within the selected `[start, end]`
-      interval are displayed.
-    - Raw observations are filtered so that only values not equal to
-      `-9999` and with QA flag equal to `0` are plotted.
-    - If `aggregation=True` and `self.aggregation_df` has not yet been
-      created, `self.spatial_aggregation()` is called automatically.
-    - The plotted data color depends on the phenology variable inferred
-      from the parent directory name of `self.p_path`:
-        * `"phycocyanin"` -> green
-        * `"chla_mean"` -> brown
-        * otherwise -> blue
-    - Troughs are drawn with `ax.stem`, while observations/background values
-      are drawn with `ax.scatter`.
-    - The title includes the lake ID and the geographic coordinates of the
-      selected pixel.
-    - The y-axis upper limit is adjusted based on the largest trough values.
-    - This method assumes that at least one trough is available after
-      filtering; otherwise, operations such as `max()` may fail.
-
-    Warns
-    -----
-    UserWarning
-        If spatial aggregation must be calculated before plotting.
-    UserWarning
-        If there is not enough valid data to produce the plot.
-    """
-                with netCDF4.Dataset(self.e_path) as nc:
-                        # change np.array to np.asarry to avoid getting DeprecationError
-                        lat = np.asarray(nc.variables["lat"])
-                        lon = np.asarray(nc.variables["lon"])
-                        t_all = unix_to_datenum(nc.variables["time"])
-
-
-                with netCDF4.Dataset(self.p_path) as nc:
-                        trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
-                        trgs_y = remove_nan(nc.variables["trgs_y"][latitude, longitude, :])
-                        mask_trgs = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
-                        trgs_x_sub = trgs_x[mask_trgs]
-                        trgs_y_sub = trgs_y[mask_trgs]
-
-
-                        with netCDF4.Dataset(self.e_path) as nc:
-                                variable = getattr(nc, "variable")
-                                values = np.array(nc.variables[variable][:, latitude, longitude])
-                                mask = (values != -9999) & (np.array(nc.variables[getattr(nc, 'qa')][:, latitude, longitude]) == 0)
-                                values_m = values[mask]
-                                time_m = t_all[mask]
+                        
 
 
 
-                        if len(values_m) > 1:
-
-                                limits = sorted(datenum_to_datetime(time_m))
-                                if start == 0:
-                                        function_start = min(limits).year
-                                else:
-                                        function_start =start
-                                if end == 9999:
-                                        function_end= max(limits).year
-                                else:
-                                        function_end = end
-
-                                phenology_name = os.path.basename(os.path.dirname(self.p_path))
-                                if phenology_name == "phycocyanin":
-                                        label = "phyco"
-                                        color = "green"
-                                elif phenology_name == "chla_mean":
-                                        label = "chla_mean"
-                                        color = "brown"
-                                else:
-                                        label = "chla"
-                                        color = "blue"
-
-                                if aggregation:
-                                        if self.aggregation_df is None:
-                                                warnings.warn("Aggregation needs to be calculated, this may take a few minutes")
-                                                self.spatial_aggregation()
-
-                                        background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
-
-                                        background_time = background_sub["time"]
-                                        background_time = background_time.to_numpy()
-
-                                        background_values = background_sub["MA_value"]
-
-                                        ax.scatter(datenum_to_datetime(background_time), background_values, color=color, alpha=0.1, s=10, label=f"{phenology_name} Data")
-                                else:
-                                        ax.scatter(datenum_to_datetime(time_m), values_m, color= color, alpha=0.1, s=10, label=f"{phenology_name} Data")
-
-
-                                ax.stem(trgs_x_sub, trgs_y_sub, linefmt=color,label="Troughs", basefmt = " ")
-                                ax.legend(loc="upper left", ncol= 2)
-                                textstr = f"Trough Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
-                                ax.set_title(textstr)
-                                ax.set_ylabel("[ug/L]")
-                                ax.grid()
-
-                                ax.set_xlim(pd.to_datetime('01-01-' + str(function_start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(function_end), format='%d-%m-%Y'))
-                                pks_lim_sub = sorted(trgs_y_sub)
-                                if max(pks_lim_sub)> 10:
-                                        ax.set_ylim(-0.5, pks_lim_sub[-2]+0.5)
-                                else:
-                                        ax.set_ylim(-0.5, pks_lim_sub[-1]+0.5)
-
-
-
-                        else:
-                                warnings.warn("No data to plot (check valid indices)")
-
-        def peak_comparison(self, other1,  latitude, longitude, ax,  aggregation= False, start = 0, end = 9999, background_pts = False, other2= None, purple_chla21= False):
+        def extrema_comparison(self, other1,  latitude, longitude, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = False, other2= None, purple_chla21= False):
                 """
     Compare peak time series from two phenology datasets for the same lake
     and pixel location.
@@ -1522,9 +1127,9 @@ class PhenologyEDA:
                 if other2:
                         if lakeID2!= lakeID3:
                                 raise Warning("Comparison must be made on the same lake!")
-                        ymax1 = self.peak_plot(latitude=latitude, longitude=longitude, ax = ax, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21)
-                        ymax2 = other1.peak_plot(latitude=latitude, longitude=longitude, ax = ax, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21)
-                        ymax3 = other2.peak_plot(latitude=latitude, longitude=longitude, ax = ax, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21)
+                        ymax1 = self.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21)
+                        ymax2 = other1.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21)
+                        ymax3 = other2.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21)
                         y_lims = [ymax1, ymax2, ymax3]
                         phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
                         phenology_name2 = os.path.basename(os.path.dirname(other1.p_path))
@@ -1552,16 +1157,18 @@ class PhenologyEDA:
                                 phenology_name3 = "chla v3.1"
 
 
-
-                        textr =  f"{phenology_name1}, {phenology_name2} vs {phenology_name3} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                        if peak:
+                                textr =  f"{phenology_name1}, {phenology_name2} vs {phenology_name3} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                        else:
+                                textr =  f"{phenology_name1}, {phenology_name2} vs {phenology_name3} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
                         ax.set_title(textr)
                         ax.set_ylim(top = max(y_lims))
                         ax.grid(True)
 
                 else:
 
-                        ymax1 = self.peak_plot(latitude=latitude, longitude=longitude, ax = ax, aggregation = aggregation, start = start, end = end)
-                        ymax2 = other1.peak_plot(latitude=latitude, longitude=longitude, ax = ax, aggregation = aggregation, start = start, end = end)
+                        ymax1 = self.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak= peak, aggregation = aggregation, start = start, end = end)
+                        ymax2 = other1.extrema_plot(latitude=latitude, longitude=longitude, ax = ax,  peak= peak, aggregation = aggregation, start = start, end = end)
                         y_lims = [ymax1, ymax2]
                         phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
                         phenology_name2 = os.path.basename(os.path.dirname(other1.p_path))
@@ -1579,93 +1186,15 @@ class PhenologyEDA:
                                 phenology_name2 = "chla v2.1"
                         else:
                                 phenology_name2 = "chla v3.1"
-
-                        textr =  f"{phenology_name1} vs {phenology_name2} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                        if peak: 
+                                textr =  f"{phenology_name1} vs {phenology_name2} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                        else:
+                                textr =  f"{phenology_name1} vs {phenology_name2} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                        
                         ax.set_title(textr)
                         ax.set_ylim(top = max(y_lims))
                         ax.set_ylabel("[ug/L]")
                         ax.grid()
-
-        def trough_comparison(self, other,  latitude, longitude, ax,  aggregation= False, start = 0, end = 9999):
-                """
-    Compare trough time series from two phenology datasets for the same lake
-    and pixel location.
-
-    This method overlays trough plots from `self` and another PhenologyEDA-like
-    object on the same axes, allowing visual comparison of trough timing and
-    magnitude for the same lake and grid cell. Optionally, spatially
-    aggregated background values can be plotted instead of the raw pixel
-    time series.
-
-    Parameters
-    ----------
-    other : object
-        Another object with the same interface as `self`, providing at least
-        `p_path`, `trough_plot`, and compatible phenology data for comparison.
-    latitude : int
-        Row index of the selected pixel.
-    longitude : int
-        Column index of the selected pixel.
-    ax : matplotlib.axes.Axes
-        Matplotlib axes object on which both trough plots are drawn.
-    aggregation : bool, optional
-        If True, compare troughs against spatially aggregated background values
-        instead of raw pixel time series. Default is False.
-    start : int, optional
-        Start year for the displayed comparison period. If set to 0, the
-        earliest available year in each valid time series is used.
-        Default is 0.
-    end : int, optional
-        End year for the displayed comparison period. If set to 9999, the
-        latest available year in each valid time series is used.
-        Default is 9999.
-
-    Returns
-    -------
-    None
-        This method plots directly onto `ax` and does not return a value.
-
-    Raises
-    ------
-    Warning
-        If `self` and `other` do not refer to the same lake ID.
-
-    Notes
-    -----
-    - The lake ID is derived from the filename portion of `self.p_path` and
-      `other.p_path`. Comparison is only allowed when both lake IDs match.
-    - The actual plotting is delegated to `self.trough_plot(...)` and
-      `other.trough_plot(...)`, both of which are drawn on the same axes.
-    - The title is replaced after plotting to reflect the comparison between
-      the two phenology variable names.
-    - Phenology names are inferred from the parent directory names of
-      `self.p_path` and `other.p_path`.
-    - The title includes the lake ID and the geographic coordinates of the
-      selected pixel, taken from `self.e_path`.
-    - Any warnings or plotting behavior from `trough_plot` also apply here.
-    """
-
-                with netCDF4.Dataset(self.e_path) as nc:
-                        # change np.array to np.asarry to avoid getting DeprecationError
-                        lat = np.asarray(nc.variables["lat"])
-                        lon = np.asarray(nc.variables["lon"])
-                with netCDF4.Dataset(self.p_path) as nc:
-                        lakeID1 = os.path.basename(self.p_path)[:-3]
-
-                with netCDF4.Dataset(other.p_path) as nc:
-                        lakeID2 = os.path.basename(other.p_path)[:-3]
-
-                if lakeID1 != lakeID2:
-                        raise Warning("Comparison must be made on the same lake!")
-                self.trough_plot(latitude=latitude, longitude=longitude, ax = ax, aggregation = aggregation, start = start, end = end)
-                other.trough_plot(latitude=latitude, longitude=longitude, ax = ax, aggregation = aggregation, start = start, end = end)
-
-                phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
-                phenology_name2 = os.path.basename(os.path.dirname(other.p_path))
-
-                textr =  f"{phenology_name1} vs {phenology_name2} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
-                ax.set_title(textr)
-                ax.grid()
 
 
 
