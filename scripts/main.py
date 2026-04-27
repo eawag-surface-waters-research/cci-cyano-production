@@ -7,6 +7,7 @@ import logging
 import geopandas as gpd
 from concurrent.futures import ProcessPoolExecutor
 import os
+import matplotlib as plt
 
 from functions import set_logging, verify_arg_file, parse_args
 from extract import extract
@@ -66,7 +67,11 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
             eda.RMSE_scores()
             eda.correlation_scores()
             eda.values_per_pixel()
-        logging.info("Analysis step complete")
+        logging.info(f"Analysis lake {lake['id']} complete")
+
+    if args["plot"]:
+        logging.info("Starting Plots")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Parse data from satellite images')
