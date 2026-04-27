@@ -22,6 +22,7 @@ def parse_args(args):
         "out_folder": "",
         "extract": True,
         "phenology": True,
+        "analysis": False,
         "qa_filter": True, # Only accept qa_flag = 0
         "spline_min_phase_length": 14,
         "spline_min_relative_amplitude": 0,
