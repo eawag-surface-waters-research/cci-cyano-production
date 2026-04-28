@@ -7,9 +7,8 @@ import logging
 import geopandas as gpd
 from concurrent.futures import ProcessPoolExecutor
 import os
-import matplotlib as plt
 
-from functions import set_logging, verify_arg_file, parse_args
+from functions import set_logging, verify_arg_file, parse_args, save_maps
 from extract import extract
 from phenology import phenology
 from analysis import PhenologyEDA
@@ -69,10 +68,13 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
             eda.values_per_pixel()
         logging.info(f"Analysis lake {lake['id']} complete")
 
-        if args["plot"]:
+        if args["maps"]:
             if not args["analysis"]:
                 raise ValueError("Analysis must be true for plots to run.")
-            logging.info("Starting Plots")
+            logging.info(f"Starting maps for lake {lake['id']}")
+            save_maps(eda)
+            logging.info(f"Maps for {lake['id']} complete")
+                
            
 
 
