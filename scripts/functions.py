@@ -26,8 +26,12 @@ def parse_args(args):
         "phenology": True,
         "analysis": False,
         "maps": False,
+        "pixel_plots": False,
         "start":0,
         "end":9999,
+        "split_start": 2016,
+        "split_end": 2012,
+        "aggregation": True,
         "qa_filter": True, # Only accept qa_flag = 0
         "spline_min_phase_length": 14,
         "spline_min_relative_amplitude": 0,
@@ -99,12 +103,12 @@ def define_year_range(start, end, years):
 
 def save_maps(eda_instance, metric= ["R2", "MAD", "RMSE", "correlation", "values_per_pixel"], start=2016, end=2012):
     for m in metric:
-        file_path = os.path.join(
+        out_path = os.path.join(
                         eda_instance.out_folder,
                         "maps", "metrics", m,
                         os.path.basename(os.path.dirname(eda_instance.p_path)),
                         os.path.basename(eda_instance.p_path)[:-3])
-        os.makedirs(file_path, exist_ok= True)
+        os.makedirs(out_path, exist_ok= True)
         if m == "R2":
             before = eda_instance.r2_scores(end= end)
             after = eda_instance.r2_scores(start = start)
@@ -151,18 +155,75 @@ def save_maps(eda_instance, metric= ["R2", "MAD", "RMSE", "correlation", "values
         axs[0].set_title(textstr1)
         axs[1].set_title(textstr2)
         file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{m}_split_ts.png"
-        fig.savefig(os.path.join(file_path, file_name),dpi=600)
+        fig.savefig(os.path.join(out_path, file_name),dpi=600)
         plt.close(fig)
             
         textstr3 = f"{metric_str}-scores {eda_instance.variable} {eda_instance.version} full time series, {metric_str}"
         
         fig, ax = plt.subplots(1,1, figsize = (10,5))
 
-        eda_instance.metric_map(total,cmap, fig, ax,cmap, colorbar_extent= None)
+        eda_instance.metric_map(total, metric_str, fig, ax, cmap, colorbar_extent=None)
         ax.set_title(textstr3)
         file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{m}_fullts.png"
-        fig.savefig(os.path.join(file_path, file_name),dpi=600)
+        fig.savefig(os.path.join(out_path, file_name),dpi=600)
         plt.close(fig)
+
+def save_pixel_plots(eda_instance, pixels, start = 0, end = 9999, split_start = 2016, split_end = 2012, aggregation = True):
+    for i,j in pixels:
+        if aggregation:
+            out_path = os.path.join(
+                                eda_instance.out_folder,
+                                "pixel_plots/aggregated",
+                                os.path.basename(os.path.dirname(eda_instance.p_path)),
+                                os.path.basename(eda_instance.p_path)[:-3], f"{i}_{j}")
+        else:
+            out_path = os.path.join(
+                                eda_instance.out_folder,
+                                "pixel_plots/not_aggregated",
+                                os.path.basename(os.path.dirname(eda_instance.p_path)),
+                                os.path.basename(eda_instance.p_path)[:-3], f"{i}_{j}")
+        os.makedirs(out_path, exist_ok=True)
+        fig, ax = plt.subplots(1,1, figsize = (10,5))
+        eda_instance.pixel_map(i,j, ax)
+        ax.set_ylim(bottom=-0.5)
+        fig.savefig(os.path.join(out_path, "location.png"),dpi=600)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(1,1, figsize = (10,5))
+        eda_instance.full_plot(ax = ax, latitude= i, longitude = j, aggregation = aggregation)
+        ax.set_ylim(bottom=-0.5)
+        fig.savefig(os.path.join(out_path, f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_full_ts.png"),dpi=600)
+        plt.close(fig)
+
+        fig, axs = plt.subplots(1,2, figsize = (20,8))
+        eda_instance.split_plot(ax0 = axs[0], ax1=axs[1], latitude= i, longitude = j, aggregation = aggregation, end0 = split_end, start1 = split_start)
+        ax.set_ylim(bottom=-0.5)
+        fig.savefig(os.path.join(out_path, f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_split_ts.png"),dpi=600)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(1,1, figsize = (10,5))
+        eda_instance.extrema_plot(ax = ax, latitude= i, longitude = j, aggregation = aggregation, peak = True)
+        ax.set_ylim(bottom=-0.5)
+        fig.savefig(os.path.join(out_path, f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_full_ts.png"),dpi=600)
+        plt.close(fig)
+
+        fig, axs = plt.subplots(1,2, figsize = (20,8))
+        eda_instance.extrema_plot(ax= axs[0], latitude= i, longitude = j, aggregation = aggregation, end = split_end)
+        eda_instance.extrema_plot(ax= axs[1], latitude= i, longitude = j, aggregation = aggregation, start = split_start)
+        ax.set_ylim(bottom=-0.5)
+        fig.savefig(os.path.join(out_path, f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_split_ts.png"),dpi=600)
+        plt.close(fig)
+
+
+
+
+
+
+
+
+
+
+
 
 
 def init_phenology_output(out, lat, lon, p=None):

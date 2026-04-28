@@ -8,7 +8,7 @@ import geopandas as gpd
 from concurrent.futures import ProcessPoolExecutor
 import os
 
-from functions import set_logging, verify_arg_file, parse_args, save_maps
+from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots
 from extract import extract
 from phenology import phenology
 from analysis import PhenologyEDA
@@ -66,18 +66,21 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
             eda.RMSE_scores()
             eda.correlation_scores()
             eda.values_per_pixel()
-        logging.info(f"Analysis lake {lake['id']} complete")
+            logging.info(f"Analysis lake {lake['id']} complete")
 
-        if args["maps"]:
-            if not args["analysis"]:
-                raise ValueError("Analysis must be true for plots to run.")
-            logging.info(f"Starting maps for lake {lake['id']}")
-            save_maps(eda)
-            logging.info(f"Maps for {lake['id']} complete")
-                
-           
+            if args["maps"]:
+                logging.info(f"Starting maps for lake {lake['id']}")
+                save_maps(eda)
+                logging.info(f"Maps for {lake['id']} complete")
 
-
+            if args["pixel_plots"]:
+                lake_id_str = str(lake['id'])
+                with open(args["pixel_plots"]) as f:
+                    pixel_dict = json.load(f)
+                if lake_id_str in pixel_dict:
+                    logging.info(f"Starting pixel plots for lake {lake['id']}")
+                    save_pixel_plots(eda, pixel_dict[lake_id_str], end=args["end"], start=args["start"], split_start=args["split_start"], split_end=args["split_end"], aggregation=args["aggregation"])
+                    logging.info(f"Pixel plots for lake {lake['id']} complete")
 
 
 if __name__ == "__main__":

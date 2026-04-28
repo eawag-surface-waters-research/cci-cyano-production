@@ -4,9 +4,10 @@
   "shapefile": "C:/Users/sparksno/Desktop/data_Phenology/shapefile/lakescci_v2.1.0_data-availability.shp",
   "images": "", 
   "out_folder": "C:/Users/sparksno/Desktop/analysis_test/data/v3.1",
-  "lakes": [327],
+  "lakes": [327, 4953, 310],
   "extract": false,
   "phenology": false,
   "analysis": true,
-  "maps": true
+  "maps": true,
+  "pixel_plots": "C:/Users/sparksno/Documents/GitHub/cci-cyano-production/scripts/pixel_dicts/v3_chla_pixels.json"
 }
