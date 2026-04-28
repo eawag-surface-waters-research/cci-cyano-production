@@ -8,7 +8,7 @@ import geopandas as gpd
 from concurrent.futures import ProcessPoolExecutor
 import os
 
-from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots
+from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary
 from extract import extract
 from phenology import phenology
 from analysis import PhenologyEDA
@@ -80,6 +80,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
                 if lake_id_str in pixel_dict:
                     logging.info(f"Starting pixel plots for lake {lake['id']}")
                     save_pixel_plots(eda, pixel_dict[lake_id_str], end=args["end"], start=args["start"], split_start=args["split_start"], split_end=args["split_end"], aggregation=args["aggregation"])
+                    create_summary(eda,  pixel_dict[lake_id_str])
                     logging.info(f"Pixel plots for lake {lake['id']} complete")
 
 

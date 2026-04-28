@@ -197,7 +197,8 @@ def save_pixel_plots(eda_instance, pixels, start = 0, end = 9999, split_start = 
 
         fig, axs = plt.subplots(1,2, figsize = (20,8))
         eda_instance.split_plot(ax0 = axs[0], ax1=axs[1], latitude= i, longitude = j, aggregation = aggregation, end0 = split_end, start1 = split_start)
-        ax.set_ylim(bottom=-0.5)
+        axs[0].set_ylim(bottom=-0.5)
+        axs[1].set_ylim(bottom=-0.5)
         fig.savefig(os.path.join(out_path, f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_split_ts.png"),dpi=600)
         plt.close(fig)
 
@@ -210,9 +211,57 @@ def save_pixel_plots(eda_instance, pixels, start = 0, end = 9999, split_start = 
         fig, axs = plt.subplots(1,2, figsize = (20,8))
         eda_instance.extrema_plot(ax= axs[0], latitude= i, longitude = j, aggregation = aggregation, end = split_end)
         eda_instance.extrema_plot(ax= axs[1], latitude= i, longitude = j, aggregation = aggregation, start = split_start)
-        ax.set_ylim(bottom=-0.5)
+        axs[0].set_ylim(bottom=-0.5)
+        axs[1].set_ylim(bottom=-0.5)
         fig.savefig(os.path.join(out_path, f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_split_ts.png"),dpi=600)
         plt.close(fig)
+
+
+def create_summary(eda_instance, pixels, summary_types=["n_peaks", "r2", "rmse", "mad", "correlation", "values"], split=True):
+       for i,j in pixels:
+            out_path = os.path.join(
+                                    eda_instance.out_folder,
+                                    "summaries",
+                                    os.path.basename(os.path.dirname(eda_instance.p_path)),
+                                    os.path.basename(eda_instance.p_path)[:-3], f"{i}_{j}")
+            os.makedirs(out_path, exist_ok=True)
+            txt_path = os.path.join(out_path, "summary.txt")
+
+            with open(txt_path, "w") as file:
+                
+                file.write(f"{eda_instance.variable} {eda_instance.version}:\n")
+                if "n_peaks" in summary_types:
+                    file.write(f"    Number of Peaks full ts: {eda_instance.count_peaks(i, j)}\n")
+                    if split:
+                        file.write(f"    Number of Peaks 2002-2012: {round(eda_instance.count_peaks(i, j, end=2012), 4)}\n")
+                        file.write(f"    Number of Peaks 2016-2024: {round(eda_instance.count_peaks(i, j, start=2016), 4)}\n")
+                if "r2" in summary_types:
+                    file.write(f"    R2 full ts: {round(eda_instance.pixel_r2(i, j), 4)}\n")
+                    if split:
+                        file.write(f"    R2 2002-2012: {round(eda_instance.pixel_r2(i, j, end=2012), 4)}\n")
+                        file.write(f"    R2 2016-2024: {round(eda_instance.pixel_r2(i, j, start=2016), 4)}\n")
+                if "rmse" in summary_types:
+                    file.write(f"    RMSE full ts: {round(eda_instance.pixel_rmse(i, j), 4)}\n")
+                    if split:
+                        file.write(f"    RMSE 2002-2012: {round(eda_instance.pixel_rmse(i, j, end=2012), 4)}\n")
+                        file.write(f"    RMSE 2016-2024: {round(eda_instance.pixel_rmse(i, j, start=2016), 4)}\n")
+                if "mad" in summary_types:
+                    file.write(f"    MAD full ts: {round(eda_instance.pixel_mad(i, j), 4)}\n")
+                    if split:
+                        file.write(f"    MAD 2002-2012: {round(eda_instance.pixel_mad(i, j, end=2012), 4)}\n")
+                        file.write(f"    MAD 2016-2024: {round(eda_instance.pixel_mad(i, j, start=2016), 4)}\n")
+                if "correlation" in summary_types:
+                    file.write(f"    Correlation full ts: {round(eda_instance.pixel_correlation(i, j), 4)}\n")
+                    if split:
+                        file.write(f"    Correlation 2002-2012: {round(eda_instance.pixel_correlation(i, j, end=2012), 4)}\n")
+                        file.write(f"    Correlation 2016-2024: {round(eda_instance.pixel_correlation(i, j, start=2016), 4)}\n")
+                if "values" in summary_types:
+                    file.write(f"    Values full ts: {round(eda_instance.pixel_values(i, j), 4)}\n")
+                    if split:
+                        file.write(f"    Values 2002-2012: {round(eda_instance.pixel_values(i, j, end=2012), 4)}\n")
+                        file.write(f"    Values 2016-2024: {round(eda_instance.pixel_values(i, j, start=2016), 4)}\n")
+
+                file.write("\n")
 
 
 

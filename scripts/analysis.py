@@ -1450,6 +1450,27 @@ class PhenologyEDA:
                         pks_x_sub = pks_x[mask_pks]
 
                         return len(pks_x_sub)
+                
+        def pixel_r2(self, latitude, longitude, start= 0, end= 9999):
+                scores = self.r2_scores(start=start, end = end)
+                return scores[(latitude, longitude)]
+        
+        def pixel_rmse(self, latitude, longitude, start=0, end=9999):
+                scores = self.RMSE_scores(start=start, end=end)
+                return scores[(latitude, longitude)]
+
+        def pixel_mad(self, latitude, longitude, start=0, end=9999):
+                scores = self.MAD_scores(start=start, end=end)
+                return scores[(latitude, longitude)]
+
+        def pixel_correlation(self, latitude, longitude, start=0, end=9999):
+                scores = self.correlation_scores(start=start, end=end)
+                return scores[(latitude, longitude)]
+
+        def pixel_values(self, latitude, longitude, start=0, end=9999):
+                scores = self.values_per_pixel(start=start, end=end)
+                return scores[(latitude, longitude)]
+
 
 
         def single_plot(self, latitude, longitude, ax, aggregation = False, start= 0, end= 9999):
