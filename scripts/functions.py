@@ -8,6 +8,7 @@ from scipy.signal import find_peaks
 from datetime import datetime, timezone
 import warnings
 from scipy.sparse import SparseEfficiencyWarning
+import matplotlib.pyplot as plt
 
 warnings.filterwarnings("ignore", category=SparseEfficiencyWarning)
 
@@ -24,6 +25,7 @@ def parse_args(args):
         "extract": True,
         "phenology": True,
         "analysis": False,
+        "maps": False,
         "start":0,
         "end":9999,
         "qa_filter": True, # Only accept qa_flag = 0
@@ -90,9 +92,77 @@ def remove_nan(arr):
     arr = np.array(arr)
     return arr[~np.isnan(arr)]
 
+# define year range for plotting 
 def define_year_range(start, end, years):
                 return(years.min() if start == 0 else start, 
                        years.max() if end == 9999 else end)
+
+def save_maps(eda_instance, metric= ["R2", "MAD", "RMSE", "correlation", "values_per_pixel"], start=2016, end=2012):
+    for m in metric:
+        file_path = os.path.join(
+                        eda_instance.out_folder,
+                        "maps", "metrics", m,
+                        os.path.basename(os.path.dirname(eda_instance.p_path)),
+                        os.path.basename(eda_instance.p_path)[:-3])
+        os.makedirs(file_path, exist_ok= True)
+        if m == "R2":
+            before = eda_instance.r2_scores(end= end)
+            after = eda_instance.r2_scores(start = start)
+            total = eda_instance.r2_scores()
+            metric_str = "R$^2$"
+            cmap= "RdYlBu"
+            colorbar_extent = [0,1]
+        elif m =="MAD":
+            before = eda_instance.MAD_scores(end= end)
+            after = eda_instance.MAD_scores(start = start)
+            total = eda_instance.MAD_scores()
+            metric_str = "MAD"
+            cmap= "RdYlBu_r"
+            colorbar_extent = [0,1]
+        elif m =="RMSE":
+            before = eda_instance.RMSE_scores(end= end)
+            after = eda_instance.RMSE_scores(start = start)
+            total = eda_instance.RMSE_scores()
+            metric_str = "RMSE"
+            cmap= "RdYlBu_r"
+            colorbar_extent = [0,1]
+        elif m =="correlation":
+            before = eda_instance.correlation_scores(end= end)
+            after = eda_instance.correlation_scores(start = start)
+            total = eda_instance.correlation_scores()
+            metric_str = "correlation"
+            cmap= "RdYlBu"
+            colorbar_extent = [0,1]
+        elif m =="values_per_pixel":
+            before = eda_instance.values_per_pixel(end= end)
+            after = eda_instance.values_per_pixel(start = start)
+            total = eda_instance.values_per_pixel()
+            metric_str = "values_per_pixel"
+            cmap= "winter"
+            colorbar_extent = None
+        else:
+            raise ValueError("Please provide a vaid metric string")
+        textstr1 = f"{metric_str}-scores {eda_instance.variable} {eda_instance.version} 2002-2012, {metric_str}"
+        textstr2 = f"{metric_str}-scores {eda_instance.variable} {eda_instance.version} 2016-2024, {metric_str}"
+        fig, axs = plt.subplots(1,2, figsize = (20,8))
+
+        eda_instance.metric_map(before,metric_str, fig, axs[0],cmap, colorbar_extent= colorbar_extent)
+        eda_instance.metric_map(after,metric_str, fig, axs[1],cmap, colorbar_extent= colorbar_extent)
+        axs[0].set_title(textstr1)
+        axs[1].set_title(textstr2)
+        file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{m}_split_ts.png"
+        fig.savefig(os.path.join(file_path, file_name),dpi=600)
+        plt.close(fig)
+            
+        textstr3 = f"{metric_str}-scores {eda_instance.variable} {eda_instance.version} full time series, {metric_str}"
+        
+        fig, ax = plt.subplots(1,1, figsize = (10,5))
+
+        eda_instance.metric_map(total,cmap, fig, ax,cmap, colorbar_extent= None)
+        ax.set_title(textstr3)
+        file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{m}_fullts.png"
+        fig.savefig(os.path.join(file_path, file_name),dpi=600)
+        plt.close(fig)
 
 
 def init_phenology_output(out, lat, lon, p=None):
