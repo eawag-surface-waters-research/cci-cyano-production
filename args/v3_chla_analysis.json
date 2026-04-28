@@ -7,5 +7,6 @@
   "lakes": [327],
   "extract": false,
   "phenology": false,
-  "analysis": true
+  "analysis": true,
+  "maps": true
 }
