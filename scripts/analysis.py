@@ -127,6 +127,8 @@ class PhenologyEDA:
                 self.out_folder =  os.path.dirname(os.path.dirname(os.path.dirname(self.p_path)))
                 self.aggregation_df = None
                 self.geom_shrunk = None
+                self._extracted_globals = None
+                self._pixel_cache = {}
 
 
         def shortname_to_name(self, short_name:str):
@@ -847,6 +849,44 @@ class PhenologyEDA:
 
 
 
+        def _load_extracted_globals(self):
+                if self._extracted_globals is None:
+                        with netCDF4.Dataset(self.e_path) as nc:
+                                self._extracted_globals= {
+                                        "lat": np.asarray(nc.variables["lat"]),
+                                        "lon": np.asarray(nc.variables["lon"]),
+                                        "t_all":    unix_to_datenum(nc.variables["time"]),
+                                        "variable": getattr(nc, "variable"),
+                                        "qa":       getattr(nc, "qa"),
+                                }
+                return self._extracted_globals
+        
+        def _load_pixel_data(self, i,j):
+                if (i,j) not in self._pixel_cache:
+                        g = self._load_extracted_globals()
+                        with netCDF4.Dataset(self.e_path) as nc:
+                                values = np.array(nc.variables[g["variable"]][:, i, j])
+                                qa     = np.array(nc.variables[g["qa"]][:, i, j])
+                        with netCDF4.Dataset(self.p_path) as nc:
+                                smoothing = float(nc.variables["smoothing_parameter"][i, j])
+                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][i, j, :]))
+                                pks_y = remove_nan(nc.variables["pks_y"][i, j, :])
+                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][i, j, :]))
+                                trgs_y = remove_nan(nc.variables["trgs_y"][i, j, :])
+                                midUP_x    = unix_to_datetime(remove_nan(nc.variables["green_up_mid_x"][i, j, :]))
+                                midUP_y    = remove_nan(nc.variables["green_up_mid_y"][i, j, :])
+                                midDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_mid_x"][i, j, :]))
+                                midDOWN_y  = remove_nan(nc.variables["green_down_mid_y"][i, j, :])
+                        self._pixel_cache[(i,j)] = {
+                                "values": values, "qa": qa, "smoothing": smoothing, "pks_x":pks_x, "pks_y": pks_y,
+                                "trgs_x": trgs_x, "trgs_y": trgs_y,  "midUP_x": midUP_x, "midUP_y": midUP_y,
+                                 "midDOWN_x": midDOWN_x, "midDOWN_y": midDOWN_y,
+                        }
+                return self._pixel_cache[(i,j)]
+
+
+
+
         def extrema_plot(self, latitude, longitude, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False):
                 """
     Plot the time series and detected peak values for a selected pixel.
@@ -919,129 +959,120 @@ class PhenologyEDA:
     """
 
 
-                with netCDF4.Dataset(self.e_path) as nc:
-                        # change np.array to np.asarry to avoid getting DeprecationError
-                        lat = np.asarray(nc.variables["lat"])
-                        lon = np.asarray(nc.variables["lon"])
-                        t_all = unix_to_datenum(nc.variables["time"])
+                g = self._load_extracted_globals()
+                px = self._load_pixel_data(latitude, longitude)
+                lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
+                smoothing = px["smoothing"]
+                if peak:
+                        pks_x, pks_y = px["pks_x"], px["pks_y"]
+                        mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
+                        x_sub = pks_x[mask_pks]
+                        y_sub = pks_y[mask_pks]
+
+                else:
+                        trgs_x, trgs_y = px["trgs_x"], px["trgs_y"]
+                        mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
+                        x_sub = trgs_x[mask_pks]
+                        y_sub = trgs_y[mask_pks]
+
+                mask     = (px["values"] != -9999) & (px["qa"] == 0)
+                values_m = px["values"][mask]
+                time_m   = t_all[mask]
 
 
-                with netCDF4.Dataset(self.p_path) as nc:
-                        smoothing = float(nc.variables["smoothing_parameter"][latitude, longitude])
+
+                if len(values_m) > 1:
+
+                        limits = sorted(datenum_to_datetime(time_m))
+                        if start == 0:
+                                function_start = min(limits).year
+                        else:
+                                function_start =start
+                        if end == 9999:
+                                function_end= max(limits).year
+                        else:
+                                function_end = end
+                        neg_values_sub =[]
+                        neg_label_before = False
+                        phenology_name = os.path.basename(os.path.dirname(self.p_path))
+                        if background_pts or purple_chla21:
+                                if phenology_name == "phycocyanin":
+                                        label = "phyco"
+                                        color = "blue"
+                                elif phenology_name == "chla_mean":
+                                        label = "chla v2.1"
+                                        color = "purple"
+                                else:
+                                        label = "chla v3.1"
+                                        color = "green"
+
+                        else:
+                                if phenology_name == "phycocyanin":
+                                        label = "phyco"
+                                        color = "blue"
+                                elif phenology_name == "chla_mean":
+                                        label = "chla v2.1"
+                                        color = "lightgreen"
+                                else:
+                                        label = "chla v3.1"
+                                        color = "green"
+
+                        if not background_pts and aggregation:
+                                raise ValueError("Either aggreagte background points or not plot them at all.")
+
+                        if aggregation:
+                                if self.aggregation_df is None:
+                                        warnings.warn("Aggregation needs to be calculated, this may take a few minutes")
+                                        self.spatial_aggregation()
+
+                                background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
+                                background_time = background_sub["time"]
+                                background_time = background_time.to_numpy()
+
+                                background_values = background_sub["MA_value"]
+
+                                ax.scatter(datenum_to_datetime(background_time), background_values, color=color, alpha=0.1, s=10, label=f"{label} Data")
+                        elif background_pts and not aggregation:
+                                ax.scatter(datenum_to_datetime(time_m), values_m, color=color, alpha=0.1, s=10, label=f"{label} Data")
+                        else:
+                                pass
+
+                        extrema_label = "Peaks" if peak else "Troughs"
+                        ax.stem(x_sub, y_sub, linefmt=color, label=f"{label} {extrema_label}", basefmt = " ")
+                        if (y_sub < 0).any():
+                                mask =  y_sub<0
+                                pks_x_neg_before = x_sub[mask]
+                                pks_y_neg_before = y_sub[mask]
+                                label = "Negative Value" if not neg_label_before else None
+                                ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
+                                neg_values_sub.append(len(pks_x_neg_before))
+                                neg_label_before = True
+                                warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
+
+
+                        ax.legend(loc="upper left", ncol= 2)
                         if peak:
-
-                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
-                                pks_y = remove_nan(nc.variables["pks_y"][latitude, longitude, :])
-                                mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
-                                x_sub = pks_x[mask_pks]
-                                y_sub = pks_y[mask_pks]
+                                textstr = f"Peak Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
                         else:
-                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
-                                trgs_y = remove_nan(nc.variables["trgs_y"][latitude, longitude, :])
-                                mask_trgs = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
-                                x_sub = trgs_x[mask_trgs]
-                                y_sub = trgs_y[mask_trgs]
+                                textstr = f"Trough Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                        ax.set_title(textstr)
+                        ax.set_ylabel("[ug/L]")
+                        ax.grid()
 
-                        with netCDF4.Dataset(self.e_path) as nc:
-                                variable = getattr(nc, "variable")
-                                values = np.array(nc.variables[variable][:, latitude, longitude])
-                                mask = (values != -9999) & (np.array(nc.variables[getattr(nc, 'qa')][:, latitude, longitude]) == 0)
-                                values_m = values[mask]
-                                time_m = t_all[mask]
-
-
-
-                        if len(values_m) > 1:
-
-                                limits = sorted(datenum_to_datetime(time_m))
-                                if start == 0:
-                                        function_start = min(limits).year
-                                else:
-                                        function_start =start
-                                if end == 9999:
-                                        function_end= max(limits).year
-                                else:
-                                        function_end = end
-                                neg_values_sub =[]
-                                neg_label_before = False
-                                phenology_name = os.path.basename(os.path.dirname(self.p_path))
-                                if background_pts or purple_chla21:
-                                        if phenology_name == "phycocyanin":
-                                                label = "phyco"
-                                                color = "blue"
-                                        elif phenology_name == "chla_mean":
-                                                label = "chla v2.1"
-                                                color = "purple"
-                                        else:
-                                                label = "chla v3.1"
-                                                color = "green"
-
-                                else:
-                                        if phenology_name == "phycocyanin":
-                                                label = "phyco"
-                                                color = "blue"
-                                        elif phenology_name == "chla_mean":
-                                                label = "chla v2.1"
-                                                color = "lightgreen"
-                                        else:
-                                                label = "chla v3.1"
-                                                color = "green"
-
-                                if not background_pts and aggregation:
-                                        raise ValueError("Either aggreagte background points or not plot them at all.")
-
-                                if aggregation:
-                                        if self.aggregation_df is None:
-                                                warnings.warn("Aggregation needs to be calculated, this may take a few minutes")
-                                                self.spatial_aggregation()
-
-                                        background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
-                                        background_time = background_sub["time"]
-                                        background_time = background_time.to_numpy()
-
-                                        background_values = background_sub["MA_value"]
-
-                                        ax.scatter(datenum_to_datetime(background_time), background_values, color=color, alpha=0.1, s=10, label=f"{label} Data")
-                                elif background_pts and not aggregation:
-                                        ax.scatter(datenum_to_datetime(time_m), values_m, color=color, alpha=0.1, s=10, label=f"{label} Data")
-                                else:
-                                        pass
-
-                                extrema_label = "Peaks" if peak else "Troughs"
-                                ax.stem(x_sub, y_sub, linefmt=color, label=f"{label} {extrema_label}", basefmt = " ")
-                                if (y_sub < 0).any():
-                                        mask =  y_sub<0
-                                        pks_x_neg_before = x_sub[mask]
-                                        pks_y_neg_before = y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(pks_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
-
-
-                                ax.legend(loc="upper left", ncol= 2)
-                                if peak:
-                                        textstr = f"Peak Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
-                                else:
-                                        textstr = f"Trough Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
-                                ax.set_title(textstr)
-                                ax.set_ylabel("[ug/L]")
-                                ax.grid()
-
-                                ax.set_xlim(pd.to_datetime('01-01-' + str(function_start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(function_end), format='%d-%m-%Y'))
-                                pks_lim_sub = sorted(y_sub)
-                                if max(pks_lim_sub)> 10:
-                                        ymax = pks_lim_sub[-2]+0.5
-                                        ax.set_ylim(-0.5, ymax)
-                                else:
-                                        ymax = pks_lim_sub[-1]+0.5
-                                        ax.set_ylim(-0.5, ymax)
-                                return ymax
+                        ax.set_xlim(pd.to_datetime('01-01-' + str(function_start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(function_end), format='%d-%m-%Y'))
+                        pks_lim_sub = sorted(y_sub)
+                        if max(pks_lim_sub)> 10:
+                                ymax = pks_lim_sub[-2]+0.5
+                                ax.set_ylim(-0.5, ymax)
                         else:
-                                warnings.warn("No data to plot (check valid indices)")
-                                return None
+                                ymax = pks_lim_sub[-1]+0.5
+                                ax.set_ylim(-0.5, ymax)
+                        return ymax
+                else:
+                        warnings.warn("No data to plot (check valid indices)")
+                        return None
                         
+
 
 
 
@@ -1105,18 +1136,13 @@ class PhenologyEDA:
     """
 
 
-                with netCDF4.Dataset(self.e_path) as nc:
-                        # change np.array to np.asarry to avoid getting DeprecationError
-                        lat = np.asarray(nc.variables["lat"])
-                        lon = np.asarray(nc.variables["lon"])
-                with netCDF4.Dataset(self.p_path) as nc:
-                        lakeID1 = os.path.basename(self.p_path)[:-3]
-
-                with netCDF4.Dataset(other1.p_path) as nc:
-                        lakeID2 = os.path.basename(other1.p_path)[:-3]
+                g = self._load_extracted_globals()
+                lat = g["lat"]
+                lon = g["lon"]
+                lakeID1 = os.path.basename(self.p_path)[:-3]
+                lakeID2 = os.path.basename(other1.p_path)[:-3]
                 if other2:
-                        with netCDF4.Dataset(other2.p_path) as nc:
-                                lakeID3 = os.path.basename(other2.p_path)[:-3]
+                        lakeID3 = os.path.basename(other2.p_path)[:-3]
 
                 if lakeID1 != lakeID2:
                         raise Warning("Comparison must be made on the same lake!")
@@ -1515,45 +1541,31 @@ class PhenologyEDA:
     """
 
 
-                with netCDF4.Dataset(self.e_path) as nc:
-                        # change np.array to np.asarry to avoid getting DeprecationError
-                        lat = np.asarray(nc.variables["lat"])
-                        lon = np.asarray(nc.variables["lon"])
-                        t_all = unix_to_datenum(nc.variables["time"])
+                g  = self._load_extracted_globals()
+                px = self._load_pixel_data(latitude, longitude)
+                lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
 
+                smoothing = px["smoothing"]
 
-                with netCDF4.Dataset(self.p_path) as nc:
-                        smoothing = float(nc.variables["smoothing_parameter"][latitude, longitude])
-                        pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
-                        pks_y = remove_nan(nc.variables["pks_y"][latitude, longitude, :])
-                        mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
-                        pks_x_sub = pks_x[mask_pks]
-                        pks_y_sub = pks_y[mask_pks]
+                mask_pks     = np.array([(d.year <= end) & (d.year >= start) for d in px["pks_x"]])
+                pks_x_sub    = px["pks_x"][mask_pks]
+                pks_y_sub    = px["pks_y"][mask_pks]
 
-                        trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
-                        trgs_y = remove_nan(nc.variables["trgs_y"][latitude, longitude, :])
-                        mask_trgs = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
-                        trgs_x_sub = trgs_x[mask_trgs]
-                        trgs_y_sub = trgs_y[mask_trgs]
+                mask_trgs    = np.array([(d.year <= end) & (d.year >= start) for d in px["trgs_x"]])
+                trgs_x_sub   = px["trgs_x"][mask_trgs]
+                trgs_y_sub   = px["trgs_y"][mask_trgs]
 
-                        midUP_x = unix_to_datetime(remove_nan(nc.variables["green_up_mid_x"][latitude, longitude, :]))
-                        midUP_y = remove_nan(nc.variables["green_up_mid_y"][latitude, longitude, :])
-                        mask_midUP = np.array([(d.year <= end) & (d.year >= start) for d in midUP_x])
-                        midUP_x_sub = midUP_x[mask_midUP]
-                        midUP_y_sub = midUP_y[mask_midUP]
+                mask_midUP   = np.array([(d.year <= end) & (d.year >= start) for d in px["midUP_x"]])
+                midUP_x_sub  = px["midUP_x"][mask_midUP]
+                midUP_y_sub  = px["midUP_y"][mask_midUP]
 
-                        midDOWN_x = unix_to_datetime(remove_nan(nc.variables["green_down_mid_x"][latitude, longitude, :]))
-                        midDOWN_y = remove_nan(nc.variables["green_down_mid_y"][latitude, longitude, :])
-                        mask_midDOWN= np.array([(d.year <= end) & (d.year >= start) for d in midDOWN_x])
-                        midDOWN_x_sub = midDOWN_x[mask_midDOWN]
-                        midDOWN_y_sub = midDOWN_y[mask_midDOWN]
+                mask_midDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in px["midDOWN_x"]])
+                midDOWN_x_sub = px["midDOWN_x"][mask_midDOWN]
+                midDOWN_y_sub = px["midDOWN_y"][mask_midDOWN]
 
-                with netCDF4.Dataset(self.e_path) as nc:
-                        variable = getattr(nc, "variable")
-                        values = np.array(nc.variables[variable][:, latitude, longitude])
-                        mask = (values != -9999) & (np.array(nc.variables[getattr(nc, 'qa')][:, latitude, longitude]) == 0)
-                        values_m = values[mask]
-                        time_m = t_all[mask]
+                mask     = (px["values"] != -9999) & (px["qa"] == 0)
+                values_m = px["values"][mask]
+                time_m   = t_all[mask]
 
                 if len(values_m) > 1:
 
