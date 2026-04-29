@@ -27,6 +27,16 @@ def parse_args(args):
         "analysis": False,
         "maps": False,
         "pixel_plots": False,
+        "comparison": False,
+        "comparison_classes": ["chla21", "chla31", "phycocyanin31"],
+        "comparison_plot_types": [
+            "chla21 vs chla31", "chla21 vs chla31_split",
+            "chla21 vs phyco",  "chla21 vs phyco_split",
+            "chla31 vs phyco",  "chla31 vs phyco_split",
+            "triple",           "triple_split"
+        ],
+        "background_pts": True,
+        "purple_chla21": False,
         "start":0,
         "end":9999,
         "split_start": 2016,
@@ -101,13 +111,9 @@ def define_year_range(start, end, years):
                 return(years.min() if start == 0 else start, 
                        years.max() if end == 9999 else end)
 
-def save_maps(eda_instance, metric= ["R2", "MAD", "RMSE", "correlation", "values_per_pixel"], start=2016, end=2012):
+def save_maps(eda_instance, lake_analysis_folder, lake_str, metric= ["R2", "MAD", "RMSE", "correlation", "values_per_pixel"], start=2016, end=2012):
     for m in metric:
-        out_path = os.path.join(
-                        eda_instance.out_folder,
-                        "maps", "metrics", m,
-                        os.path.basename(os.path.dirname(eda_instance.p_path)),
-                        os.path.basename(eda_instance.p_path)[:-3])
+        out_path = os.path.join(lake_analysis_folder, lake_str, "plots", "metric_maps")
         os.makedirs(out_path, exist_ok= True)
         if m == "R2":
             before = eda_instance.r2_scores(end= end)
@@ -168,20 +174,12 @@ def save_maps(eda_instance, metric= ["R2", "MAD", "RMSE", "correlation", "values
         fig.savefig(os.path.join(out_path, file_name),dpi=600)
         plt.close(fig)
 
-def save_pixel_plots(eda_instance, pixels, start = 0, end = 9999, split_start = 2016, split_end = 2012, aggregation = True):
+def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, start = 0, end = 9999, split_start = 2016, split_end = 2012, aggregation = True):
     for i,j in pixels:
         if aggregation:
-            out_path = os.path.join(
-                                eda_instance.out_folder,
-                                "pixel_plots/aggregated",
-                                os.path.basename(os.path.dirname(eda_instance.p_path)),
-                                os.path.basename(eda_instance.p_path)[:-3], f"{i}_{j}")
+            out_path = os.path.join(lake_analysis_folder, lake_str, "plots", "pixel_plots", "aggregated", f"{i}_{j}")
         else:
-            out_path = os.path.join(
-                                eda_instance.out_folder,
-                                "pixel_plots/not_aggregated",
-                                os.path.basename(os.path.dirname(eda_instance.p_path)),
-                                os.path.basename(eda_instance.p_path)[:-3], f"{i}_{j}")
+            out_path = os.path.join(lake_analysis_folder, lake_str, "plots", "pixel_plots", "not_aggregated", f"{i}_{j}")
         os.makedirs(out_path, exist_ok=True)
         fig, ax = plt.subplots(1,1, figsize = (10,5))
         eda_instance.pixel_map(i,j, ax)
@@ -217,13 +215,9 @@ def save_pixel_plots(eda_instance, pixels, start = 0, end = 9999, split_start = 
         plt.close(fig)
 
 
-def create_summary(eda_instance, pixels, summary_types=["n_peaks", "r2", "rmse", "mad", "correlation", "values"], split=True):
+def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, summary_types=["n_peaks", "r2", "rmse", "mad", "correlation", "values"], split=True):
        for i,j in pixels:
-            out_path = os.path.join(
-                                    eda_instance.out_folder,
-                                    "summaries",
-                                    os.path.basename(os.path.dirname(eda_instance.p_path)),
-                                    os.path.basename(eda_instance.p_path)[:-3], f"{i}_{j}")
+            out_path = os.path.join(lake_analysis_folder, lake_str, "plots", "pixel_plots", "summaries", f"{i}_{j}")
             os.makedirs(out_path, exist_ok=True)
             txt_path = os.path.join(out_path, "summary.txt")
 

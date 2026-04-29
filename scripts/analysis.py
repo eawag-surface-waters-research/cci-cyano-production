@@ -416,36 +416,16 @@ class PhenologyEDA:
 
 
         def build_metric_path(self, metric_name, start= 0, end= 9999):
-                if metric_name == "values_per_pixel":
-                        base = os.path.join(
-                        self.out_folder,
-                        "calculated_values", "metrics", metric_name, os.path.basename(os.path.dirname(self.p_path)), os.path.basename(self.p_path)[:-3])
-                        if start == 0 and end == 9999:
-                                fname = "full_ts.csv"
-                        elif start == 0:
-                                fname = f"ts_end{end}.csv"
-                        elif end == 9999:
-                                fname = f"ts_start{start}.csv"
-                        else:
-                                fname = f"ts_start{start}_end{end}.csv"
-                        return base, os.path.join(base, fname)
-
+                base = os.path.join(self.out_folder, "calculated_values", "metrics", metric_name)
+                if start == 0 and end == 9999:
+                        fname = "full_ts.csv"
+                elif start == 0:
+                        fname = f"ts_end_{end}.csv"
+                elif end == 9999:
+                        fname = f"ts_start_{start}.csv"
                 else:
-                        base = os.path.join(
-                        self.out_folder,
-                        "calculated_values", "metrics", metric_name,
-                        os.path.basename(os.path.dirname(self.p_path)),
-                        os.path.basename(self.p_path)[:-3]
-                        )
-                        if start == 0 and end == 9999:
-                                fname = "full_ts.csv"
-                        elif start == 0:
-                                fname = f"ts_end_{end}.csv"
-                        elif end == 9999:
-                                fname = f"ts_start_{start}.csv"
-                        else:
-                                fname = f"ts_start_{start}_end_{end}.csv"
-                        return base, os.path.join(base, fname)
+                        fname = f"ts_start_{start}_end_{end}.csv"
+                return base, os.path.join(base, fname)
                 
         
 
@@ -491,10 +471,7 @@ class PhenologyEDA:
 
                 out_dir = os.path.join(
                         self.out_folder,
-                        "calculated_values/spatial_aggregation_values",
-                        os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(self.p_path)))),
-                        os.path.basename(os.path.dirname(self.p_path)),
-                        os.path.basename(self.p_path)[:-3],
+                        "calculated_values", "spatial_aggregation_values",
                 )
                 os.makedirs(out_dir, exist_ok=True)
 

@@ -9,5 +9,6 @@
   "phenology": false,
   "analysis": true,
   "maps": true,
-  "pixel_plots": "C:/Users/sparksno/Documents/GitHub/cci-cyano-production/scripts/pixel_dicts/v3_chla_pixels.json"
+  "pixel_plots": "C:/Users/sparksno/Documents/GitHub/cci-cyano-production/scripts/pixel_dicts/v3_chla_pixels.json",
+  "comparison" : true
 }
