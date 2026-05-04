@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary
 from extract import extract
 from phenology import phenology
-from analysis import PhenologyEDA
+from visualization import PhenologyVisualization
 
 def main(args, log=False, threads=1, parallel="lake", batch_size=100):
     set_logging(log)
@@ -53,7 +53,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
                 
     if args["analysis"]:
         logging.info("Starting Analysis")
-        PhenologyEDA.set_shapefile_path(args["shapefile"])
+        PhenologyVisualization.set_shapefile_path(args["shapefile"])
         lake_analysis_folder = os.path.join(os.path.dirname(os.path.dirname(args["out_folder"])), "lake_analysis")
         for lake in lakes:
             e_path = os.path.join(args["out_folder"], "extract", args["variable"], f"{lake['id']}.nc")
@@ -62,7 +62,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
                 logging.warning(f"Skipping lake {lake['id']}: extract or phenology file missing")
                 continue
             logging.info(f"Analysing lake {lake['id']}")
-            eda = PhenologyEDA(e_path, p_path)
+            eda = PhenologyVisualization(e_path, p_path)
             lake_name = eda.ID_to_name(lake['id']).replace(" ", "")
             lake_str = f"ID{lake['id']}_{lake_name}"
             eda.out_folder = os.path.join(lake_analysis_folder, lake_str)
@@ -93,7 +93,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
             if not args["pixel_plots"]:
                 logging.warning("Skipping comparison: pixel_plots arg is required")
             else:
-                PhenologyEDA.set_shapefile_path(args["shapefile"])
+                PhenologyVisualization.set_shapefile_path(args["shapefile"])
                 with open(args["pixel_plots"]) as f:
                     pixel_dict = json.load(f)
 
@@ -109,7 +109,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
                     if lake_id_str not in pixel_dict:
                         continue
 
-                    # Build the three PhenologyEDA instances
+                    # Build the three PhenologyVisualization instances
                     instances = {}
                     for class_name in args["comparison_classes"]:
                         base_ver, folder = _class_paths[class_name]
@@ -123,7 +123,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
                             logging.warning(f"Comparison: missing files for {class_name}, lake {lake_id}")
                             instances[class_name] = None
                         else:
-                            instances[class_name] = PhenologyEDA(e_path, p_path)
+                            instances[class_name] = PhenologyVisualization(e_path, p_path)
 
                     chla21 = instances.get("chla21")
                     chla31 = instances.get("chla31")

@@ -61,7 +61,7 @@ def _init_worker(p_path, e_path):
     _GLOBALS["lons"] = lons
 
 
-class PhenologyEDA:
+class PhenologyVisualization:
         shapefile_path = None
 
         def __init__(self, extract_path, phenology_path):
