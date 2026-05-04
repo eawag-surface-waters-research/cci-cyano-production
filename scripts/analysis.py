@@ -861,7 +861,14 @@ class PhenologyEDA:
                         }
                 return self._pixel_cache[(i,j)]
 
-
+        def load_pixel_data(self, i, j):
+                g = self._load_extracted_globals()
+                px = self._load_pixel_data(i, j)
+                t_all = g["t_all"]
+                mask     = (px["values"] != -9999) & (px["qa"] == 0)
+                values_m = px["values"][mask]
+                time_dt   = datenum_to_datetime(t_all[mask])
+                return pd.Series(index=time_dt,data=values_m)
 
 
         def extrema_plot(self, latitude, longitude, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False):
