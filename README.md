@@ -78,6 +78,19 @@ Each JSON file in `args/` controls one run. All keys except `variable`, `qa`, `s
   "lakes": [5, 15, 6],
   "extract": true,
   "phenology": true,
+  "analysis": false,
+  "maps": false,
+  "pixel_plots": false,
+  "comparison": false,
+  "comparison_classes": ["chla21", "chla31", "phycocyanin31"],
+  "comparison_plot_types": ["chla21 vs chla31", "triple"],
+  "background_pts": true,
+  "purple_chla21": false,
+  "start": 0,
+  "end": 9999,
+  "split_start": 2016,
+  "split_end": 2012,
+  "aggregation": true,
   "qa_filter": true,
   "spline_min_phase_length": 14,
   "spline_min_relative_amplitude": 0,
@@ -88,6 +101,8 @@ Each JSON file in `args/` controls one run. All keys except `variable`, `qa`, `s
   "spline_subs_peak_ampl_frac": 0.05
 }
 ```
+
+### Pipeline keys
 
 | Key | Description |
 |-----|-------------|
@@ -108,6 +123,68 @@ Each JSON file in `args/` controls one run. All keys except `variable`, `qa`, `s
 | `spline_data_gap_size_buffer` | Buffer (days) added around flagged data gaps |
 | `spline_subs_peak_win_size` | Window size (days) for the substantial-peak amplitude check |
 | `spline_subs_peak_ampl_frac` | Amplitude fraction threshold for the substantial-peak check (0.05 retains smaller peaks; 0.35 filters them) |
+
+### Analysis and visualization keys
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `analysis` | `false` | Run the post-processing analysis stage |
+| `maps` | `false` | Save metric maps (R², MAD, RMSE, correlation, values per pixel) as PNG files |
+| `pixel_plots` | `false` | Save full, split, and peak/trough time-series plots for selected pixels |
+| `comparison` | `false` | Run cross-version comparison plots |
+| `comparison_classes` | `["chla21","chla31","phycocyanin31"]` | Dataset labels used for comparison; each must correspond to a configured `PhenologyVisualization` instance |
+| `comparison_plot_types` | (all combinations) | Which pairwise or triple comparisons to generate; valid values include `"chla21 vs chla31"`, `"chla21 vs phyco"`, `"chla31 vs phyco"`, `"triple"`, and `*_split` variants |
+| `background_pts` | `true` | Show raw or aggregated observations as a scatter background behind peak/trough stem plots |
+| `purple_chla21` | `false` | Colour v2.1 chl-a data in purple instead of light green when overlaying with other datasets |
+| `start` | `0` | First year to include in analysis plots; `0` means use the earliest available year |
+| `end` | `9999` | Last year to include in analysis plots; `9999` means use the latest available year |
+| `split_start` | `2016` | Start year of the "after" period in split-period plots and maps |
+| `split_end` | `2012` | End year of the "before" period in split-period plots and maps |
+| `aggregation` | `true` | Use 3×3 neighbourhood median values as the scatter background instead of the raw pixel time series |
+
+## Visualization and Analysis (`scripts/visualization.py`)
+
+`visualization.py` provides the `PhenologyVisualization` class for interactive and static exploration of extracted and phenology NetCDF outputs in Jupyter notebooks. It mirrors the `PhenologyEDA` class in `scripts/analysis.py` and exposes the same interface.
+
+### Setup
+
+```python
+from scripts.visualization import PhenologyVisualization
+
+PhenologyVisualization.set_shapefile_path("/path/to/lakes.shp")
+
+vis = PhenologyVisualization(
+    extract_path="/path/to/extract/chla/12345.nc",
+    phenology_path="/path/to/phenology/chla/12345.nc",
+)
+```
+
+`set_shapefile_path` must be called once at the class level before instantiating any object.
+
+### Key methods
+
+| Method | Description |
+|--------|-------------|
+| `load_pixel_data(i, j)` | Return a datetime-indexed Series of valid observations for pixel `(i, j)` |
+| `pixel_map(lat, lon, ax)` | Grayscale coverage map with a selected pixel marked |
+| `interactive_pixel_map(ax)` | Clickable coverage map that prints `(lat_idx, lon_idx)` on click (requires `%matplotlib widget`) |
+| `single_plot(lat, lon, ax, start, end)` | Observations, smoothed spline, and all phenological events for one pixel |
+| `split_plot(lat, lon, ax0, ax1, start0, end0, start1, end1)` | Two side-by-side `single_plot` panels for different year windows |
+| `full_plot(lat, lon, ax)` | `single_plot` over the complete available time range |
+| `extrema_plot(lat, lon, ax, peak, start, end)` | Stem plot of peaks or troughs; pass `peak=False` for troughs |
+| `extrema_comparison(other1, lat, lon, ax, …, other2)` | Overlay extrema plots from two or three `PhenologyVisualization` objects |
+| `single_plot_background(lat, lon, ax, fig, …)` | Like `single_plot` with scatter coloured by QA flag and a QA colorbar |
+| `metric_map(metric_scores, metric_str, fig, ax, …)` | Spatial heatmap of any `{(i,j): value}` metric dict |
+| `interactive_metric_map(metric_scores, metric_str, fig, ax)` | Clickable version of `metric_map` |
+| `time_map(fig, ax, year, peaks, max)` | Map of peak or green-up day-of-year for a given year |
+| `r2_scores(start, end)` | `{(i,j): R²}` for all valid pixels; cached to CSV |
+| `MAD_scores(start, end)` | `{(i,j): MAD}` for all valid pixels; cached to CSV |
+| `RMSE_scores(start, end)` | `{(i,j): RMSE}` for all valid pixels; cached to CSV |
+| `correlation_scores(start, end)` | `{(i,j): Pearson r}` for all valid pixels; cached to CSV |
+| `values_per_pixel(start, end)` | `{(i,j): count}` of valid observations; cached to CSV |
+| `spatial_aggregation()` | Compute 3×3 neighbourhood medians for all pixels and timesteps; cached to CSV |
+
+All metric and aggregation computations are cached to CSV on first call and loaded from cache on subsequent calls. Interactive plot methods require an interactive Matplotlib backend (`%matplotlib widget`).
 
 ## Output Format
 
@@ -135,6 +212,52 @@ All variables are shaped `(lat, lon, record)` where the `record` dimension is un
 | `data_gap_start` / `data_gap_end` | Data gap start and end (Unix) |
 
 Global attributes store the run parameters used to produce the file.
+
+### Visualization and analysis output
+
+Metric CSVs and spatial aggregation values are written relative to the phenology file's root (`out_folder`). Analysis plots are written to a separate lake analysis folder passed at runtime.
+
+```
+out_folder/
+├── extract/
+│   └── {variable}/
+│       └── {lake_id}.nc
+├── phenology/
+│   └── {variable}/
+│       ├── {lake_id}.nc
+│       └── checkpoints/
+│           └── {lake_id}/
+│               └── bs{batch_size}/
+│                   └── *.npy          # temporary; deleted after successful write
+└── calculated_values/
+    ├── metrics/
+    │   └── {metric_name}/             # r2 | MAD | RMSE | correlation | values_per_pixel
+    │       ├── full_ts.csv
+    │       ├── ts_end_{year}.csv
+    │       ├── ts_start_{year}.csv
+    │       └── ts_start_{year}_end_{year}.csv
+    └── spatial_aggregation_values/
+        └── aggregation_background_values.csv
+
+lake_analysis_folder/
+└── {lake_str}/
+    └── plots/
+        ├── metric_maps/
+        │   └── {variable}_v{version}_{metric}_split_ts.png
+        │   └── {variable}_v{version}_{metric}_fullts.png
+        └── pixel_plots/
+            ├── aggregated/
+            │   └── {i}_{j}/
+            │       ├── location.png
+            │       ├── {variable}_v{version}_full_ts.png
+            │       ├── {variable}_v{version}_split_ts.png
+            │       └── {variable}_v{version}_peaks_*.png
+            ├── not_aggregated/
+            │   └── {i}_{j}/           # same structure as aggregated/
+            └── summaries/
+                └── {i}_{j}/
+                    └── summary.txt
+```
 
 ## Fault Tolerance and Restart
 
