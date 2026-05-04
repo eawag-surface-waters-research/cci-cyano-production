@@ -67,7 +67,7 @@ class PhenologyVisualization:
         def __init__(self, extract_path, phenology_path):
                 """Initialize with paths to the extract (e_path) and phenology (p_path) NetCDF files; set_shapefile_path must be called first."""
                 if self.shapefile_path is None:
-                        raise Warning("Please define your path to the lake CCI shapefile. This can be done at a class level using PhenologyEDA.set_shapefile_path(your_path)")
+                        raise Warning("Please define your path to the lake CCI shapefile. This can be done at a class level using PhenologyVisualization.set_shapefile_path(your_path)")
                 else:
                         self.geom = geopandas.read_file(self.shapefile_path)
                 self.p_path = phenology_path
@@ -77,7 +77,7 @@ class PhenologyVisualization:
                         f"Lake ID: {os.path.basename(phenology_path)[:-3]}")
                 self.version = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(phenology_path))))[1:]
                 self.variable = os.path.basename(os.path.dirname(phenology_path))
-                self.methods = [method for method in dir(PhenologyEDA) if callable(getattr(PhenologyEDA, method)) and not method.startswith("__")]
+                self.methods = [method for method in dir(PhenologyVisualization) if callable(getattr(PhenologyVisualization, method)) and not method.startswith("__")]
                 self.valid_coords = self.valid_index_pairs()
                 self.out_folder =  os.path.dirname(os.path.dirname(os.path.dirname(self.p_path)))
                 self.aggregation_df = None
@@ -262,7 +262,6 @@ class PhenologyVisualization:
                                         else:
                                                 raise ValueError("please enter a valid metric")
 
-
                                 else:
                                         warnings.warn(f"Not enough valid data in selected date range for indices {(i,j)}")
                                         metric = np.nan
@@ -307,23 +306,23 @@ class PhenologyVisualization:
 
         def r2_scores(self, start=0, end=9999):
                 """Return a {(i,j): R2} dict for all valid pixels, computing and caching to CSV if needed."""
-                return self.compute_and_cache_metric(metric_name="r2", col_name="r2_scores", compute_fn=PhenologyEDA.compute_metric_score, start=start, end=end)
+                return self.compute_and_cache_metric(metric_name="r2", col_name="r2_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
 
         def MAD_scores(self, start=0, end=9999):
                 """Return a {(i,j): MAD} dict for all valid pixels, computing and caching to CSV if needed."""
-                return self.compute_and_cache_metric(metric_name="MAD", col_name="mad_scores",compute_fn= PhenologyEDA.compute_metric_score,start= start,end= end)
+                return self.compute_and_cache_metric(metric_name="MAD", col_name="mad_scores",compute_fn= PhenologyVisualization.compute_metric_score,start= start,end= end)
 
         def RMSE_scores(self, start=0, end=9999):
                 """Return a {(i,j): RMSE} dict for all valid pixels, computing and caching to CSV if needed."""
-                return self.compute_and_cache_metric(metric_name="RMSE", col_name="rmse_scores", compute_fn=PhenologyEDA.compute_metric_score, start=start, end=end)
+                return self.compute_and_cache_metric(metric_name="RMSE", col_name="rmse_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
 
         def correlation_scores(self, start=0, end=9999):
                 """Return a {(i,j): Pearson r} dict for all valid pixels, computing and caching to CSV if needed."""
-                return self.compute_and_cache_metric(metric_name="correlation", col_name="correlation_scores", compute_fn=PhenologyEDA.compute_metric_score, start=start, end=end)
+                return self.compute_and_cache_metric(metric_name="correlation", col_name="correlation_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
 
         def values_per_pixel(self, start=0, end=9999):
                 """Return a {(i,j): count} dict of valid observation counts, computing and caching to CSV if needed."""
-                return self.compute_and_cache_metric(metric_name="values_per_pixel", col_name="number_of_values",compute_fn= PhenologyEDA.compute_metric_score, start=start,end= end)
+                return self.compute_and_cache_metric(metric_name="values_per_pixel", col_name="number_of_values",compute_fn= PhenologyVisualization.compute_metric_score, start=start,end= end)
 
 
 
@@ -878,7 +877,7 @@ class PhenologyVisualization:
 
 
         def extrema_comparison(self, other1,  latitude, longitude, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = False, other2= None, purple_chla21= False):
-                """Overlay extrema plots from two (or three with other2) PhenologyEDA objects on one axis; self and other1/other2 must share the same lake ID."""
+                """Overlay extrema plots from two (or three with other2) PhenologyVisualization objects on one axis; self and other1/other2 must share the same lake ID."""
 
 
                 g = self._load_extracted_globals()
