@@ -111,7 +111,7 @@ def define_year_range(start, end, years):
                 return(years.min() if start == 0 else start, 
                        years.max() if end == 9999 else end)
 
-def save_maps(eda_instance, lake_analysis_folder, lake_str, metric= ["R2", "MAD", "RMSE", "correlation", "values_per_pixel"], start=2016, end=2012):
+def save_maps(eda_instance, lake_analysis_folder, lake_str,  start, end, metric= ["R2", "MAD", "RMSE", "correlation", "values_per_pixel"]):
     for m in metric:
         out_path = os.path.join(lake_analysis_folder, lake_str, "plots", "metric_maps")
         os.makedirs(out_path, exist_ok= True)

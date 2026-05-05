@@ -274,7 +274,7 @@ class PhenologyVisualization:
 
         def build_metric_path(self, metric_name, start= 0, end= 9999):
                 """Return the (directory, file) path tuple for a cached metric CSV, encoding the year range in the filename."""
-                base = os.path.join(self.out_folder, "calculated_values", "metrics", metric_name)
+                base = os.path.join(self.out_folder, "calculated_values", "metrics", metric_name, f"v{self.version}", self.variable)
                 if start == 0 and end == 9999:
                         fname = "full_ts.csv"
                 elif start == 0:
@@ -334,6 +334,7 @@ class PhenologyVisualization:
                 out_dir = os.path.join(
                         self.out_folder,
                         "calculated_values", "spatial_aggregation_values",
+                        f"v{self.version}", self.variable,
                 )
                 os.makedirs(out_dir, exist_ok=True)
 
