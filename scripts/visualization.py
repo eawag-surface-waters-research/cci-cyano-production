@@ -272,17 +272,18 @@ class PhenologyVisualization:
 
 
 
-        def build_metric_path(self, metric_name, start= 0, end= 9999):
+        def build_metric_path(self, metric_name, start, end):
                 """Return the (directory, file) path tuple for a cached metric CSV, encoding the year range in the filename."""
                 base = os.path.join(self.out_folder, "calculated_values", "metrics", metric_name, f"v{self.version}", self.variable)
                 if start == 0 and end == 9999:
                         fname = "full_ts.csv"
                 elif start == 0:
-                        fname = f"ts_end_{end}.csv"
+                        fname = f"ts_{2002}_to_{end}.csv"
                 elif end == 9999:
-                        fname = f"ts_start_{start}.csv"
+                        fname = f"ts_{start}_to_{2024}.csv"
                 else:
-                        fname = f"ts_start_{start}_end_{end}.csv"
+                        fname = f"ts_{start}_to_{end}.csv"
+                
                 return base, os.path.join(base, fname)
                 
         
@@ -304,27 +305,30 @@ class PhenologyVisualization:
                 return data
 
 
-        def r2_scores(self, start=0, end=9999):
+        def r2_scores(self, time_split):
                 """Return a {(i,j): R2} dict for all valid pixels, computing and caching to CSV if needed."""
-                return self.compute_and_cache_metric(metric_name="r2", col_name="r2_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
+                for start, end in time_split:
+                        return self.compute_and_cache_metric(metric_name="r2", col_name="r2_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
 
-        def MAD_scores(self, start=0, end=9999):
+        def MAD_scores(self, time_split):
                 """Return a {(i,j): MAD} dict for all valid pixels, computing and caching to CSV if needed."""
-                return self.compute_and_cache_metric(metric_name="MAD", col_name="mad_scores",compute_fn= PhenologyVisualization.compute_metric_score,start= start,end= end)
+                for start, end in time_split:
+                        return self.compute_and_cache_metric(metric_name="MAD", col_name="mad_scores",compute_fn= PhenologyVisualization.compute_metric_score,start= start,end= end)
 
-        def RMSE_scores(self, start=0, end=9999):
+        def RMSE_scores(self, time_split):
                 """Return a {(i,j): RMSE} dict for all valid pixels, computing and caching to CSV if needed."""
-                return self.compute_and_cache_metric(metric_name="RMSE", col_name="rmse_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
+                for start, end in time_split:
+                        return self.compute_and_cache_metric(metric_name="RMSE", col_name="rmse_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
 
-        def correlation_scores(self, start=0, end=9999):
+        def correlation_scores(self, time_split):
                 """Return a {(i,j): Pearson r} dict for all valid pixels, computing and caching to CSV if needed."""
-                return self.compute_and_cache_metric(metric_name="correlation", col_name="correlation_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
+                for start, end in time_split:
+                        return self.compute_and_cache_metric(metric_name="correlation", col_name="correlation_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
 
-        def values_per_pixel(self, start=0, end=9999):
+        def values_per_pixel(self, time_split):
                 """Return a {(i,j): count} dict of valid observation counts, computing and caching to CSV if needed."""
-                return self.compute_and_cache_metric(metric_name="values_per_pixel", col_name="number_of_values",compute_fn= PhenologyVisualization.compute_metric_score, start=start,end= end)
-
-
+                for start, end in time_split:
+                        return self.compute_and_cache_metric(metric_name="values_per_pixel", col_name="number_of_values",compute_fn= PhenologyVisualization.compute_metric_score, start=start,end= end)
 
 
 
@@ -703,6 +707,62 @@ class PhenologyVisualization:
                 ax.set_ylabel("Lat index")
                 ax.set_title(f"{extrema_label} Day of Year\n Lake ID: {lake_id}\n Year: {year}")
                 ax.legend()
+                return im
+        
+        def single_day_map(self, date):
+                """Plot a spatial map of chlorophyll values for a single observation date.
+
+                Parameters
+                ----------
+                date : datetime.datetime (UTC-aware)
+                    A single timestamp matching one entry in the extract time axis.
+                    Obtain it from a pixel series index, e.g.::
+
+                        series = vis.load_pixel_data(i, j)
+                        vis.single_day_map(series.idxmax())
+
+                Returns
+                -------
+                matplotlib.image.AxesImage
+                """
+                g = self._load_extracted_globals()
+                t_all = g["t_all"]
+                idx = np.argwhere(datenum_to_datetime(t_all) == date)
+                if len(idx) == 0:
+                        raise ValueError(f"Date {date} not found in the extract time axis.")
+                time_index = idx[0, 0]
+
+                with netCDF4.Dataset(self.e_path) as nc:
+                        values = np.array(nc.variables[g["variable"]][time_index, :, :])
+                        qa     = np.array(nc.variables[g["qa"]][time_index, :, :])
+                        lats   = nc.variables["lat"][:]
+                        lons   = nc.variables["lon"][:]
+
+                mask = (values != -9999) & (qa == 0)
+                lake_id = int(os.path.basename(self.p_path)[:-3])
+                lake_row = self.geom[self.geom["id"] == lake_id]
+                geom = lake_row.geometry.iloc[0]
+
+                map_data = np.where(mask, values, np.nan)
+                fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+                im = ax.imshow(map_data, cmap="winter", aspect="auto", origin="lower",
+                               extent=[lons.min(), lons.max(), lats.min(), lats.max()])
+
+                label = False
+                if geom.geom_type == "Polygon":
+                        x, y = geom.exterior.xy
+                        ax.plot(x, y, color="black", linewidth=1, label="Lake Outline")
+                elif geom.geom_type == "MultiPolygon":
+                        for poly in geom.geoms:
+                                x, y = poly.exterior.xy
+                                ax.plot(x, y, color="black", linewidth=1,
+                                        label="Lake Outline" if not label else None)
+                                label = True
+
+                fig.colorbar(im, orientation='vertical', label='chla (ug/L)')
+                plt.xticks([])
+                plt.yticks([])
+                plt.title(datenum_to_datetime(np.array([date]))[0].strftime("%Y-%m-%d"))
                 return im
 
 
@@ -1164,29 +1224,29 @@ class PhenologyVisualization:
 
                         return len(pks_x_sub)
                 
-        def pixel_r2(self, latitude, longitude, start= 0, end= 9999):
+        def pixel_r2(self, latitude, longitude, start, end):
                 """Return the R2 score for a single pixel; triggers full lake computation and CSV cache on first call."""
-                scores = self.r2_scores(start=start, end = end)
+                scores = self.r2_scores([(start, end)])
                 return scores[(latitude, longitude)]
-        
-        def pixel_rmse(self, latitude, longitude, start=0, end=9999):
+
+        def pixel_rmse(self, latitude, longitude, start, end):
                 """Return the RMSE for a single pixel; triggers full lake computation and CSV cache on first call."""
-                scores = self.RMSE_scores(start=start, end=end)
+                scores = self.RMSE_scores([(start, end)])
                 return scores[(latitude, longitude)]
 
-        def pixel_mad(self, latitude, longitude, start=0, end=9999):
+        def pixel_mad(self, latitude, longitude, start, end):
                 """Return the MAD for a single pixel; triggers full lake computation and CSV cache on first call."""
-                scores = self.MAD_scores(start=start, end=end)
+                scores = self.MAD_scores([(start, end)])
                 return scores[(latitude, longitude)]
 
-        def pixel_correlation(self, latitude, longitude, start=0, end=9999):
+        def pixel_correlation(self, latitude, longitude, start, end):
                 """Return the Pearson correlation for a single pixel; triggers full lake computation and CSV cache on first call."""
-                scores = self.correlation_scores(start=start, end=end)
+                scores = self.correlation_scores([(start, end)])
                 return scores[(latitude, longitude)]
 
-        def pixel_values(self, latitude, longitude, start=0, end=9999):
+        def pixel_values(self, latitude, longitude, start, end):
                 """Return the valid observation count for a single pixel; triggers full lake computation and CSV cache on first call."""
-                scores = self.values_per_pixel(start=start, end=end)
+                scores = self.values_per_pixel([(start, end)])
                 return scores[(latitude, longitude)]
 
 

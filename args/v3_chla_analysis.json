@@ -9,8 +9,7 @@
   "phenology": false,
   "analysis": true,
   "maps": true,
-  "split_start": 2016,
-  "split_end": 2012,
-  "pixel_plots": "C:/Users/sparksno/Documents/GitHub/cci-cyano-production/scripts/pixel_dicts/v2_chla_pixels.json",
+  "time_splits": [[0,2012],[2016,9999]], 
+  "pixel_plots": "C:/Users/sparksno/Documents/GitHub/cci-cyano-production/pixel_dicts/v2_chla_pixels.json",
   "comparison" : true
 }
