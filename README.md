@@ -86,10 +86,7 @@ Each JSON file in `args/` controls one run. All keys except `variable`, `qa`, `s
   "comparison_plot_types": ["chla21 vs chla31", "triple"],
   "background_pts": true,
   "purple_chla21": false,
-  "start": 0,
-  "end": 9999,
-  "split_start": 2016,
-  "split_end": 2012,
+  "time_splits": [[0, 9999]],
   "aggregation": true,
   "qa_filter": true,
   "spline_min_phase_length": 14,
@@ -130,17 +127,28 @@ Each JSON file in `args/` controls one run. All keys except `variable`, `qa`, `s
 |-----|---------|-------------|
 | `analysis` | `false` | Run the post-processing analysis stage |
 | `maps` | `false` | Save metric maps (R², MAD, RMSE, correlation, values per pixel) as PNG files |
-| `pixel_plots` | `false` | Save full, split, and peak/trough time-series plots for selected pixels |
+| `pixel_plots` | `false` | Path to a JSON pixel dictionary file (see below), or `false` to skip pixel plots |
 | `comparison` | `false` | Run cross-version comparison plots |
 | `comparison_classes` | `["chla21","chla31","phycocyanin31"]` | Dataset labels used for comparison; each must correspond to a configured `PhenologyVisualization` instance |
 | `comparison_plot_types` | (all combinations) | Which pairwise or triple comparisons to generate; valid values include `"chla21 vs chla31"`, `"chla21 vs phyco"`, `"chla31 vs phyco"`, `"triple"`, and `*_split` variants |
 | `background_pts` | `true` | Show raw or aggregated observations as a scatter background behind peak/trough stem plots |
 | `purple_chla21` | `false` | Colour v2.1 chl-a data in purple instead of light green when overlaying with other datasets |
-| `start` | `0` | First year to include in analysis plots; `0` means use the earliest available year |
-| `end` | `9999` | Last year to include in analysis plots; `9999` means use the latest available year |
-| `split_start` | `2016` | Start year of the "after" period in split-period plots and maps |
-| `split_end` | `2012` | End year of the "before" period in split-period plots and maps |
+| `time_splits` | `[[0, 9999]]` | List of `[start, end]` year ranges to compute metrics and generate plots for. `0` means the earliest available year; `9999` means the latest. A single entry produces one panel per output; two entries produce a side-by-side split layout; more entries create a grid. |
 | `aggregation` | `true` | Use 3×3 neighbourhood median values as the scatter background instead of the raw pixel time series |
+
+#### Pixel dictionary format
+
+`pixel_plots` must point to a JSON file in `pixel_dicts/`. The file maps lake IDs (as strings) to lists of `[i, j]` pixel index pairs:
+
+```json
+{
+  "327":        [[23, 30]],
+  "300013962":  [[8, 3]],
+  "300013966":  [[7, 3]]
+}
+```
+
+If a lake ID is not present in the dictionary, pixel plots for that lake are skipped with a warning. The `comparison` stage also requires `pixel_plots` to be set.
 
 ## Visualization and Analysis (`scripts/visualization.py`)
 
@@ -174,15 +182,18 @@ vis = PhenologyVisualization(
 | `extrema_plot(lat, lon, ax, peak, start, end)` | Stem plot of peaks or troughs; pass `peak=False` for troughs |
 | `extrema_comparison(other1, lat, lon, ax, …, other2)` | Overlay extrema plots from two or three `PhenologyVisualization` objects |
 | `single_plot_background(lat, lon, ax, fig, …)` | Like `single_plot` with scatter coloured by QA flag and a QA colorbar |
-| `metric_map(metric_scores, metric_str, fig, ax, …)` | Spatial heatmap of any `{(i,j): value}` metric dict |
+| `metric_map(metric_scores, metric_str, fig, ax, …)` | Spatial heatmap of any `{(i,j): value}` metric dict; pixels outside the 1 km-inset boundary are masked |
 | `interactive_metric_map(metric_scores, metric_str, fig, ax)` | Clickable version of `metric_map` |
-| `time_map(fig, ax, year, peaks, max)` | Map of peak or green-up day-of-year for a given year |
-| `r2_scores(start, end)` | `{(i,j): R²}` for all valid pixels; cached to CSV |
-| `MAD_scores(start, end)` | `{(i,j): MAD}` for all valid pixels; cached to CSV |
-| `RMSE_scores(start, end)` | `{(i,j): RMSE}` for all valid pixels; cached to CSV |
-| `correlation_scores(start, end)` | `{(i,j): Pearson r}` for all valid pixels; cached to CSV |
-| `values_per_pixel(start, end)` | `{(i,j): count}` of valid observations; cached to CSV |
+| `time_map(fig, ax, year, peaks, max)` | Map of peak or green-up day-of-year for a given year; pixels outside the 1 km-inset boundary are masked |
+| `single_day_map(date)` | Spatial map of the target variable for a single observation date; pixels outside the 1 km-inset boundary are masked. `date` must be a UTC-aware `datetime` matching an entry in the extract time axis — use `series.idxmax()` or another index value from `load_pixel_data` |
+| `r2_scores(time_split)` | `{(i,j): R²}` for all valid pixels; cached to CSV |
+| `MAD_scores(time_split)` | `{(i,j): MAD}` for all valid pixels; cached to CSV |
+| `RMSE_scores(time_split)` | `{(i,j): RMSE}` for all valid pixels; cached to CSV |
+| `correlation_scores(time_split)` | `{(i,j): Pearson r}` for all valid pixels; cached to CSV |
+| `values_per_pixel(time_split)` | `{(i,j): count}` of valid observations; cached to CSV |
 | `spatial_aggregation()` | Compute 3×3 neighbourhood medians for all pixels and timesteps; cached to CSV |
+
+The metric methods (`r2_scores`, `MAD_scores`, `RMSE_scores`, `correlation_scores`, `values_per_pixel`) each accept a `time_split` argument: a single-element list containing one `[start, end]` year pair, e.g. `[[2003, 2012]]` or `[[0, 9999]]` for the full series. Results are cached to CSV; the cache filename encodes the time window so different windows are stored independently.
 
 All metric and aggregation computations are cached to CSV on first call and loaded from cache on subsequent calls. Interactive plot methods require an interactive Matplotlib backend (`%matplotlib widget`).
 
@@ -232,10 +243,10 @@ out_folder/
 └── calculated_values/
     ├── metrics/
     │   └── {metric_name}/             # r2 | MAD | RMSE | correlation | values_per_pixel
-    │       ├── full_ts.csv
-    │       ├── ts_end_{year}.csv
-    │       ├── ts_start_{year}.csv
-    │       └── ts_start_{year}_end_{year}.csv
+    │       ├── full_ts.csv                          # time_split [0, 9999]
+    │       ├── ts_end_{year}.csv                    # time_split [0, year]
+    │       ├── ts_start_{year}.csv                  # time_split [year, 9999]
+    │       └── ts_start_{year}_end_{year}.csv       # time_split [start, end]
     └── spatial_aggregation_values/
         └── aggregation_background_values.csv
 
@@ -243,8 +254,9 @@ lake_analysis_folder/
 └── {lake_str}/
     └── plots/
         ├── metric_maps/
-        │   └── {variable}_v{version}_{metric}_split_ts.png
-        │   └── {variable}_v{version}_{metric}_fullts.png
+        │   ├── {variable}_v{version}_{metric}_full_ts.png      # single time_split [0, 9999]
+        │   ├── {variable}_v{version}_{metric}_split_ts.png     # two time_splits
+        │   └── {variable}_v{version}_{metric}_{n}_split_ts.png # n > 2 time_splits
         └── pixel_plots/
             ├── aggregated/
             │   └── {i}_{j}/
