@@ -11,6 +11,7 @@ The pipeline runs in two sequential stages:
 
 1. **Extract** — clips global satellite NetCDF files to each lake's bounding box and raster mask, producing a per-lake time series NetCDF containing the target variable and quality flags.
 2. **Phenology** — reads the extracted time series, fits a smoothing cubic spline per pixel, and extracts phenology metrics (peaks, troughs, green-up/green-down onset, mid, and advanced dates, and data gaps).
+3. **Visualization** — loads extracted and phenology outputs to produce spatial metric maps (R², MAD, RMSE, correlation), per-pixel time series plots overlaying raw observations, fitted splines, and cross-dataset comparison; it can also be used directly in Jupyter notebooks for more detailed or custom interactive analysis.
 
 Supported datasets:
 - **v2.1** — ESA CCI Lakes v2.1, variable `chla_mean`, QA flag `lwlr_quality_flag`
