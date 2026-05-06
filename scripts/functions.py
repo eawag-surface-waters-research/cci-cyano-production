@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import warnings
 from scipy.sparse import SparseEfficiencyWarning
 import matplotlib.pyplot as plt
+from shapely.geometry import Point
 
 warnings.filterwarnings("ignore", category=SparseEfficiencyWarning)
 
@@ -121,6 +122,83 @@ def close_factors(number):
         
     return factor1, factor2
 
+def plot_lake_outline(geometry, ax):
+    if geometry.geom_type == "Polygon":
+        x, y = geometry.exterior.xy
+        ax.plot(x, y, color="black", linewidth=1, label="Lake Outline")
+    elif geometry.geom_type == "MultiPolygon":
+        for i, poly in enumerate(geometry.geoms):
+            x, y = poly.exterior.xy
+            ax.plot(x, y, color="black", linewidth=1, label="Lake Outline" if i == 0 else None)
+
+def grab_metrics(e_path, metric_scores, buffered_geom_prep):
+    with netCDF4.Dataset(e_path) as nc:
+        summary = np.array(nc.variables["summary"][:, :])
+        lats = nc.variables["lat"][:]
+        lons = nc.variables["lon"][:]
+        map_data = np.full(summary.shape, np.nan)
+        extent = [lons.min(), lons.max(), lats.min(), lats.max()]
+        for (i, j), r2 in metric_scores.items():
+            lon = lons[j]
+            lat = lats[i]
+            if buffered_geom_prep.contains(Point(lon, lat)):
+                map_data[i, j] = r2
+        return map_data, extent
+
+def plot_map_data(colormap, map_data, extent, ax, cmap_extent=None):
+    cmap = colormap if colormap else "RdYlBu"
+    if cmap_extent is not None:
+        im = ax.imshow(map_data, cmap=cmap, aspect="auto", origin="lower",
+                       vmin=cmap_extent[0], vmax=cmap_extent[1], extent=extent)
+    else:
+        im = ax.imshow(map_data, cmap=cmap, aspect="auto", origin="lower", extent=extent)
+    return im
+
+def set_labels(ax, fig, im, title, colorbar_label, colorbar_ticks=None):
+    ax.set_xlabel("Lon index")
+    ax.set_ylabel("Lat index")
+    ax.set_title(title)
+    cbar = fig.colorbar(im, ax=ax, label=colorbar_label)
+    if colorbar_ticks is not None:
+        cbar.set_ticks(colorbar_ticks)
+    ax.legend()
+
+def grab_time_data(e_path, p_path, valid_coords, buffered_geom_prep,
+                   var_x, var_y, year, use_max):
+    with netCDF4.Dataset(e_path) as nc:
+        summary = np.array(nc.variables["summary"][:, :])
+        lats = nc.variables["lat"][:]
+        lons = nc.variables["lon"][:]
+
+    map_data = np.full(summary.shape, np.nan)
+    neg_warned = False
+    extent = [lons.min(), lons.max(), lats.min(), lats.max()]
+
+    with netCDF4.Dataset(p_path) as nc_p:
+        for (i, j) in valid_coords:
+            lon, lat = lons[j], lats[i]
+            if not buffered_geom_prep.contains(Point(lon, lat)):
+                continue
+            x_arr = np.array(unix_to_datetime(remove_nan(nc_p.variables[var_x][i, j, :])))
+            y_arr = np.array(remove_nan(nc_p.variables[var_y][i, j, :]))
+            if len(x_arr) == 0:
+                continue
+            year_arr = np.array([d.year for d in x_arr])
+            doys = np.array([d.timetuple().tm_yday for d in x_arr])
+            mask = (year_arr == year) & (doys >= 160) & (doys <= 250)
+            x_sub, y_sub = x_arr[mask], y_arr[mask]
+            if len(x_sub) == 0:
+                continue
+            if (y_sub < 0).any() and not neg_warned:
+                warnings.warn(f"Negative values in {year}", Warning)
+                neg_warned = True
+            if use_max:
+                map_data[i, j] = float(x_sub[int(np.argmax(y_sub))].timetuple().tm_yday)
+            else:
+                map_data[i, j] = float(x_sub[0].timetuple().tm_yday)
+
+    return map_data, extent
+
 
 
 def save_maps(eda_instance, lake_analysis_folder, lake_str,  time_splits, metric= ["R2", "MAD", "RMSE", "correlation", "values_per_pixel"]):
@@ -131,40 +209,39 @@ def save_maps(eda_instance, lake_analysis_folder, lake_str,  time_splits, metric
         os.makedirs(out_path, exist_ok= True)
     
         if m == "R2":
-            scores = eda_instance.r2_scores(time_splits)
+            score_fn = eda_instance.r2_scores
             metric_str = "R$^2$"
-            cmap= "RdYlBu"
-            colorbar_extent = [0,1]
-        elif m =="MAD":
-            scores= eda_instance.MAD_scores(time_splits)
+            cmap = "RdYlBu"
+            colorbar_extent = [0, 1]
+        elif m == "MAD":
+            score_fn = eda_instance.MAD_scores
             metric_str = "MAD"
-            cmap= "RdYlBu_r"
-            colorbar_extent = [0,1]
-        elif m =="RMSE":
-            scores = eda_instance.RMSE_scores(time_splits)
+            cmap = "RdYlBu_r"
+            colorbar_extent = [0, 1]
+        elif m == "RMSE":
+            score_fn = eda_instance.RMSE_scores
             metric_str = "RMSE"
-            cmap= "RdYlBu_r"
-            colorbar_extent = [0,1]
-        elif m =="correlation":
-            scores = eda_instance.correlation_scores(time_splits)
+            cmap = "RdYlBu_r"
+            colorbar_extent = [0, 1]
+        elif m == "correlation":
+            score_fn = eda_instance.correlation_scores
             metric_str = "correlation"
-            cmap= "RdYlBu"
-            colorbar_extent = [0,1]
-        elif m =="values_per_pixel":
-            scores = eda_instance.values_per_pixel(time_splits)
+            cmap = "RdYlBu"
+            colorbar_extent = [0, 1]
+        elif m == "values_per_pixel":
+            score_fn = eda_instance.values_per_pixel
             metric_str = "values_per_pixel"
-            cmap= "winter"
+            cmap = "winter"
             colorbar_extent = None
         else:
-            raise ValueError("Please provide a vaid metric string")
-        
+            raise ValueError("Please provide a valid metric string")
 
         for start, end in time_splits:
             if start > end:
                 raise ValueError("Beginning of time split cannot be larger than the end")
 
         rows, cols = close_factors(num_splits)
-        fig, axs = plt.subplots(rows, cols, constrained_layout = True)
+        fig, axs = plt.subplots(rows, cols, constrained_layout=True)
 
         for i, (start, end) in enumerate(time_splits):
             if start == 0 and end == 9999:
@@ -175,6 +252,8 @@ def save_maps(eda_instance, lake_analysis_folder, lake_str,  time_splits, metric
                 text_strings.append(f"{metric_str}-scores {eda_instance.variable} {eda_instance.version} {start}-{2024}")
             else:
                 text_strings.append(f"{metric_str}-scores {eda_instance.variable} {eda_instance.version} {start}-{end}")
+
+            scores = score_fn([(start, end)])
 
             if num_splits == 1:
                 eda_instance.metric_map(scores, metric_str, fig, axs, cmap, colorbar_extent=colorbar_extent)
@@ -202,63 +281,64 @@ def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_
         os.makedirs(out_path, exist_ok=True)
         fig, ax = plt.subplots(1,1)
         eda_instance.pixel_map(i,j, ax)
-        ax.set_ylim(bottom=-0.5)
+        # ax.set_ylim(bottom=-0.5)
         fig.savefig(os.path.join(out_path, "location.png"),dpi=600)
         plt.close(fig)
 
         num_splits = len(time_splits)
         rows, cols = close_factors(num_splits)
-        fig, axs = plt.subplots(rows, cols, constrained_layout = True)
 
+        # Single plots
+        fig, axs = plt.subplots(rows, cols, constrained_layout=True)
         for num, (start, end) in enumerate(time_splits):
             if start > end:
                 raise ValueError("Beginning of time split cannot be larger than the end")
+            ax = axs if num_splits == 1 else np.atleast_1d(axs).flatten()[num]
+            eda_instance.single_plot(ax=ax, latitude=i, longitude=j, aggregation=aggregation, start=start, end=end)
+            ax.set_ylim(bottom=-0.5)
 
-            if num_splits == 1:
-                if start == 0 and end == 9999:
-                    file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_full_ts.png"
-                    eda_instance.single_plot(ax = axs, latitude= i, longitude = j, aggregation = aggregation, start = start, end = end)
-                    axs.set_ylim(bottom=-0.5)
-                    fig.savefig(os.path.join(out_path, file_name), dpi=600)
-                    plt.close(fig)
-            elif start == 0 and end == 9999:
-                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_ts_{2002}_to_{2024}.png"
+        if num_splits == 1:
+            start, end = time_splits[0]
+            if start == 0 and end == 9999:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_full_ts.png"
             elif start == 0:
                 file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_ts_{2002}_to_{end}.png"
             elif end == 9999:
                 file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_ts_{start}_to_{2024}.png"
             else:
                 file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_ts_{start}_to_{end}.png"
+        elif num_splits == 2:
+            file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_split_ts.png"
+        else:
+            file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{num_splits}_split_ts.png"
+        fig.savefig(os.path.join(out_path, file_name), dpi=600)
+        plt.close(fig)
 
-                eda_instance.single_plot(ax = axs[num], latitude= i, longitude = j, aggregation = aggregation, start = start, end = end)
-                axs.set_ylim(bottom=-0.5)
-                fig.savefig(os.path.join(out_path, file_name), dpi=600)
-                plt.close(fig)
-
+        # Peaks plots
+        fig, axs = plt.subplots(rows, cols, constrained_layout=True)
         for num, (start, end) in enumerate(time_splits):
             if start > end:
                 raise ValueError("Beginning of time split cannot be larger than the end")
+            ax = axs if num_splits == 1 else np.atleast_1d(axs).flatten()[num]
+            eda_instance.extrema_plot(ax=ax, latitude=i, longitude=j, aggregation=aggregation, start=start, end=end, peak=True)
+            ax.set_ylim(bottom=-0.5)
 
-            if num_splits == 1:
-                if start == 0 and end == 9999:
-                    file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_full_ts.png"
-                    eda_instance.extrema_plot(ax = axs, latitude= i, longitude = j, aggregation = aggregation, start = start, end = end, peak = True)
-                    axs.set_ylim(bottom=-0.5)
-                    fig.savefig(os.path.join(out_path, file_name), dpi=600)
-                    plt.close(fig)
-            elif start == 0 and end == 9999:
-                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_ts_{2002}_to_{2024}.png"
+        if num_splits == 1:
+            start, end = time_splits[0]
+            if start == 0 and end == 9999:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_full_ts.png"
             elif start == 0:
                 file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_ts_{2002}_to_{end}.png"
             elif end == 9999:
                 file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_ts_{start}_to_{2024}.png"
             else:
                 file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_ts_{start}_to_{end}.png"
-
-                eda_instance.extrema_plot(ax = axs[num], latitude= i, longitude = j, aggregation = aggregation, start = start, end = end, peak = True)
-                axs.set_ylim(bottom=-0.5)
-                fig.savefig(os.path.join(out_path, file_name), dpi=600)
-                plt.close(fig)
+        elif num_splits == 2:
+            file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_split_ts.png"
+        else:
+            file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{num_splits}_peaks_split_ts.png"
+        fig.savefig(os.path.join(out_path, file_name), dpi=600)
+        plt.close(fig)
 
 
 
@@ -266,7 +346,7 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
     for i, j in pixels:
         out_path = os.path.join(lake_analysis_folder, lake_str, "plots", "pixel_plots", "summaries", f"{i}_{j}")
         os.makedirs(out_path, exist_ok=True)
-        txt_path = os.path.join(out_path, "summary.txt")
+        txt_path = os.path.join(out_path, f"summary_{eda_instance.variable}.txt")
 
         with open(txt_path, "w") as file:
             file.write(f"{eda_instance.variable} {eda_instance.version}:\n")
@@ -280,18 +360,19 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
                 else:
                     label = f"{start}-{end}"
 
+                file.write(f"    {label}:\n")
                 if "n_peaks" in summary_types:
-                    file.write(f"    Number of Peaks {label}: {eda_instance.count_peaks(i, j, start=start, end=end)}\n")
+                    file.write(f"        Number of Peaks: {eda_instance.count_peaks(i, j, start=start, end=end)}\n")
                 if "r2" in summary_types:
-                    file.write(f"    R2 {label}: {round(eda_instance.pixel_r2(i, j, start=start, end=end), 4)}\n")
+                    file.write(f"        R2: {round(eda_instance.pixel_r2(i, j, start=start, end=end), 4)}\n")
                 if "rmse" in summary_types:
-                    file.write(f"    RMSE {label}: {round(eda_instance.pixel_rmse(i, j, start=start, end=end), 4)}\n")
+                    file.write(f"        RMSE: {round(eda_instance.pixel_rmse(i, j, start=start, end=end), 4)}\n")
                 if "mad" in summary_types:
-                    file.write(f"    MAD {label}: {round(eda_instance.pixel_mad(i, j, start=start, end=end), 4)}\n")
+                    file.write(f"        MAD: {round(eda_instance.pixel_mad(i, j, start=start, end=end), 4)}\n")
                 if "correlation" in summary_types:
-                    file.write(f"    Correlation {label}: {round(eda_instance.pixel_correlation(i, j, start=start, end=end), 4)}\n")
+                    file.write(f"        Correlation: {round(eda_instance.pixel_correlation(i, j, start=start, end=end), 4)}\n")
                 if "values" in summary_types:
-                    file.write(f"    Values {label}: {round(eda_instance.pixel_values(i, j, start=start, end=end), 4)}\n")
+                    file.write(f"        Values: {round(eda_instance.pixel_values(i, j, start=start, end=end), 4)}\n")
 
             file.write("\n")
 
@@ -312,31 +393,34 @@ def save_comparison_plots(instances, pixels, lake_analysis_folder, lake_str,
 
     pair_plots = []
     if "chla21 vs chla31" in comparison_plot_types and chla21 and chla31:
-        pair_plots.append((chla21, chla31, None))
+        pair_plots.append((chla21, chla31, None, "chla21_chla31"))
     if "chla21 vs phyco" in comparison_plot_types and chla21 and phyco:
-        pair_plots.append((chla21, phyco, None))
+        pair_plots.append((chla21, phyco, None, "chla21_phyco"))
     if "chla31 vs phyco" in comparison_plot_types and chla31 and phyco:
-        pair_plots.append((chla31, phyco, None))
+        pair_plots.append((chla31, phyco, None, "chla31_phyco"))
     if "triple" in comparison_plot_types and chla21 and chla31 and phyco:
-        pair_plots.append((chla21, chla31, phyco))
+        pair_plots.append((chla21, chla31, phyco, "chla21_chla31_phyco"))
 
     n = len(time_splits)
-    ts_suffix = "full_ts" if (n == 1 and time_splits[0] == (0, 9999)) else f"{n}_split_ts"
+
+    def _year(v, zero_val=2002, max_val=2024):
+        return zero_val if v == 0 else (max_val if v == 9999 else v)
+
+    if n == 1 and time_splits[0] ==[0, 9999]:
+        ts_suffix = "full_ts"
+    elif n == 2:
+        s1, e1 = time_splits[0]
+        s2, e2 = time_splits[1]
+        ts_suffix = f"{_year(s1)}_{_year(e1)}_vs_{_year(s2)}_{_year(e2)}"
+    else:
+        ts_suffix = f"{n}_split_ts"
 
     for i, j in pixels:
         save_path = os.path.join(lake_analysis_folder, lake_str, "plots", "pixel_plots", "comparisons", f"{i}_{j}")
         os.makedirs(save_path, exist_ok=True)
 
-        for inst1, inst2, inst3 in pair_plots:
-            if inst3 is not None:
-                base = (f"extrema_{inst1.variable}_v{inst1.version.replace('.','')}"
-                        f"_VS_{inst2.variable}_v{inst2.version.replace('.','')}"
-                        f"_VS_{inst3.variable}_v{inst3.version.replace('.','')}_{agg}")
-                if purple_chla21:
-                    base += "_purple_chla21"
-            else:
-                base = (f"extrema_{inst1.variable}_v{inst1.version.replace('.','')}"
-                        f"_VS_{inst2.variable}_v{inst2.version.replace('.','')}_{agg}")
+        for inst1, inst2, inst3, label in pair_plots:
+            file_name = f"comparison_pks_{label}_{ts_suffix}{agg}.png"
 
             rows, cols = close_factors(n)
             fig, axs = plt.subplots(rows, cols, figsize=(15 * cols, 5 * rows), constrained_layout=True)
@@ -351,7 +435,7 @@ def save_comparison_plots(instances, pixels, lake_analysis_folder, lake_str,
                     purple_chla21=purple_chla21 if inst3 else False
                 )
 
-            fig.savefig(os.path.join(save_path, f"{base}_{ts_suffix}.png"), dpi=600)
+            fig.savefig(os.path.join(save_path, file_name), dpi=600)
             plt.close(fig)
 
 

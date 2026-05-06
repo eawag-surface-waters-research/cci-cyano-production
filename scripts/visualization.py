@@ -11,14 +11,14 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import pearsonr
 from csaps import csaps
-from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range
+from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels
 import multiprocessing
 from functools import partial
 import shapely.ops as ops
 from pyproj import CRS, Transformer
 import geopandas
-from shapely.geometry import Point
 from shapely.prepared import prep
+from shapely.geometry import Point
 from numpy.lib.stride_tricks import sliding_window_view
 
 
@@ -27,7 +27,19 @@ _GLOBALS = {}
 
 
 def _init_worker(p_path, e_path):
-    """Load parameter and evaluation NetCDF datasets into worker-process globals for multiprocessing reuse."""
+    """Initialise per-process globals for multiprocessing metric computation.
+
+    Called once per worker process by multiprocessing.Pool. Loads the parameter
+    and extract NetCDF datasets into module-level _GLOBALS so they are reused
+    across all pixel-level calls within the same worker.
+
+    Parameters
+    ----------
+    p_path : str
+        Path to the phenology parameter NetCDF file.
+    e_path : str
+        Path to the extract NetCDF file containing satellite observations.
+    """
     nc_p = netCDF4.Dataset(p_path)
     nc_e = netCDF4.Dataset(e_path)
 
@@ -65,7 +77,22 @@ class PhenologyVisualization:
         shapefile_path = None
 
         def __init__(self, extract_path, phenology_path):
-                """Initialize with paths to the extract (e_path) and phenology (p_path) NetCDF files; set_shapefile_path must be called first."""
+                """Initialise a PhenologyVisualization instance for a single lake and variable.
+
+                Parameters
+                ----------
+                extract_path : str
+                    Path to the extract NetCDF file containing satellite observations.
+                phenology_path : str
+                    Path to the phenology parameter NetCDF file produced by the spline
+                    fitting step. The lake ID, product version, and variable name are
+                    derived automatically from the directory structure of this path.
+
+                Raises
+                ------
+                Warning
+                    If set_shapefile_path has not been called before instantiation.
+                """
                 if self.shapefile_path is None:
                         raise Warning("Please define your path to the lake CCI shapefile. This can be done at a class level using PhenologyVisualization.set_shapefile_path(your_path)")
                 else:
@@ -87,27 +114,84 @@ class PhenologyVisualization:
 
 
         def shortname_to_name(self, short_name:str):
-                """Return the full lake name for a given short_name string."""
+                """Return the full lake name for a given short_name identifier.
+
+                Parameters
+                ----------
+                short_name : str
+                    The short_name value to look up in the shapefile attribute table.
+
+                Returns
+                -------
+                str
+                    Formatted string containing the lake name.
+                """
                 df = self.geom
                 return f"ID: {df.loc[df["short_name"]==short_name, "name"][1]}"
 
         def ID_to_name(self, id:int):
-                """Return the lake name for a given numeric lake ID."""
+                """Return the lake name for a given numeric lake ID.
+
+                Parameters
+                ----------
+                id : int
+                    The numeric lake ID to look up in the shapefile attribute table.
+
+                Returns
+                -------
+                str
+                    The lake name string.
+                """
                 df = self.geom
                 return list(df.loc[df["id"]==id, "name"])[0]
 
         def name_to_ID(self, name:str):
-                """Return the lake ID for a given lake name string."""
+                """Return the lake ID for a given lake name.
+
+                Parameters
+                ----------
+                name : str
+                    The lake name to look up in the shapefile attribute table.
+
+                Returns
+                -------
+                str
+                    Formatted string containing the lake ID.
+                """
                 df = self.geom
                 return f"ID: {list(df.loc[df["name"]==name, "id"])[0]}"
 
         def name_to_shortname(self, name:str):
-                """Return the short_name for a given lake name string."""
+                """Return the short_name for a given lake name.
+
+                Parameters
+                ----------
+                name : str
+                    The lake name to look up in the shapefile attribute table.
+
+                Returns
+                -------
+                str
+                    Formatted string containing the short_name.
+                """
                 df = self.geom
                 return f"short_name: {list(df.loc[df["name"]==name, "short_name"])[0]}"
 
         def index_to_lat_lon(self, lat_index, lon_index):
-                """Return the geographic lat/lon coordinates for given grid index pair."""
+                """Return the geographic coordinates for a grid index pair.
+
+                Parameters
+                ----------
+                lat_index : int
+                    Row index in the extract grid.
+                lon_index : int
+                    Column index in the extract grid.
+
+                Returns
+                -------
+                str
+                    Formatted string with the latitude and longitude values.
+                """
                 with netCDF4.Dataset(self.e_path) as nc:
                         lats = nc.variables["lat"][:]
                         lons = nc.variables["lon"][:]
@@ -118,13 +202,30 @@ class PhenologyVisualization:
         
         @classmethod
         def set_shapefile_path(cls, path: str):
-                """Set the class-level shapefile path shared by all instances."""
+                """Set the CCI lake shapefile path used by all instances.
+
+                Must be called once before any PhenologyVisualization instance is created.
+
+                Parameters
+                ----------
+                path : str
+                    Absolute or relative path to the CCI lake shapefile (.shp).
+                """
                 cls.shapefile_path = path
 
 
 
         def valid_index_pairs(self):
-                """Return (row, col) index pairs where more than one valid, QA-passing observation exists."""
+                """Return grid index pairs that have more than one valid QA-passing observation.
+
+                Reads the extract NetCDF and identifies pixels where the observation count
+                (non-fill, QA==0) exceeds one — the minimum required for spline fitting.
+
+                Returns
+                -------
+                list of tuple of int
+                    List of (row, col) index pairs with sufficient valid observations.
+                """
                 with netCDF4.Dataset(self.e_path) as nc:
                         variable = getattr(nc, "variable")
                         qa_variable = getattr(nc, "qa")
@@ -139,7 +240,24 @@ class PhenologyVisualization:
                 
 
         def create_DataFrame(self, latitude, longitude):
-                """Build a combined DataFrame of all phenology variables for a given pixel."""
+                """Build a combined long-format DataFrame of all phenology variables for a single pixel.
+
+                Reads all _x (time) and _y (value) variable pairs from the phenology NetCDF
+                and concatenates them into a single DataFrame.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel in the grid.
+                longitude : int
+                    Column (lon) index of the pixel in the grid.
+
+                Returns
+                -------
+                pandas.DataFrame
+                    Long-format DataFrame with columns Value, Variable, latitude, longitude
+                    and a datetime index named Time.
+                """
                 p = netCDF4.Dataset(self.p_path)
                 exclude = ['lat','lon','smoothing_parameter','trgs_qa','data_gap_start','data_gap_end']
                 l = list(set(list(p.variables))-set(exclude))
@@ -167,7 +285,22 @@ class PhenologyVisualization:
 
 
         def shrink_geometry_by_1km(self, geom):
-                """Return the WGS84 geometry buffered inward by 1 km using a centred AEQD projection."""
+                """Return a lake geometry eroded inward by 1 km.
+
+                Projects the geometry to a local Azimuthal Equidistant CRS centred on the
+                lake centroid, applies a -1000 m buffer, then reprojects back to WGS84.
+                The result is also stored in self.geom_shrunk.
+
+                Parameters
+                ----------
+                geom : shapely.geometry.base.BaseGeometry
+                    WGS84 lake geometry (Polygon or MultiPolygon) to shrink.
+
+                Returns
+                -------
+                shapely.geometry.base.BaseGeometry
+                    Inward-buffered WGS84 geometry.
+                """
                 # centroid in lon/lat
                 lon0, lat0 = geom.centroid.x, geom.centroid.y
 
@@ -192,7 +325,31 @@ class PhenologyVisualization:
        
         @staticmethod
         def compute_metric_score(coord, start, end, metric_to_compute= ["values_per_pixel", "r2", "MAD", "RMSE", "correlation"]):
-                """Compute a single fit metric or observation count for one pixel; designed for use as a multiprocessing worker via compute_and_cache_metric."""
+                """Compute one spline-fit metric or observation count for a single pixel.
+
+                Designed as a multiprocessing worker; reads all data from module-level
+                _GLOBALS populated by _init_worker. For 'values_per_pixel' only the valid
+                observation count is returned; for all other metrics the stored smoothing
+                parameter is used to refit the spline and the requested statistic is computed.
+
+                Parameters
+                ----------
+                coord : tuple of int
+                    (i, j) grid index pair identifying the pixel.
+                start : int
+                    First year of the evaluation window (0 = earliest available year).
+                end : int
+                    Last year of the evaluation window (9999 = latest available year).
+                metric_to_compute : list of str
+                    Single-element list naming the metric. One of:
+                    ['values_per_pixel'], ['r2'], ['MAD'], ['RMSE'], ['correlation'].
+
+                Returns
+                -------
+                tuple
+                    ((i, j), metric_value) where metric_value is an int for
+                    'values_per_pixel' and a float (or np.nan) for all others.
+                """
                 if metric_to_compute==["values_per_pixel"]:
                         i,j = coord
                         values_all = _GLOBALS["values_all"]
@@ -273,7 +430,29 @@ class PhenologyVisualization:
 
 
         def build_metric_path(self, metric_name, start, end):
-                """Return the (directory, file) path tuple for a cached metric CSV, encoding the year range in the filename."""
+                """Return the output directory and file path for a cached metric CSV.
+
+                The filename encodes the year range: full_ts.csv for the complete series,
+                ts_{start}_to_{end}.csv otherwise. Sentinel values 0 and 9999 are replaced
+                by 2002 and 2024 respectively in the filename.
+
+                Parameters
+                ----------
+                metric_name : str
+                    Name of the metric (e.g. 'r2', 'MAD', 'RMSE', 'correlation',
+                    'values_per_pixel').
+                start : int
+                    First year of the evaluation window (0 = full series start).
+                end : int
+                    Last year of the evaluation window (9999 = full series end).
+
+                Returns
+                -------
+                base : str
+                    Directory path where the CSV will be written.
+                file_path : str
+                    Full path to the CSV file.
+                """
                 base = os.path.join(self.out_folder, "calculated_values", "metrics", metric_name, f"v{self.version}", self.variable)
                 if start == 0 and end == 9999:
                         fname = "full_ts.csv"
@@ -289,7 +468,31 @@ class PhenologyVisualization:
         
 
         def compute_and_cache_metric(self, metric_name, col_name, compute_fn, start, end):
-                """Compute metric for all valid pixels in parallel and cache the result to CSV; loads from cache on subsequent calls."""
+                """Compute a metric for all valid pixels in parallel and cache to CSV.
+
+                On the first call the metric is computed using a multiprocessing pool
+                (3 workers) and written to CSV. Subsequent calls with the same metric
+                and year range load directly from the cached file.
+
+                Parameters
+                ----------
+                metric_name : str
+                    Name of the metric, passed to build_metric_path and compute_fn.
+                col_name : str
+                    Column name used when reading or writing the CSV cache.
+                compute_fn : callable
+                    Worker function (typically compute_metric_score) executed by each
+                    pool worker.
+                start : int
+                    First year of the evaluation window (0 = full series start).
+                end : int
+                    Last year of the evaluation window (9999 = full series end).
+
+                Returns
+                -------
+                dict
+                    Mapping of (i, j) tuples to metric values for all valid pixels.
+                """
                 dir_path, file_path = self.build_metric_path(metric_name, start, end)
                 os.makedirs(dir_path, exist_ok=True)
                 if os.path.isfile(file_path):
@@ -306,34 +509,109 @@ class PhenologyVisualization:
 
 
         def r2_scores(self, time_split):
-                """Return a {(i,j): R2} dict for all valid pixels, computing and caching to CSV if needed."""
+                """Return R² scores for all valid pixels over a single time window.
+
+                Parameters
+                ----------
+                time_split : list of tuple of int
+                    Single-element list containing one (start, end) year tuple.
+                    Use [(0, 9999)] for the full time series.
+
+                Returns
+                -------
+                dict
+                    Mapping of (i, j) grid index tuples to R² float values.
+                """
                 for start, end in time_split:
                         return self.compute_and_cache_metric(metric_name="r2", col_name="r2_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
 
         def MAD_scores(self, time_split):
-                """Return a {(i,j): MAD} dict for all valid pixels, computing and caching to CSV if needed."""
+                """Return Median Absolute Deviation scores for all valid pixels over a single time window.
+
+                Parameters
+                ----------
+                time_split : list of tuple of int
+                    Single-element list containing one (start, end) year tuple.
+                    Use [(0, 9999)] for the full time series.
+
+                Returns
+                -------
+                dict
+                    Mapping of (i, j) grid index tuples to MAD float values.
+                """
                 for start, end in time_split:
                         return self.compute_and_cache_metric(metric_name="MAD", col_name="mad_scores",compute_fn= PhenologyVisualization.compute_metric_score,start= start,end= end)
 
         def RMSE_scores(self, time_split):
-                """Return a {(i,j): RMSE} dict for all valid pixels, computing and caching to CSV if needed."""
+                """Return Root Mean Squared Error scores for all valid pixels over a single time window.
+
+                Parameters
+                ----------
+                time_split : list of tuple of int
+                    Single-element list containing one (start, end) year tuple.
+                    Use [(0, 9999)] for the full time series.
+
+                Returns
+                -------
+                dict
+                    Mapping of (i, j) grid index tuples to RMSE float values.
+                """
                 for start, end in time_split:
                         return self.compute_and_cache_metric(metric_name="RMSE", col_name="rmse_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
 
         def correlation_scores(self, time_split):
-                """Return a {(i,j): Pearson r} dict for all valid pixels, computing and caching to CSV if needed."""
+                """Return Pearson correlation scores for all valid pixels over a single time window.
+
+                Parameters
+                ----------
+                time_split : list of tuple of int
+                    Single-element list containing one (start, end) year tuple.
+                    Use [(0, 9999)] for the full time series.
+
+                Returns
+                -------
+                dict
+                    Mapping of (i, j) grid index tuples to Pearson r float values.
+                """
                 for start, end in time_split:
                         return self.compute_and_cache_metric(metric_name="correlation", col_name="correlation_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
 
         def values_per_pixel(self, time_split):
-                """Return a {(i,j): count} dict of valid observation counts, computing and caching to CSV if needed."""
+                """Return valid observation counts for all pixels over a single time window.
+
+                Parameters
+                ----------
+                time_split : list of tuple of int
+                    Single-element list containing one (start, end) year tuple.
+                    Use [(0, 9999)] for the full time series.
+
+                Returns
+                -------
+                dict
+                    Mapping of (i, j) grid index tuples to integer observation counts.
+                """
                 for start, end in time_split:
                         return self.compute_and_cache_metric(metric_name="values_per_pixel", col_name="number_of_values",compute_fn= PhenologyVisualization.compute_metric_score, start=start,end= end)
 
 
 
         def spatial_aggregation(self):
-                """Compute or load per-pixel 3×3 neighbourhood median values for all timesteps; result stored in self.aggregation_df."""
+                """Compute or load per-pixel 3×3 neighbourhood median values for all timesteps.
+
+                For each valid interior pixel and each timestep, computes the median of all
+                non-fill, QA==0 observations within the 3×3 pixel neighbourhood using
+                stride-trick windowing. Border pixels are excluded as they cannot form a
+                complete 3×3 window.
+
+                The result is stored in self.aggregation_df and written to a CSV for reuse.
+                If the CSV already exists, it is loaded directly without recomputation.
+
+                Returns
+                -------
+                None
+                    Result is stored in self.aggregation_df as a pandas.DataFrame with
+                    columns: time, i, j, lat, lon, MA_value.
+                """
 
                 out_dir = os.path.join(
                         self.out_folder,
@@ -428,7 +706,26 @@ class PhenologyVisualization:
 
 
         def pixel_map(self, latitude, longitude, ax):
-                """Plot a grayscale coverage map and mark the selected pixel with a red star."""
+                """Plot a grayscale coverage map with the selected pixel marked.
+
+                Reads the summary grid from the extract NetCDF and displays it in
+                grayscale, masking cells with fewer than 2 valid observations. The
+                selected pixel is overlaid as a red star.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel to highlight.
+                longitude : int
+                    Column (lon) index of the pixel to highlight.
+                ax : matplotlib.axes.Axes
+                    Axes on which to draw the map.
+
+                Returns
+                -------
+                matplotlib.image.AxesImage
+                    The imshow image object.
+                """
                 with netCDF4.Dataset(self.e_path) as nc:
                         summary = np.array(nc.variables["summary"][:, :])
 
@@ -453,7 +750,23 @@ class PhenologyVisualization:
                 return im
 
         def interactive_pixel_map(self, ax):
-                """Plot a clickable coverage map; clicking a valid cell prints and labels its (lat_idx, lon_idx). Requires %matplotlib widget."""
+                """Plot a clickable coverage map for pixel selection.
+
+                Displays the summary coverage grid in grayscale. Clicking a valid cell
+                prints its (lat_idx, lon_idx) and marks it with a dot and text label.
+                Requires an interactive matplotlib backend (e.g. %matplotlib widget).
+
+                Parameters
+                ----------
+                ax : matplotlib.axes.Axes
+                    Axes on which to draw the map.
+
+                Returns
+                -------
+                int
+                    Matplotlib canvas connection ID, which can be passed to
+                    ax.figure.canvas.mpl_disconnect() to remove the click handler.
+                """
                 with netCDF4.Dataset(self.e_path) as nc:
                         summary = np.array(nc.variables["summary"][:, :])
 
@@ -501,64 +814,89 @@ class PhenologyVisualization:
                 return cid
 
         def metric_map(self, metric_scores:dict, metric_str:str, fig, ax, colormap = None, colorbar_extent= [0,1]):
-                """Plot a spatial heatmap of any {(i,j): value} metric dict clipped to the 1 km-inset lake boundary; pass a custom colormap or colorbar_extent as needed."""
-                lake_id = int(os.path.basename(self.p_path)[:-3])
+                """Plot a spatial heatmap of a precomputed per-pixel metric.
 
+                Pixels outside the 1 km-inset lake boundary are masked. The lake outline
+                is overlaid from the shapefile geometry.
+
+                Parameters
+                ----------
+                metric_scores : dict
+                    Mapping of (i, j) grid index tuples to metric float values, as
+                    returned by r2_scores, MAD_scores, RMSE_scores, etc.
+                metric_str : str
+                    Label used for the colorbar and plot title (e.g. 'R$^2$', 'RMSE').
+                fig : matplotlib.figure.Figure
+                    Figure used to attach the colorbar.
+                ax : matplotlib.axes.Axes
+                    Axes on which to draw the heatmap.
+                colormap : str or matplotlib.colors.Colormap, optional
+                    Colormap passed to imshow. Defaults to 'RdYlBu'.
+                colorbar_extent : list of float, optional
+                    [vmin, vmax] for the colorbar. Defaults to [0, 1].
+
+                Returns
+                -------
+                matplotlib.image.AxesImage
+                    The imshow image object.
+
+                Raises
+                ------
+                ValueError
+                    If the lake ID derived from p_path is not found in the shapefile.
+                """
+                lake_id = int(os.path.basename(self.p_path)[:-3])
                 lake_row = self.geom[self.geom["id"] == lake_id]
                 if lake_row.empty:
                         raise ValueError(f"Lake ID {lake_id} not found in shapefile.")
+                
                 geom = lake_row.geometry.iloc[0]
                 buffered_geom = self.shrink_geometry_by_1km(geom)
                 buffered_geom_prepared = prep(buffered_geom)
 
-                with netCDF4.Dataset(self.e_path) as nc:
-                        summary = np.array(nc.variables["summary"][:, :])
-                        lats = nc.variables["lat"][:]
-                        lons = nc.variables["lon"][:]
-                        map_data = np.full(summary.shape, np.nan)
-                        for (i, j), r2 in metric_scores.items():
-                                lon = lons[j]
-                                lat = lats[i]
-                                if buffered_geom_prepared.contains(Point(lon, lat)):
-                                        map_data[i, j] = r2
+                map_data, extent = grab_metrics(self.e_path, metric_scores, buffered_geom_prepared)
 
-                        if colormap:
-                                cmap = colormap
-                        else:
-                                cmap = "RdYlBu"
+                im = plot_map_data(colormap, map_data, extent, ax, cmap_extent=colorbar_extent)
+                plot_lake_outline(geometry=geom, ax=ax)
+                set_labels(ax, fig, im,
+                           title=f"{metric_str}-Scores for Lake: ID {lake_id}",
+                           colorbar_label=metric_str)
 
-                        # plot as geographic map
-                        if colorbar_extent == [0,1]:
-                                im = ax.imshow(map_data, cmap=cmap, aspect="auto", origin="lower", vmin= colorbar_extent[0], vmax = colorbar_extent[1], extent=[lons.min(), lons.max(), lats.min(), lats.max()])
-                        else:
-                                im = ax.imshow(map_data, cmap=cmap, aspect="auto", origin="lower", extent=[lons.min(), lons.max(), lats.min(), lats.max()])
-
-
-
-                        label = False
-                        if geom.geom_type == "Polygon":
-                                x, y = geom.exterior.xy
-                                label = "Lake Outline" if not label else None
-                                ax.plot(x, y, color="black", linewidth=1, label = label)
-                                label = True
-                        elif geom.geom_type == "MultiPolygon":
-                                for poly in geom.geoms:
-                                        x, y = poly.exterior.xy
-                                        label = "Lake Outline" if not label else None
-                                        ax.plot(x, y, color="black", linewidth=1, label = label)
-                                        label = True
-
-                        ax.set_xlabel("Lon index")
-                        ax.set_ylabel("Lat index")
-                        text_str = f"{metric_str}-Scores for Lake: ID {os.path.basename(self.p_path)[:-3]}"
-                        ax.set_title(text_str)
-                        fig.colorbar(im, ax= ax, label= metric_str)
-                        ax.legend()
                 return im
 
 
+
+
+
+
         def interactive_metric_map(self, metric_scores, metric_str:str, fig, ax):
-                """Like metric_map but clickable; clicking a pixel prints its lat/lon indices. Requires %matplotlib widget."""
+                """Plot a clickable spatial heatmap of a precomputed per-pixel metric.
+
+                Like metric_map but with click interaction: clicking a pixel prints and
+                labels its (lat_idx, lon_idx). Colorbar range is fixed to [0, 1].
+                Requires an interactive matplotlib backend (e.g. %matplotlib widget).
+
+                Parameters
+                ----------
+                metric_scores : dict
+                    Mapping of (i, j) grid index tuples to metric float values.
+                metric_str : str
+                    Label used for the colorbar and plot title.
+                fig : matplotlib.figure.Figure
+                    Figure used to attach the colorbar.
+                ax : matplotlib.axes.Axes
+                    Axes on which to draw the heatmap.
+
+                Returns
+                -------
+                int
+                    Matplotlib canvas connection ID for removing the click handler.
+
+                Raises
+                ------
+                ValueError
+                    If the lake ID derived from p_path is not found in the shapefile.
+                """
                 lake_id = int(os.path.basename(self.p_path)[:-3])
 
                 lake_row = self.geom[self.geom["id"] == lake_id]
@@ -568,40 +906,16 @@ class PhenologyVisualization:
                 buffered_geom = self.shrink_geometry_by_1km(geom)
                 buffered_geom_prepared = prep(buffered_geom)
 
-                with netCDF4.Dataset(self.e_path) as nc:
-                        summary = np.array(nc.variables["summary"][:, :])
-                        lats = nc.variables["lat"][:]
-                        lons = nc.variables["lon"][:]
-                        map_data = np.full(summary.shape, np.nan)
-                        for (i, j), r2 in metric_scores.items():
-                                lon = lons[j]
-                                lat = lats[i]
-                                if buffered_geom_prepared.contains(Point(lon, lat)):
-                                        map_data[i, j] = r2
+                map_data, extent = grab_metrics(self.e_path, metric_scores, buffered_geom_prepared)
+                g = self._load_extracted_globals()
+                lats = g["lat"]
+                lons = g["lon"]
 
-                        # plot as geographic map
-                        im = ax.imshow(map_data, cmap="RdYlBu", aspect="auto", origin="lower", vmin= 0, vmax = 1, extent=[lons.min(), lons.max(), lats.min(), lats.max()])
-
-                        label = False
-                        if geom.geom_type == "Polygon":
-                                x, y = geom.exterior.xy
-                                label = "Lake Outline" if not label else None
-                                ax.plot(x, y, color="black", linewidth=1, label = label)
-                                label = True
-                        elif geom.geom_type == "MultiPolygon":
-                                for poly in geom.geoms:
-                                        x, y = poly.exterior.xy
-                                        label = "Lake Outline" if not label else None
-                                        ax.plot(x, y, color="black", linewidth=1, label = label)
-                                        label = True
-
-                        ax.set_xlabel("Lon index")
-                        ax.set_ylabel("Lat index")
-                        text_str = f"{metric_str} for Lake: ID {os.path.basename(self.p_path)[:-3]}"
-                        ax.set_title(text_str)
-                        fig.colorbar(im, ax= ax, label= metric_str)
-                        ax.legend()
-
+                im = plot_map_data(None, map_data, extent, ax, cmap_extent=[0, 1])
+                plot_lake_outline(geometry=geom, ax=ax)
+                set_labels(ax, fig, im,
+                           title=f"{metric_str}-Scores for Lake: ID {lake_id}",
+                           colorbar_label=metric_str)
 
                 def on_click(event):
                         """Label the clicked metric-map pixel with its lat/lon indices."""
@@ -629,7 +943,32 @@ class PhenologyVisualization:
         
 
         def time_map(self, fig, ax, year, peaks=True, max = True):
-                """Map the day-of-year of the summer peak (or green-up midpoint if peaks=False) across all pixels for a given year; pass max=False to use the first event instead of the largest."""
+                """Map the day-of-year of a phenological event across all pixels for one year.
+
+                For each valid pixel within the 1 km-inset lake boundary, extracts the
+                summer peak or green-up midpoint DOY (restricted to DOY 160–250) for the
+                given year and displays it as a spatial heatmap with a fixed colorbar.
+
+                Parameters
+                ----------
+                fig : matplotlib.figure.Figure
+                    Figure used to attach the colorbar.
+                ax : matplotlib.axes.Axes
+                    Axes on which to draw the heatmap.
+                year : int
+                    Calendar year for which to map the phenological event.
+                peaks : bool, optional
+                    If True (default), map summer peaks (pks_x / pks_y).
+                    If False, map green-up midpoints (green_up_mid_x / green_up_mid_y).
+                max : bool, optional
+                    If True (default), use the highest-amplitude peak in the DOY window.
+                    If False, use the first peak in the window.
+
+                Returns
+                -------
+                matplotlib.image.AxesImage
+                    The imshow image object.
+                """
                 lake_id = int(os.path.basename(self.p_path)[:-3])
 
                 lake_row = self.geom[self.geom["id"] == lake_id]
@@ -641,82 +980,27 @@ class PhenologyVisualization:
                 var_y = "pks_y" if peaks else "green_up_mid_y"
                 extrema_label = "Peak" if peaks else "Green Mid Up"
 
-                with netCDF4.Dataset(self.e_path) as nc_e:
-                        summary = np.array(nc_e.variables["summary"][:, :])
-                        lats = nc_e.variables["lat"][:]
-                        lons = nc_e.variables["lon"][:]
-
-                map_data = np.full(summary.shape, np.nan)
-                neg_warned = False
-
-                with netCDF4.Dataset(self.p_path) as nc_p:
-                        for (i, j) in self.valid_coords:
-                                lon = lons[j]
-                                lat = lats[i]
-                                if not buffered_geom_prepared.contains(Point(lon, lat)):
-                                        continue
-
-                                x_arr = np.array(unix_to_datetime(remove_nan(nc_p.variables[var_x][i, j, :])))
-                                y_arr = np.array(remove_nan(nc_p.variables[var_y][i, j, :]))
-
-                                if len(x_arr) == 0:
-                                        continue
-                                year_arr = np.array([d.year for d in x_arr])
-                                doys = np.array([d.timetuple().tm_yday for d in x_arr])
-                                mask = (year_arr == year) & (doys >= 160) & (doys <= 250)
-                                x_sub = x_arr[mask]
-                                y_sub = y_arr[mask]
-
-
-                                if len(x_sub) == 0:
-                                        continue
-
-                                if (y_sub < 0).any() and not neg_warned:
-                                        warnings.warn(
-                                                f"Negative {extrema_label}(s) in {year}",
-                                                Warning
-                                        )
-                                        neg_warned = True
-                                if max:
-                                        max_idx = int(np.argmax(y_sub))
-                                        map_data[i, j] = float(x_sub[max_idx].timetuple().tm_yday)
-                                else:
-                                        map_data[i, j] = float(x_sub[0].timetuple().tm_yday)
-
-
-                im = ax.imshow(
-                        map_data, cmap="rainbow", aspect="auto", origin="lower",
-                        vmin=160, vmax=250,
-                        extent=[lons.min(), lons.max(), lats.min(), lats.max()])
-
-                first_label = True
-                if geom.geom_type == "Polygon":
-                        x, y = geom.exterior.xy
-                        ax.plot(x, y, color="black", linewidth=1, label="Lake Outline")
-                elif geom.geom_type == "MultiPolygon":
-                        for poly in geom.geoms:
-                                x, y = poly.exterior.xy
-                                ax.plot(x, y, color="black", linewidth=1,
-                                        label="Lake Outline" if first_label else None)
-                                first_label = False
-
-                cbar = fig.colorbar(im, ax=ax, label="Day of Year")
-                cbar.set_ticks([160, 185, 215, 250])
-
-                ax.set_xlabel("Lon index")
-                ax.set_ylabel("Lat index")
-                ax.set_title(f"{extrema_label} Day of Year\n Lake ID: {lake_id}\n Year: {year}")
-                ax.legend()
+                map_data, extent = grab_time_data(self.e_path, self.p_path, self.valid_coords,
+                                                  buffered_geom_prepared, var_x, var_y, year, max)
+                im = plot_map_data("rainbow", map_data, extent, ax, cmap_extent=[160, 250])
+                plot_lake_outline(geometry=geom, ax=ax)
+                set_labels(ax, fig, im,
+                           title=f"{extrema_label} Day of Year\n Lake ID: {lake_id}\n Year: {year}",
+                           colorbar_label="Day of Year",
+                           colorbar_ticks=[160, 185, 215, 250])
                 return im
         
         def single_day_map(self, date):
                 """Plot a spatial map of chlorophyll values for a single observation date.
 
+                Creates a new figure internally. Values failing the fill-value or QA filter
+                are masked. The lake outline is overlaid from the shapefile geometry.
+
                 Parameters
                 ----------
-                date : datetime.datetime (UTC-aware)
-                    A single timestamp matching one entry in the extract time axis.
-                    Obtain it from a pixel series index, e.g.::
+                date : datetime.datetime
+                    A UTC-aware timestamp matching one entry in the extract time axis.
+                    Typically obtained from a pixel time series, e.g.::
 
                         series = vis.load_pixel_data(i, j)
                         vis.single_day_map(series.idxmax())
@@ -724,6 +1008,12 @@ class PhenologyVisualization:
                 Returns
                 -------
                 matplotlib.image.AxesImage
+                    The imshow image object.
+
+                Raises
+                ------
+                ValueError
+                    If date is not found in the extract time axis.
                 """
                 g = self._load_extracted_globals()
                 t_all = g["t_all"]
@@ -742,8 +1032,14 @@ class PhenologyVisualization:
                 lake_id = int(os.path.basename(self.p_path)[:-3])
                 lake_row = self.geom[self.geom["id"] == lake_id]
                 geom = lake_row.geometry.iloc[0]
+                buffered_geom = self.shrink_geometry_by_1km(geom)
+                buffered_geom_prepared = prep(buffered_geom)
 
-                map_data = np.where(mask, values, np.nan)
+                map_data = np.full(values.shape, np.nan)
+                for i in range(values.shape[0]):
+                        for j in range(values.shape[1]):
+                                if mask[i, j] and buffered_geom_prepared.contains(Point(lons[j], lats[i])):
+                                        map_data[i, j] = values[i, j]
                 fig, ax = plt.subplots(1, 1, figsize=(10, 5))
                 im = ax.imshow(map_data, cmap="winter", aspect="auto", origin="lower",
                                extent=[lons.min(), lons.max(), lats.min(), lats.max()])
@@ -762,14 +1058,24 @@ class PhenologyVisualization:
                 fig.colorbar(im, orientation='vertical', label='chla (ug/L)')
                 plt.xticks([])
                 plt.yticks([])
-                plt.title(datenum_to_datetime(np.array([date]))[0].strftime("%Y-%m-%d"))
+                plt.title(date.strftime("%Y-%m-%d"))
                 return im
 
 
 
 
         def _load_extracted_globals(self):
-                """Lazily load and cache lat, lon, time array, and variable/QA names from the extract dataset."""
+                """Lazily load and cache shared arrays from the extract dataset.
+
+                On the first call, opens the extract NetCDF and stores lat, lon, the full
+                time array as datenums, and the variable and QA attribute names. Subsequent
+                calls return the cached dict without reopening the file.
+
+                Returns
+                -------
+                dict
+                    Dictionary with keys: 'lat', 'lon', 't_all', 'variable', 'qa'.
+                """
                 if self._extracted_globals is None:
                         with netCDF4.Dataset(self.e_path) as nc:
                                 self._extracted_globals= {
@@ -782,7 +1088,25 @@ class PhenologyVisualization:
                 return self._extracted_globals
         
         def _load_pixel_data(self, i,j):
-                """Lazily load and cache all phenology arrays (values, QA, smoothing, peaks, troughs, midpoints) for pixel (i, j)."""
+                """Lazily load and cache all phenology arrays for a single pixel.
+
+                On the first call for (i, j), reads values, QA, smoothing parameter, peaks,
+                troughs, and green-up/green-down midpoints from both NetCDF files. Results
+                are cached in self._pixel_cache for reuse across subsequent calls.
+
+                Parameters
+                ----------
+                i : int
+                    Row (lat) index of the pixel.
+                j : int
+                    Column (lon) index of the pixel.
+
+                Returns
+                -------
+                dict
+                    Dictionary with keys: 'values', 'qa', 'smoothing', 'pks_x', 'pks_y',
+                    'trgs_x', 'trgs_y', 'midUP_x', 'midUP_y', 'midDOWN_x', 'midDOWN_y'.
+                """
                 if (i,j) not in self._pixel_cache:
                         g = self._load_extracted_globals()
                         with netCDF4.Dataset(self.e_path) as nc:
@@ -806,7 +1130,23 @@ class PhenologyVisualization:
                 return self._pixel_cache[(i,j)]
 
         def load_pixel_data(self, i, j):
-                """Return a datetime-indexed Series of valid (QA==0, value!=-9999) observations for pixel (i, j)."""
+                """Return a datetime-indexed Series of valid observations for pixel (i, j).
+
+                Filters the raw extract time series to keep only observations that pass
+                both the fill-value check (value != -9999) and QA flag == 0.
+
+                Parameters
+                ----------
+                i : int
+                    Row (lat) index of the pixel.
+                j : int
+                    Column (lon) index of the pixel.
+
+                Returns
+                -------
+                pandas.Series
+                    Float values indexed by datetime, containing only valid (QA==0) observations.
+                """
                 g = self._load_extracted_globals()
                 px = self._load_pixel_data(i, j)
                 t_all = g["t_all"]
@@ -817,7 +1157,46 @@ class PhenologyVisualization:
 
 
         def extrema_plot(self, latitude, longitude, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False):
-                """Stem-plot detected peaks or troughs with optional raw/aggregated scatter background; pass peak=False for troughs, use start/end to restrict the year range."""
+                """Plot detected peaks or troughs as a stem plot with optional background scatter.
+
+                Displays summer peaks or winter troughs for the pixel at (latitude, longitude)
+                as vertical stems. Background observations may be shown as a raw scatter or
+                3×3 spatial median (aggregation=True). Negative values are flagged with red
+                crosses and trigger a warning.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                ax : matplotlib.axes.Axes
+                    Axes on which to draw the plot.
+                peak : bool, optional
+                    If True (default), plot summer peaks. If False, plot troughs.
+                aggregation : bool, optional
+                    If True, show the 3×3 neighbourhood median instead of raw scatter.
+                    Requires spatial_aggregation() to have been called or available cache.
+                start : int, optional
+                    First year to display (inclusive). 0 = earliest in the series.
+                end : int, optional
+                    Last year to display (inclusive). 9999 = latest in the series.
+                background_pts : bool, optional
+                    If True (default), show scatter background observations.
+                    Cannot be False when aggregation is True.
+                purple_chla21 : bool, optional
+                    Unused colour-override flag kept for API compatibility.
+
+                Returns
+                -------
+                float or None
+                    The upper y-axis limit set for the plot, or None if there is no data.
+
+                Raises
+                ------
+                ValueError
+                    If background_pts is False and aggregation is True simultaneously.
+                """
 
 
                 g = self._load_extracted_globals()
@@ -883,7 +1262,6 @@ class PhenologyVisualization:
 
                         if aggregation:
                                 if self.aggregation_df is None:
-                                        warnings.warn("Aggregation needs to be calculated, this may take a few minutes")
                                         self.spatial_aggregation()
 
                                 background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
@@ -938,7 +1316,46 @@ class PhenologyVisualization:
 
 
         def extrema_comparison(self, other1,  latitude, longitude, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = False, other2= None, purple_chla21= False):
-                """Overlay extrema plots from two (or three with other2) PhenologyVisualization objects on one axis; self and other1/other2 must share the same lake ID."""
+                """Overlay extrema plots from two or three PhenologyVisualization instances on one axis.
+
+                Calls extrema_plot for self and other1 (and optionally other2), sharing the
+                same axes so that peaks or troughs from different products (e.g. chla v2.1
+                vs v3.1) can be compared directly. All instances must reference the same lake.
+
+                Parameters
+                ----------
+                other1 : PhenologyVisualization
+                    Second instance to overlay (must share the same lake ID as self).
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                ax : matplotlib.axes.Axes
+                    Axes on which to draw all overlaid plots.
+                peak : bool, optional
+                    If True (default), compare peaks. If False, compare troughs.
+                aggregation : bool, optional
+                    If True, use the 3×3 neighbourhood median as background scatter.
+                start : int, optional
+                    First year to display (inclusive). 0 = earliest.
+                end : int, optional
+                    Last year to display (inclusive). 9999 = latest.
+                background_pts : bool, optional
+                    If True, show background scatter for each overlay. Default False.
+                other2 : PhenologyVisualization, optional
+                    Optional third instance to overlay. Must share the same lake ID.
+                purple_chla21 : bool, optional
+                    Colour-override flag forwarded to each extrema_plot call.
+
+                Returns
+                -------
+                None
+
+                Raises
+                ------
+                Warning
+                    If self, other1, or other2 do not all reference the same lake ID.
+                """
 
 
                 g = self._load_extracted_globals()
@@ -1027,7 +1444,34 @@ class PhenologyVisualization:
 
 
         def single_plot_background(self, latitude, longitude, ax, fig, aggregation = False, start= 0, end= 9999):
-                """Like single_plot but colours scatter points by QA flag and adds a QA colorbar; pass fig for colorbar placement."""
+                """Plot a pixel time series with QA-coloured scatter, spline, and phenological events.
+
+                Like single_plot, but colours each background scatter point by its QA flag
+                using a discrete colormap and adds a QA colorbar to the figure. Peaks,
+                troughs, green-up and green-down midpoints are overlaid as scatter markers.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                ax : matplotlib.axes.Axes
+                    Axes on which to draw the plot.
+                fig : matplotlib.figure.Figure
+                    Figure used to attach the QA colorbar.
+                aggregation : bool, optional
+                    If True, replace raw scatter with the 3×3 neighbourhood median.
+                    Requires spatial_aggregation() to have been called or available cache.
+                start : int, optional
+                    First year to display (inclusive). 0 = earliest in the series.
+                end : int, optional
+                    Last year to display (inclusive). 9999 = latest in the series.
+
+                Returns
+                -------
+                None
+                """
 
                 with netCDF4.Dataset(self.e_path) as nc:
                         # change np.array to np.asarry to avoid getting DeprecationError
@@ -1129,7 +1573,6 @@ class PhenologyVisualization:
 
                                 if aggregation:
                                         if self.aggregation_df is None:
-                                                warnings.warn("Aggregation needs to be calculated, this may take a few minutes")
                                                 self.spatial_aggregation()
 
                                         background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
@@ -1216,7 +1659,24 @@ class PhenologyVisualization:
 
 
         def count_peaks(self, latitude, longitude, start= 0, end= 9999):
-                """Return the number of detected peaks for a pixel within the given year range."""
+                """Return the number of detected peaks for a pixel within a year range.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                start : int, optional
+                    First year to include (inclusive). 0 = earliest in the series.
+                end : int, optional
+                    Last year to include (inclusive). 9999 = latest in the series.
+
+                Returns
+                -------
+                int
+                    Number of peaks falling within the specified year range.
+                """
                 with netCDF4.Dataset(self.p_path) as nc:
                         pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
                         mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
@@ -1225,34 +1685,161 @@ class PhenologyVisualization:
                         return len(pks_x_sub)
                 
         def pixel_r2(self, latitude, longitude, start, end):
-                """Return the R2 score for a single pixel; triggers full lake computation and CSV cache on first call."""
+                """Return the R² score for a single pixel within a year range.
+
+                Delegates to r2_scores, which may trigger full-lake parallel computation
+                and CSV caching on the first call for this year range.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                start : int
+                    First year of the evaluation window (0 = full series start).
+                end : int
+                    Last year of the evaluation window (9999 = full series end).
+
+                Returns
+                -------
+                float
+                    R² score for the pixel, or np.nan if insufficient data.
+                """
                 scores = self.r2_scores([(start, end)])
                 return scores[(latitude, longitude)]
 
         def pixel_rmse(self, latitude, longitude, start, end):
-                """Return the RMSE for a single pixel; triggers full lake computation and CSV cache on first call."""
+                """Return the RMSE for a single pixel within a year range.
+
+                Delegates to RMSE_scores, which may trigger full-lake parallel computation
+                and CSV caching on the first call for this year range.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                start : int
+                    First year of the evaluation window (0 = full series start).
+                end : int
+                    Last year of the evaluation window (9999 = full series end).
+
+                Returns
+                -------
+                float
+                    RMSE value for the pixel, or np.nan if insufficient data.
+                """
                 scores = self.RMSE_scores([(start, end)])
                 return scores[(latitude, longitude)]
 
         def pixel_mad(self, latitude, longitude, start, end):
-                """Return the MAD for a single pixel; triggers full lake computation and CSV cache on first call."""
+                """Return the Median Absolute Deviation for a single pixel within a year range.
+
+                Delegates to MAD_scores, which may trigger full-lake parallel computation
+                and CSV caching on the first call for this year range.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                start : int
+                    First year of the evaluation window (0 = full series start).
+                end : int
+                    Last year of the evaluation window (9999 = full series end).
+
+                Returns
+                -------
+                float
+                    MAD value for the pixel, or np.nan if insufficient data.
+                """
                 scores = self.MAD_scores([(start, end)])
                 return scores[(latitude, longitude)]
 
         def pixel_correlation(self, latitude, longitude, start, end):
-                """Return the Pearson correlation for a single pixel; triggers full lake computation and CSV cache on first call."""
+                """Return the Pearson correlation coefficient for a single pixel within a year range.
+
+                Delegates to correlation_scores, which may trigger full-lake parallel
+                computation and CSV caching on the first call for this year range.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                start : int
+                    First year of the evaluation window (0 = full series start).
+                end : int
+                    Last year of the evaluation window (9999 = full series end).
+
+                Returns
+                -------
+                float
+                    Pearson r for the pixel, or np.nan if insufficient data.
+                """
                 scores = self.correlation_scores([(start, end)])
                 return scores[(latitude, longitude)]
 
         def pixel_values(self, latitude, longitude, start, end):
-                """Return the valid observation count for a single pixel; triggers full lake computation and CSV cache on first call."""
+                """Return the valid observation count for a single pixel within a year range.
+
+                Delegates to values_per_pixel, which may trigger full-lake parallel
+                computation and CSV caching on the first call for this year range.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                start : int
+                    First year of the evaluation window (0 = full series start).
+                end : int
+                    Last year of the evaluation window (9999 = full series end).
+
+                Returns
+                -------
+                int
+                    Number of valid (QA==0, value!=-9999) observations in the window.
+                """
                 scores = self.values_per_pixel([(start, end)])
                 return scores[(latitude, longitude)]
 
 
 
         def single_plot(self, latitude, longitude, ax, aggregation = False, start= 0, end= 9999):
-                """Plot raw observations, the smoothed spline, and all phenological events for a pixel; use start/end to restrict the year range displayed."""
+                """Plot raw observations, the smoothed spline, and all phenological events for a pixel.
+
+                Displays a scatter of valid (QA==0) observations or 3×3 aggregated values,
+                overlaid with the csaps spline and scatter markers for peaks, troughs,
+                green-up midpoints, and green-down midpoints. Negative values are flagged
+                with red crosses and trigger a warning. Fit metrics (RMSE, R², MAD) are
+                annotated on the plot.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                ax : matplotlib.axes.Axes
+                    Axes on which to draw the plot.
+                aggregation : bool, optional
+                    If True, replace raw scatter with the 3×3 neighbourhood spatial median.
+                    Requires spatial_aggregation() to have been called or available cache.
+                start : int, optional
+                    First year to display (inclusive). 0 = earliest in the series.
+                end : int, optional
+                    Last year to display (inclusive). 9999 = latest in the series.
+
+                Returns
+                -------
+                None
+                """
 
 
                 g  = self._load_extracted_globals()
@@ -1317,7 +1904,6 @@ class PhenologyVisualization:
 
                                 if aggregation:
                                         if self.aggregation_df is None:
-                                                warnings.warn("Aggregation needs to be calculated, this may take a few minutes")
                                                 self.spatial_aggregation()
 
                                         background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
@@ -1400,7 +1986,37 @@ class PhenologyVisualization:
 
 
         def split_plot(self, latitude, longitude, ax0, ax1, aggregation = False, start0= 0, end0= 9999, start1= 0, end1=9999):
-                """Call single_plot twice on ax0/ax1 for two different year windows; set start0/end0 and start1/end1 to define each window."""
+                """Plot two year-windowed single_plots side by side for the same pixel.
+
+                Calls single_plot twice — once on ax0 with [start0, end0] and once on ax1
+                with [start1, end1]. Intended for comparing two non-overlapping time periods
+                at the same pixel.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                ax0 : matplotlib.axes.Axes
+                    Axes for the first time window.
+                ax1 : matplotlib.axes.Axes
+                    Axes for the second time window.
+                aggregation : bool, optional
+                    If True, use 3×3 spatial median scatter on both panels.
+                start0 : int, optional
+                    First year of the first window. 0 = earliest in the series.
+                end0 : int, optional
+                    Last year of the first window. 9999 = latest in the series.
+                start1 : int, optional
+                    First year of the second window. 0 = earliest in the series.
+                end1 : int, optional
+                    Last year of the second window. 9999 = latest in the series.
+
+                Returns
+                -------
+                None
+                """
                 if start0 and start1 == 0 and end0 and end1 == 9999:
                         warnings.warn("split_plot needs a least end0 and start1 parameter, otherwise use full_plot")
 
@@ -1408,7 +2024,26 @@ class PhenologyVisualization:
                 self.single_plot(latitude = latitude, longitude= longitude, ax=ax1, aggregation = aggregation, start=start1, end=end1)
 
         def full_plot(self, latitude, longitude, ax, aggregation = False):
-                """Plot the complete valid time series for a pixel by auto-detecting the year range and delegating to single_plot."""
+                """Plot the complete valid time series for a pixel.
+
+                Auto-detects the first and last years with valid observations and
+                delegates to single_plot with those bounds.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                ax : matplotlib.axes.Axes
+                    Axes on which to draw the plot.
+                aggregation : bool, optional
+                    If True, use 3×3 neighbourhood spatial median scatter.
+
+                Returns
+                -------
+                None
+                """
                 with netCDF4.Dataset(self.e_path) as nc:
                         t_all = unix_to_datenum(nc.variables["time"])
                         variable = getattr(nc, "variable")

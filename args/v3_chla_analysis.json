@@ -4,12 +4,12 @@
   "shapefile": "C:/Users/sparksno/Desktop/data_Phenology/shapefile/lakescci_v2.1.0_data-availability.shp",
   "images": "", 
   "out_folder": "C:/Users/sparksno/Desktop/analysis_test/data/v2.1",
-  "lakes": [327, 4953],
+  "lakes": [327],
   "extract": false,
   "phenology": false,
   "analysis": true,
   "maps": true,
-  "time_splits": [[0,2012],[2016,9999]], 
-  "pixel_plots": "C:/Users/sparksno/Documents/GitHub/cci-cyano-production/pixel_dicts/v2_chla_pixels.json",
-  "comparison" : true
+  "comparison": true,
+  "time_splits": [[0,9999]], 
+  "pixel_plots": "C:/Users/sparksno/Documents/GitHub/cci-cyano-production/pixel_dicts/v2_chla_pixels.json"
 }
