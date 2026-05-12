@@ -343,6 +343,10 @@ def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_
 
 
 def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_splits, summary_types=["n_peaks", "r2", "rmse", "mad", "correlation", "values"]):
+
+    with netCDF4.Dataset(eda_instance.p_path) as nc:
+        smoothing_arr = nc.variables["smoothing_parameter"][:]
+
     for i, j in pixels:
         out_path = os.path.join(lake_analysis_folder, lake_str, "plots", "pixel_plots", "summaries", f"{i}_{j}")
         os.makedirs(out_path, exist_ok=True)
@@ -350,6 +354,7 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
 
         with open(txt_path, "w") as file:
             file.write(f"{eda_instance.variable} {eda_instance.version}:\n")
+            file.write(f"    Smoothing Parameter: {float(smoothing_arr[i, j])}\n")
             for start, end in time_splits:
                 if start == 0 and end == 9999:
                     label = "full ts"
