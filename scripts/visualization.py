@@ -1015,6 +1015,11 @@ class PhenologyVisualization:
                 ValueError
                     If date is not found in the extract time axis.
                 """
+                date = pd.Timestamp(date)
+                if date.tzinfo is None:
+                        date = date.tz_localize("UTC")
+                else:
+                        date = date.tz_convert("UTC")
                 g = self._load_extracted_globals()
                 t_all = g["t_all"]
                 idx = np.argwhere(datenum_to_datetime(t_all) == date)
