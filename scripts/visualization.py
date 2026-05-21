@@ -1162,7 +1162,7 @@ class PhenologyVisualization:
                 return pd.Series(index=time_dt,data=values_m)
 
 
-        def extrema_plot(self, latitude, longitude, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False):
+        def extrema_plot(self, latitude, longitude, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False, show_legend = True):
                 """Plot detected peaks or troughs as a stem plot with optional background scatter.
 
                 Displays summer peaks or winter troughs for the pixel at (latitude, longitude)
@@ -1241,7 +1241,7 @@ class PhenologyVisualization:
                         neg_values_sub =[]
                         neg_label_before = False
                         phenology_name = os.path.basename(os.path.dirname(self.p_path))
-                        if background_pts or purple_chla21:
+                        if purple_chla21:
                                 if phenology_name == "phycocyanin":
                                         label = "phyco"
                                         color = "blue"
@@ -1276,9 +1276,9 @@ class PhenologyVisualization:
 
                                 background_values = background_sub["MA_value"]
 
-                                ax.scatter(datenum_to_datetime(background_time), background_values, color=color, alpha=0.1, s=10, label=f"{label} Data")
+                                ax.scatter(datenum_to_datetime(background_time), background_values, color=color, alpha=0.3, s=10, label=f"{label} Data")
                         elif background_pts and not aggregation:
-                                ax.scatter(datenum_to_datetime(time_m), values_m, color=color, alpha=0.1, s=10, label=f"{label} Data")
+                                ax.scatter(datenum_to_datetime(time_m), values_m, color=color, alpha=0.3, s=10, label=f"{label} Data")
                         else:
                                 pass
 
@@ -1294,8 +1294,8 @@ class PhenologyVisualization:
                                 neg_label_before = True
                                 warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
 
-
-                        ax.legend(loc="upper left", ncol= 2)
+                        if show_legend:
+                                ax.legend(loc="upper left", ncol= 2)
                         if peak:
                                 textstr = f"Peak Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
                         else:
@@ -1304,7 +1304,7 @@ class PhenologyVisualization:
                         ax.xaxis.set_minor_locator(mdates.YearLocator())
                         ax.grid(axis="x", which="minor", linewidth=0.5)
                         ax.grid(axis="x", which="major", linewidth=0.5)
-                        ax.grid(axis="y")
+                        ax.grid(axis="y", linewidth=0.5)
                         ax.set_ylabel("[ug/L]")
 
                         ax.set_xlim(pd.to_datetime('01-01-' + str(function_start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(function_end), format='%d-%m-%Y'))
@@ -1324,7 +1324,7 @@ class PhenologyVisualization:
 
 
 
-        def extrema_comparison(self, other1,  latitude, longitude, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = False, other2= None, purple_chla21= False):
+        def extrema_comparison(self, other1,  latitude, longitude, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = False, other2= None, purple_chla21= False, show_legend= False):
                 """Overlay extrema plots from two or three PhenologyVisualization instances on one axis.
 
                 Calls extrema_plot for self and other1 (and optionally other2), sharing the
@@ -1380,9 +1380,9 @@ class PhenologyVisualization:
                 if other2:
                         if lakeID2!= lakeID3:
                                 raise Warning("Comparison must be made on the same lake!")
-                        ymax1 = self.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21)
-                        ymax2 = other1.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21)
-                        ymax3 = other2.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21)
+                        ymax1 = self.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
+                        ymax2 = other1.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
+                        ymax3 = other2.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
                         y_lims = [ymax1, ymax2, ymax3]
                         phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
                         phenology_name2 = os.path.basename(os.path.dirname(other1.p_path))
@@ -1419,13 +1419,14 @@ class PhenologyVisualization:
                         ax.xaxis.set_minor_locator(mdates.YearLocator())
                         ax.grid(axis="x", which="minor", linewidth=0.5)
                         ax.grid(axis="x", which="major", linewidth=0.5)
-                        ax.grid(axis="y")
+                        ax.grid(axis="y", linewidth=0.5)
                         ax.set_ylabel("[ug/L]")
+                        ax.legend(loc="upper left", ncol= 2)
 
                 else:
 
-                        ymax1 = self.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak= peak, aggregation = aggregation, start = start, end = end)
-                        ymax2 = other1.extrema_plot(latitude=latitude, longitude=longitude, ax = ax,  peak= peak, aggregation = aggregation, start = start, end = end)
+                        ymax1 = self.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak= peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
+                        ymax2 = other1.extrema_plot(latitude=latitude, longitude=longitude, ax = ax,  peak= peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
                         y_lims = [ymax1, ymax2]
                         phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
                         phenology_name2 = os.path.basename(os.path.dirname(other1.p_path))
@@ -1453,9 +1454,10 @@ class PhenologyVisualization:
                         ax.xaxis.set_minor_locator(mdates.YearLocator())
                         ax.grid(axis="x", which="minor", linewidth=0.5)
                         ax.grid(axis="x", which="major", linewidth=0.5)
-                        ax.grid(axis="y")
+                        ax.grid(axis="y", linewidth=0.5)
                         ax.set_ylabel("[ug/L]")
-                        
+                        ax.legend(loc="upper left", ncol= 2)
+
 
 
 
@@ -1995,10 +1997,10 @@ class PhenologyVisualization:
                                 else:
                                         ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-1]+0.5)
 
-                                if neg_values_sub:
-                                        ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {round(rmse_sub,4)}\n R$^2$: {round(r2_sub,4)}\n MAD: {round(mad_sub, 4)}", transform = ax.transAxes,   ha= "right", va= "top")
-                                else:
-                                        ax.text(0.99,0.99,f"RMSE:{round(rmse_sub,4)} \n R$^2$: {round(r2_sub,4)}\n MAD: {round(mad_sub, 4)}", transform = ax.transAxes,   ha= "right", va= "top")
+                                # if neg_values_sub:
+                                #         ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {round(rmse_sub,4)}\n R$^2$: {round(r2_sub,4)}\n MAD: {round(mad_sub, 4)}", transform = ax.transAxes,   ha= "right", va= "top")
+                                # else:
+                                #         ax.text(0.99,0.99,f"RMSE:{round(rmse_sub,4)} \n R$^2$: {round(r2_sub,4)}\n MAD: {round(mad_sub, 4)}", transform = ax.transAxes,   ha= "right", va= "top")
                         else:
                                 warnings.warn("Not enough data to plot or compute metrics for chosen time interval")
                 else:

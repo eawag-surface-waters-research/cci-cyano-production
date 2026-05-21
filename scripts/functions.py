@@ -32,7 +32,7 @@ def parse_args(args):
         "comparison_classes": ["chla21", "chla31", "phycocyanin31"],
         "comparison_plot_types": ["chla21 vs chla31", "chla21 vs phyco", "chla31 vs phyco", "triple"],
         "background_pts": True,
-        "purple_chla21": False,
+        "purple_chla21": True,
         "time_splits" : [(0,9999)], 
         # "start":0,
         # "end":9999,
@@ -281,7 +281,7 @@ def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_
         os.makedirs(out_path, exist_ok=True)
         fig, ax = plt.subplots(1,1)
         eda_instance.pixel_map(i,j, ax)
-        # ax.set_ylim(bottom=-0.5)
+        
         fig.savefig(os.path.join(out_path, "location.png"),dpi=600)
         plt.close(fig)
 
@@ -296,6 +296,7 @@ def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_
             ax = axs if num_splits == 1 else np.atleast_1d(axs).flatten()[num]
             eda_instance.single_plot(ax=ax, latitude=i, longitude=j, aggregation=aggregation, start=start, end=end)
             ax.set_ylim(bottom=-0.5)
+            
 
         if num_splits == 1:
             start, end = time_splits[0]
@@ -322,6 +323,7 @@ def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_
             ax = axs if num_splits == 1 else np.atleast_1d(axs).flatten()[num]
             eda_instance.extrema_plot(ax=ax, latitude=i, longitude=j, aggregation=aggregation, start=start, end=end, peak=True)
             ax.set_ylim(bottom=-0.5)
+         
 
         if num_splits == 1:
             start, end = time_splits[0]
@@ -435,9 +437,9 @@ def save_comparison_plots(instances, pixels, lake_analysis_folder, lake_str,
                 inst1.extrema_comparison(
                     inst2, i, j, axs_flat[k],
                     aggregation=aggregation, start=start, end=end,
-                    background_pts=background_pts if inst3 else False,
+                    background_pts=background_pts,
                     other2=inst3,
-                    purple_chla21=purple_chla21 if inst3 else False
+                    purple_chla21=purple_chla21
                 )
 
             fig.savefig(os.path.join(save_path, file_name), dpi=600)

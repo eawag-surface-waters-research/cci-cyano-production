@@ -89,7 +89,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
                 else:
                     logging.info(f"WARNING: lake {lake['id']} is not in the pixel dictionary")
                     continue
-                    
+
             if args["comparison"]:
                 logging.info("Starting Comparison Plots")
                 if not args["pixel_plots"]:

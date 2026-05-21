@@ -1,15 +1,18 @@
 {
-  "variable": "chla_mean",
+  "variable": "chla",
   "qa": "lwlr_quality_flags",
   "shapefile": "C:/Users/sparksno/Desktop/data_Phenology/shapefile/lakescci_v2.1.0_data-availability.shp",
   "images": "", 
-  "out_folder": "C:/Users/sparksno/Desktop/analysis_test/data/v2.1",
-  "lakes": [327, 300013962],
+  "out_folder": "C:/Users/sparksno/Desktop/analysis_test/data/v3.1",
+  "lakes": [12],
   "extract": false,
-  "phenology": false,
+  "phenology": false, 
   "analysis": true,
-  "maps": true,
+  "purple_chla21": false,
+  "maps": false,
+  "aggregation": false,
+  "background_pts": false,
   "comparison": true,
   "time_splits": [[0,9999]], 
-  "pixel_plots": "C:/Users/sparksno/Documents/GitHub/cci-cyano-production/pixel_dicts/v2_chla_pixels.json"
+  "pixel_plots": "C:/Users/sparksno/Documents/GitHub/cci-cyano-production/pixel_dicts/v3_chla_pixels.json"
 }
