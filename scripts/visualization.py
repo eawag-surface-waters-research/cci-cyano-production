@@ -1,6 +1,7 @@
 import pandas as pd
 import netCDF4
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import numpy as np
 import datetime
 import os
@@ -1300,8 +1301,11 @@ class PhenologyVisualization:
                         else:
                                 textstr = f"Trough Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
                         ax.set_title(textstr)
+                        ax.xaxis.set_minor_locator(mdates.YearLocator())
+                        ax.grid(axis="x", which="minor", linewidth=0.5)
+                        ax.grid(axis="x", which="major", linewidth=0.5)
+                        ax.grid(axis="y")
                         ax.set_ylabel("[ug/L]")
-                        ax.grid()
 
                         ax.set_xlim(pd.to_datetime('01-01-' + str(function_start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(function_end), format='%d-%m-%Y'))
                         pks_lim_sub = sorted(y_sub)
@@ -1412,7 +1416,11 @@ class PhenologyVisualization:
                                 textr =  f"{phenology_name1}, {phenology_name2} vs {phenology_name3} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
                         ax.set_title(textr)
                         ax.set_ylim(top = max(y_lims))
-                        ax.grid(True)
+                        ax.xaxis.set_minor_locator(mdates.YearLocator())
+                        ax.grid(axis="x", which="minor", linewidth=0.5)
+                        ax.grid(axis="x", which="major", linewidth=0.5)
+                        ax.grid(axis="y")
+                        ax.set_ylabel("[ug/L]")
 
                 else:
 
@@ -1442,8 +1450,12 @@ class PhenologyVisualization:
                         
                         ax.set_title(textr)
                         ax.set_ylim(top = max(y_lims))
+                        ax.xaxis.set_minor_locator(mdates.YearLocator())
+                        ax.grid(axis="x", which="minor", linewidth=0.5)
+                        ax.grid(axis="x", which="major", linewidth=0.5)
+                        ax.grid(axis="y")
                         ax.set_ylabel("[ug/L]")
-                        ax.grid()
+                        
 
 
 
@@ -1969,7 +1981,10 @@ class PhenologyVisualization:
                                 ax.legend(loc="upper left", ncol= 2)
                                 textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}\n Total RMSE, R$^2$, MAD: {round(rmse_tot,4)}, {round(r2_tot, 4)}, {round(mad_tot,4)}"
                                 ax.set_title(textstr)
-                                ax.grid()
+                                ax.xaxis.set_minor_locator(mdates.YearLocator())
+                                ax.grid(axis="x", which="minor", linewidth=0.5)
+                                ax.grid(axis="x", which="major", linewidth=0.5)
+                                ax.grid(axis="y")
                                 ax.set_ylabel("[ug/L]")
                                 ax.set_xlim(pd.to_datetime('01-01-' + str(function_start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(function_end), format='%d-%m-%Y'))
 
