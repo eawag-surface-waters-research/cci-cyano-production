@@ -1061,7 +1061,7 @@ class PhenologyVisualization:
                                         label="Lake Outline" if not label else None)
                                 label = True
 
-                fig.colorbar(im, orientation='vertical', label='chla (ug/L)')
+                fig.colorbar(im, orientation='vertical', label=f'{self.variable} (ug/L)')
                 plt.xticks([])
                 plt.yticks([])
                 plt.title(date.strftime("%Y-%m-%d"))
