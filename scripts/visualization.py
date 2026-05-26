@@ -1830,7 +1830,7 @@ class PhenologyVisualization:
 
 
 
-        def single_plot(self, latitude, longitude, ax, aggregation = False, start= 0, end= 9999):
+        def single_plot(self, latitude, longitude, ax, aggregation = False, start= 0, end= 9999, annotation = None):
                 """Plot raw observations, the smoothed spline, and all phenological events for a pixel.
 
                 Displays a scatter of valid (QA==0) observations or 3×3 aggregated values,
@@ -1992,15 +1992,51 @@ class PhenologyVisualization:
 
 
                                 pks_lim_sub = sorted(pks_y_sub)
-                                if max(pks_lim_sub)> 10:
-                                        ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-2]+0.5)
-                                else:
-                                        ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-1]+0.5)
-
-                                # if neg_values_sub:
-                                #         ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {round(rmse_sub,4)}\n R$^2$: {round(r2_sub,4)}\n MAD: {round(mad_sub, 4)}", transform = ax.transAxes,   ha= "right", va= "top")
+                                # if max(pks_lim_sub)> 10:
+                                #         ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-2]+0.5)
                                 # else:
-                                #         ax.text(0.99,0.99,f"RMSE:{round(rmse_sub,4)} \n R$^2$: {round(r2_sub,4)}\n MAD: {round(mad_sub, 4)}", transform = ax.transAxes,   ha= "right", va= "top")
+                                #         ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-1]+0.5)
+
+
+
+                                trgs_lim_sub = sorted(trgs_y_sub)
+
+                                if len(pks_lim_sub) > 0 and len(trgs_lim_sub) > 0:
+
+                                        ymax = pks_lim_sub[-1]
+
+                                        if ymax > 10 and len(pks_lim_sub) > 1:
+                                                ymax = pks_lim_sub[-2]
+
+                                        ymin = trgs_lim_sub[0]
+
+                                        ax.set_ylim(ymin - 0.5, ymax + 0.5)
+
+                                else:
+                                        warnings.warn(
+                                                f"No peaks/troughs available for {start}-{end}; using automatic y-limits."
+                                        )
+                                if not annotation:
+                                        if neg_values_sub:
+                                                ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {round(rmse_sub,3)}\n R$^2$: {round(r2_sub,3)}\n MAD: {round(mad_sub, 3)}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
+                                        else:
+                                                ax.text(0.99,0.99,f"RMSE:{round(rmse_sub,3)} \n R$^2$: {round(r2_sub,3)}\n MAD: {round(mad_sub, 3)}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
+                                else:
+                             
+                                        lines = []
+                                        if "R2" in annotation:
+                                                lines.append(f"R$^2$: {round(r2_sub, 3)}")
+                                        if "RMSE" in annotation:
+                                                lines.append(f"RMSE: {round(rmse_sub, 3)}")
+                                        if "MAD" in annotation:
+                                                lines.append(f"MAD: {round(mad_sub, 3)}")
+                                        if "neg" in annotation and neg_values_sub:
+                                                lines.append(f"# Neg.values: {sum(neg_values_sub)}")
+                                        
+                                        if lines:
+                                                ax.text(0.99, 0.99, "\n".join(lines),
+                                                        transform=ax.transAxes, ha="right", va="top", zorder = 10)
+                                        
                         else:
                                 warnings.warn("Not enough data to plot or compute metrics for chosen time interval")
                 else:
@@ -2082,6 +2118,66 @@ class PhenologyVisualization:
 
                 else:
                         warnings.warn("No data to plot")
+
+
+        def single_years_plot(self, latitude, longitude, years, ncol, nrow, annotation, ylim=None):
+                """Plot one panel per year in a grid, each showing phenology for a single pixel.
+
+                Creates a figure with ``nrow × ncol`` subplots. Each subplot calls
+                :meth:`single_plot` for one year in *years*, with enlarged markers and
+                month-number x-axis labels. Panels beyond ``len(years)`` are hidden.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                years : list of int
+                    Calendar years to display, one per panel.
+                ncol : int
+                    Number of subplot columns.
+                nrow : int
+                    Number of subplot rows. Must satisfy ``ncol * nrow >= len(years)``.
+                annotation : list of str or None
+                    Passed to :meth:`single_plot`. Controls which fit metrics are shown
+                    (e.g. ``["R2", "RMSE", "MAD"]``). ``None`` shows all metrics.
+                ylim : tuple of (float, float) or None, optional
+                    If provided, sets the y-axis limits as ``(bottom, top)`` for every
+                    panel, overriding the automatic limits set by :meth:`single_plot`.
+
+                Returns
+                -------
+                matplotlib.figure.Figure
+                """
+                _MARKER_SIZES = {"Data": 50, "Peaks": 150, "Troughs": 150, "Mid Up": 150, "Mid Down": 150}
+
+                fig, axs = plt.subplots(nrow, ncol, constrained_layout=True, squeeze=False, figsize=(ncol * 5, nrow * 4))
+                for year, ax in zip(years, axs.flatten()):
+                        self.single_plot(latitude, longitude, ax, start=year, end=year, annotation=annotation)
+
+                        for col in ax.collections:
+                                if col.get_label() in _MARKER_SIZES:
+                                        col.set_sizes([_MARKER_SIZES[col.get_label()]])
+
+                        if ax.texts:
+                                ax.texts[-1].set_fontsize(15)
+
+                        legend = ax.get_legend()
+                        if legend is not None:
+                                legend.remove()
+                        if ylim is not None:
+                                ax.set_ylim(ylim)
+                        else:
+                                ax.set_ylim(bottom=-0.5)
+                        ax.set_title(str(year), fontsize=20)
+                        ax.set_ylabel("[ug/L]", fontsize=15)
+                        ax.xaxis.set_major_locator(mdates.MonthLocator())
+                        ax.xaxis.set_major_formatter(mdates.DateFormatter('%#m'))
+                        ax.tick_params(labelsize=15)
+
+                for ax in axs.flatten()[len(years):]:
+                        ax.set_visible(False)
 
 
 
