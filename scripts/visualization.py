@@ -2211,11 +2211,12 @@ class PhenologyVisualization:
                         insitu_mean[insitu_value_col],
                         color="red",
                         marker="D",
-                        s=30,
+                        s=20,
                         edgecolor="black",
                         linewidth=0.5,
                         zorder=5,
-                        label=f"In Situ (>{max_depth}m)"
+                        alpha= 0.5,
+                        label=f"In Situ (<{max_depth}m)"
                 )
 
                 # optional connecting line
