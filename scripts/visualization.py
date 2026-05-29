@@ -2169,7 +2169,7 @@ class PhenologyVisualization:
                         if ylim is not None:
                                 ax.set_ylim(ylim)
                         else:
-                                ax.set_ylim(bottom=-0.5)
+                                ax.set_ylim(bottom=-0.5,top = ax.get_ylim()[1]*1.5)
                         ax.set_title(str(year), fontsize=20)
                         ax.set_ylabel("[ug/L]", fontsize=15)
                         ax.xaxis.set_major_locator(mdates.MonthLocator())
