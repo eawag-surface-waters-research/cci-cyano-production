@@ -12,7 +12,7 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import pearsonr
 from csaps import csaps
-from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels
+from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data
 import multiprocessing
 from functools import partial
 import shapely.ops as ops
@@ -798,7 +798,7 @@ class PhenologyVisualization:
                                 print("invalid cell")
                                 return
 
-
+        
                         ax.text(
                         lon_idx, lat_idx,
                         f"{lat_idx},{lon_idx}",
@@ -2178,6 +2178,70 @@ class PhenologyVisualization:
 
                 for ax in axs.flatten()[len(years):]:
                         ax.set_visible(False)
+
+        def single_plot_insitu(self, latitude,longitude,ax,insitu_df,aggregation=False, start = 0, end = 9999, insitu_date_col="datetime", insitu_value_col="chlorophyll_a", insitu_station_col=None, station_id=None, max_depth = 5):
+                """
+                Plot satellite observations + spline + phenology + in situ overlay.
+                """
+
+                # -------------------------------------------------
+                # FIRST: draw the original plot
+                # -------------------------------------------------
+
+                self.single_plot(
+                        latitude=latitude,
+                        longitude=longitude,
+                        ax=ax,
+                        aggregation=aggregation,
+                        start=start,
+                        end=end)
+
+                # -------------------------------------------------
+                # PREPARE IN SITU DATA
+                # -------------------------------------------------
+
+                insitu_mean = prep_dimark_data(insitu_df = insitu_df,start=start, end=end,  insitu_date_col=insitu_date_col, insitu_value_col=insitu_value_col, insitu_station_col=insitu_station_col, station_id=station_id, max_depth = max_depth)
+                
+                # -------------------------------------------------
+                # OVERLAY IN SITU DATA
+                # -------------------------------------------------
+
+                ax.scatter(
+                        insitu_mean[insitu_date_col],
+                        insitu_mean[insitu_value_col],
+                        color="red",
+                        marker="D",
+                        s=30,
+                        edgecolor="black",
+                        linewidth=0.5,
+                        zorder=5,
+                        label=f"In Situ (>{max_depth}m)"
+                )
+
+                # optional connecting line
+                # ax.plot(
+                #         insitu[insitu_date_col],
+                #         insitu[insitu_value_col],
+                #         color="red",
+                #         alpha=0.5,
+                #         linewidth=1
+                # )
+
+                # -------------------------------------------------
+                # UPDATE LEGEND
+                # -------------------------------------------------
+
+                handles, labels = ax.get_legend_handles_labels()
+
+                by_label = dict(zip(labels, handles))
+
+                ax.legend(
+                        by_label.values(),
+                        by_label.keys(),
+                        loc="upper left",
+                        ncol=2
+                )
+
 
 
 

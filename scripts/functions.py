@@ -10,6 +10,7 @@ import warnings
 from scipy.sparse import SparseEfficiencyWarning
 import matplotlib.pyplot as plt
 from shapely.geometry import Point
+import pandas as pd
 
 warnings.filterwarnings("ignore", category=SparseEfficiencyWarning)
 
@@ -444,6 +445,33 @@ def save_comparison_plots(instances, pixels, lake_analysis_folder, lake_str,
 
             fig.savefig(os.path.join(save_path, file_name), dpi=600)
             plt.close(fig)
+
+
+def prep_dimark_data(insitu_df,start=0, end=9999,  insitu_date_col="datetime", insitu_value_col="chlorophyll_a", insitu_station_col=None, station_id=None, max_depth = 5):
+        insitu = insitu_df.copy()
+        insitu[insitu_date_col] = pd.to_datetime(
+                insitu[insitu_date_col], format = "mixed", dayfirst = True)
+
+
+        # optional station filtering
+        if (insitu_station_col is not None) and (station_id is not None):
+                insitu = insitu[
+                insitu[insitu_station_col] == station_id
+                ]
+
+        # time filtering
+        insitu = insitu[
+                (insitu[insitu_date_col].dt.year >= start) &
+                (insitu[insitu_date_col].dt.year <= end)
+        ]
+
+        # remove invalid values
+        insitu = insitu[
+                np.isfinite(insitu[insitu_value_col])]
+        insitu[insitu_date_col] = pd.to_datetime(insitu["datetime"]).dt.date
+        insitu = insitu[insitu["depth"]< max_depth]
+        insitu_mean = (insitu.groupby("datetime", as_index=False)[insitu_value_col].mean())
+        return insitu_mean
 
 
 def init_phenology_output(out, lat, lon, p=None):
