@@ -35,10 +35,21 @@ def plot(e_file, p_file):
         try:
             with netCDF4.Dataset(p_file) as nc:
                 smoothing = float(nc.variables["smoothing_parameter"][x, y])
-                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][x, y, :]))
-                pks_y = remove_nan(nc.variables["pks_y"][x, y, :])
-                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][x, y, :]))
-                trgs_y = remove_nan(nc.variables["trgs_y"][x, y, :])
+
+                pks_x_raw = np.array(nc.variables["pks_x"][x, y, :])
+                pk_mask = ~np.isnan(pks_x_raw)
+                pks_x = unix_to_datetime(pks_x_raw[pk_mask])
+                pks_y = np.array(nc.variables["pks_y"][x, y, :])[pk_mask]
+                pks_qa = np.array(nc.variables["pks_qa"][x, y, :])[pk_mask]
+
+                trgs_x_raw = np.array(nc.variables["trgs_x"][x, y, :])
+                trg_mask = ~np.isnan(trgs_x_raw)
+                trgs_x = unix_to_datetime(trgs_x_raw[trg_mask])
+                trgs_y = np.array(nc.variables["trgs_y"][x, y, :])[trg_mask]
+                trgs_qa = np.array(nc.variables["trgs_qa"][x, y, :])[trg_mask]
+
+                gap_starts = unix_to_datetime(remove_nan(nc.variables["data_gap_start"][x, y, :]))
+                gap_ends = unix_to_datetime(remove_nan(nc.variables["data_gap_end"][x, y, :]))
 
 
             with netCDF4.Dataset(e_file) as nc:
@@ -51,13 +62,40 @@ def plot(e_file, p_file):
             if len(values_m) > 1:
                 smooth_x = np.arange(t_all.min(), t_all.max() + 1, 1)
                 smooth_y = csaps(time_m, values_m, smooth_x, smooth=smoothing)
+                # Shade data gaps
+                for gs, ge in zip(gap_starts, gap_ends):
+                    ax_ts.axvspan(gs, ge, color="orange", alpha=0.15, zorder=0)
+                if len(gap_starts) > 0:
+                    ax_ts.axvspan(gap_starts[0], gap_ends[0], color="orange",
+                                  alpha=0.15, zorder=0, label="Data gap")
+
                 ax_ts.scatter(datenum_to_datetime(time_m), values_m,
                               color="grey", alpha=0.3, s=10, label="Data")
                 ax_ts.plot(datenum_to_datetime(smooth_x), smooth_y,
                            color="blue", linewidth=1, label="Spline")
-                ax_ts.scatter(pks_x, pks_y, color="red", s=60, marker="^", zorder=4, label="Peaks")
-                ax_ts.scatter(trgs_x, trgs_y, color="green", s=60, marker="v", zorder=4, label="Troughs")
-                ax_ts.legend()
+
+                # Peaks/troughs colored by QA flag (0=Good, 1=Fair, 2=Poor)
+                qa_colors = {0: "green", 1: "orange", 2: "red"}
+                qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
+                for qa in (0, 1, 2):
+                    pm = pks_qa == qa
+                    if pm.any():
+                        ax_ts.scatter(pks_x[pm], pks_y[pm], color=qa_colors[qa], s=60,
+                                      marker="^", edgecolors="black", linewidths=0.5,
+                                      zorder=4, label=f"Peak ({qa_labels[qa]})")
+                    tm = trgs_qa == qa
+                    if tm.any():
+                        ax_ts.scatter(trgs_x[tm], trgs_y[tm], color=qa_colors[qa], s=60,
+                                      marker="v", edgecolors="black", linewidths=0.5,
+                                      zorder=4, label=f"Trough ({qa_labels[qa]})")
+
+                # Scale y-axis to the peak/trough range (with a small margin)
+                feat_y = np.concatenate([pks_y, trgs_y])
+                if feat_y.size > 0:
+                    lo, hi = feat_y.min(), feat_y.max()
+                    pad = (hi - lo) * 0.1 or abs(hi) * 0.1 or 1.0
+                    ax_ts.set_ylim(lo - pad, hi + pad)
+                ax_ts.legend(fontsize=8)
             else:
                 ax_ts.text(0.5, 0.5, "No valid data for this cell",
                            transform=ax_ts.transAxes, ha="center", va="center")
