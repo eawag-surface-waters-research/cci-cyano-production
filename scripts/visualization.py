@@ -991,6 +991,37 @@ class PhenologyVisualization:
                            colorbar_ticks=[160, 185, 215, 250])
                 return im
         
+
+        def time_map_panel():
+                _MARKER_SIZES = {"Data": 50, "Peaks": 150, "Troughs": 150, "Mid Up": 150, "Mid Down": 150}
+
+                fig, axs = plt.subplots(nrow, ncol, constrained_layout=True, squeeze=False, figsize=(ncol * 5, nrow * 4))
+                for year, ax in zip(years, axs.flatten()):
+                        self.single_plot(latitude, longitude, ax, start=year, end=year, annotation=annotation)
+
+                        for col in ax.collections:
+                                if col.get_label() in _MARKER_SIZES:
+                                        col.set_sizes([_MARKER_SIZES[col.get_label()]])
+
+                        if ax.texts:
+                                ax.texts[-1].set_fontsize(15)
+
+                        legend = ax.get_legend()
+                        if legend is not None:
+                                legend.remove()
+                        if ylim is not None:
+                                ax.set_ylim(ylim)
+                        else:
+                                ax.set_ylim(bottom=-0.5,top = ax.get_ylim()[1]*1.5)
+                        ax.set_title(str(year), fontsize=20)
+                        ax.set_ylabel("[ug/L]", fontsize=15)
+                        ax.xaxis.set_major_locator(mdates.MonthLocator())
+                        ax.xaxis.set_major_formatter(mdates.DateFormatter('%#m'))
+                        ax.tick_params(labelsize=15)
+
+                for ax in axs.flatten()[len(years):]:
+                        ax.set_visible(False)
+        
         def single_day_map(self, date):
                 """Plot a spatial map of chlorophyll values for a single observation date.
 
