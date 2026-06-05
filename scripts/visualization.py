@@ -1,5 +1,7 @@
 import pandas as pd
 import netCDF4
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import numpy as np
@@ -943,7 +945,7 @@ class PhenologyVisualization:
                 return cid
         
 
-        def time_map(self, fig, ax, year, peaks=True, max = True):
+        def time_map(self, fig, ax, year, peaks=True, max = True, colorbar=True):
                 """Map the day-of-year of a phenological event across all pixels for one year.
 
                 For each valid pixel within the 1 km-inset lake boundary, extracts the
@@ -985,43 +987,45 @@ class PhenologyVisualization:
                                                   buffered_geom_prepared, var_x, var_y, year, max)
                 im = plot_map_data("rainbow", map_data, extent, ax, cmap_extent=[160, 250])
                 plot_lake_outline(geometry=geom, ax=ax)
-                set_labels(ax, fig, im,
-                           title=f"{extrema_label} Day of Year\n Lake ID: {lake_id}\n Year: {year}",
-                           colorbar_label="Day of Year",
-                           colorbar_ticks=[160, 185, 215, 250])
+                if colorbar:
+                        set_labels(ax, fig, im,
+                                   title=f"{extrema_label} Day of Year\n Lake ID: {lake_id}\n Year: {year}",
+                                   colorbar_label="Day of Year",
+                                   colorbar_ticks=[160, 185, 215, 250])
+                else:
+                        ax.set_title(f"{extrema_label} Day of Year\n Lake ID: {lake_id}\n Year: {year}")
+                        ax.set_xlabel("Lon index")
+                        ax.set_ylabel("Lat index")
+                        ax.legend()
                 return im
         
 
-        def time_map_panel():
-                _MARKER_SIZES = {"Data": 50, "Peaks": 150, "Troughs": 150, "Mid Up": 150, "Mid Down": 150}
-
+        def time_map_panel(self, years, nrow, ncol, peaks = True, max = True):
+                extrema_label = "Peak" if peaks else "Green Mid Up"
                 fig, axs = plt.subplots(nrow, ncol, constrained_layout=True, squeeze=False, figsize=(ncol * 5, nrow * 4))
+                im = None
                 for year, ax in zip(years, axs.flatten()):
-                        self.single_plot(latitude, longitude, ax, start=year, end=year, annotation=annotation)
-
-                        for col in ax.collections:
-                                if col.get_label() in _MARKER_SIZES:
-                                        col.set_sizes([_MARKER_SIZES[col.get_label()]])
-
-                        if ax.texts:
-                                ax.texts[-1].set_fontsize(15)
-
-                        legend = ax.get_legend()
-                        if legend is not None:
-                                legend.remove()
-                        if ylim is not None:
-                                ax.set_ylim(ylim)
-                        else:
-                                ax.set_ylim(bottom=-0.5,top = ax.get_ylim()[1]*1.5)
+                        im = self.time_map(fig=fig, ax=ax, year=year, peaks=peaks, max=max, colorbar=False)
                         ax.set_title(str(year), fontsize=20)
-                        ax.set_ylabel("[ug/L]", fontsize=15)
-                        ax.xaxis.set_major_locator(mdates.MonthLocator())
-                        ax.xaxis.set_major_formatter(mdates.DateFormatter('%#m'))
+                        ax.set_ylabel("Lat index", fontsize=15)
+                        ax.set_xlabel("Lon index", fontsize=15)
                         ax.tick_params(labelsize=15)
 
                 for ax in axs.flatten()[len(years):]:
                         ax.set_visible(False)
-        
+
+                if im is not None:
+                        cbar = fig.colorbar(im, ax=axs.ravel().tolist(), location="right", shrink=0.8)
+                        cbar.set_label("Day of Year", fontsize=20)
+                        cbar.set_ticks([160, 185, 215, 250])
+                        cbar.ax.tick_params(labelsize=15)
+
+                fig.suptitle(f"{extrema_label} Day of Year", fontsize=25)
+                
+                plt.show()
+
+
+
         def single_day_map(self, date):
                 """Plot a spatial map of chlorophyll values for a single observation date.
 
