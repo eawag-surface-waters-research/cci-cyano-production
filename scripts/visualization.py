@@ -1155,18 +1155,29 @@ class PhenologyVisualization:
                                 qa     = np.array(nc.variables[g["qa"]][:, i, j])
                         with netCDF4.Dataset(self.p_path) as nc:
                                 smoothing = float(nc.variables["smoothing_parameter"][i, j])
-                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][i, j, :]))
-                                pks_y = remove_nan(nc.variables["pks_y"][i, j, :])
-                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][i, j, :]))
-                                trgs_y = remove_nan(nc.variables["trgs_y"][i, j, :])
+                                pks_x_raw = np.array(nc.variables["pks_x"][i, j, :])
+                                pk_mask   = ~np.isnan(pks_x_raw)
+                                pks_x  = unix_to_datetime(pks_x_raw[pk_mask])
+                                pks_y  = np.array(nc.variables["pks_y"][i, j, :])[pk_mask]
+                                pks_qa = np.array(nc.variables["pks_qa"][i, j, :])[pk_mask]
+                                trgs_x_raw = np.array(nc.variables["trgs_x"][i, j, :])
+                                trg_mask   = ~np.isnan(trgs_x_raw)
+                                trgs_x  = unix_to_datetime(trgs_x_raw[trg_mask])
+                                trgs_y  = np.array(nc.variables["trgs_y"][i, j, :])[trg_mask]
+                                trgs_qa = np.array(nc.variables["trgs_qa"][i, j, :])[trg_mask]
                                 midUP_x    = unix_to_datetime(remove_nan(nc.variables["green_up_mid_x"][i, j, :]))
                                 midUP_y    = remove_nan(nc.variables["green_up_mid_y"][i, j, :])
                                 midDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_mid_x"][i, j, :]))
                                 midDOWN_y  = remove_nan(nc.variables["green_down_mid_y"][i, j, :])
+                                gap_starts = unix_to_datetime(remove_nan(nc.variables["data_gap_start"][i, j, :]))
+                                gap_ends   = unix_to_datetime(remove_nan(nc.variables["data_gap_end"][i, j, :]))
                         self._pixel_cache[(i,j)] = {
-                                "values": values, "qa": qa, "smoothing": smoothing, "pks_x":pks_x, "pks_y": pks_y,
-                                "trgs_x": trgs_x, "trgs_y": trgs_y,  "midUP_x": midUP_x, "midUP_y": midUP_y,
-                                 "midDOWN_x": midDOWN_x, "midDOWN_y": midDOWN_y,
+                                "values": values, "qa": qa, "smoothing": smoothing,
+                                "pks_x": pks_x, "pks_y": pks_y, "pks_qa": pks_qa,
+                                "trgs_x": trgs_x, "trgs_y": trgs_y, "trgs_qa": trgs_qa,
+                                "midUP_x": midUP_x, "midUP_y": midUP_y,
+                                "midDOWN_x": midDOWN_x, "midDOWN_y": midDOWN_y,
+                                "gap_starts": gap_starts, "gap_ends": gap_ends,
                         }
                 return self._pixel_cache[(i,j)]
 
@@ -1905,10 +1916,12 @@ class PhenologyVisualization:
                 mask_pks     = np.array([(d.year <= end) & (d.year >= start) for d in px["pks_x"]])
                 pks_x_sub    = px["pks_x"][mask_pks]
                 pks_y_sub    = px["pks_y"][mask_pks]
+                pks_qa_sub   = px["pks_qa"][mask_pks]
 
                 mask_trgs    = np.array([(d.year <= end) & (d.year >= start) for d in px["trgs_x"]])
                 trgs_x_sub   = px["trgs_x"][mask_trgs]
                 trgs_y_sub   = px["trgs_y"][mask_trgs]
+                trgs_qa_sub  = px["trgs_qa"][mask_trgs]
 
                 mask_midUP   = np.array([(d.year <= end) & (d.year >= start) for d in px["midUP_x"]])
                 midUP_x_sub  = px["midUP_x"][mask_midUP]
@@ -1921,6 +1934,8 @@ class PhenologyVisualization:
                 mask     = (px["values"] != -9999) & (px["qa"] == 0)
                 values_m = px["values"][mask]
                 time_m   = t_all[mask]
+
+                
 
                 if len(values_m) > 1:
 
@@ -1970,8 +1985,26 @@ class PhenologyVisualization:
                                         ax.scatter(datenum_to_datetime(background_time), background_values, color="grey", alpha=0.3, s=10, label="Data")
                                 else:
                                         ax.scatter(datenum_to_datetime(time_m), values_m, color="grey", alpha=0.3, s=10, label="Data")
+                                gap_starts = px["gap_starts"]
+                                gap_ends   = px["gap_ends"]
+                                for gs, ge in zip(gap_starts, gap_ends):
+                                        ax.axvspan(gs, ge, color="orange", alpha=0.15, zorder=0)
+                                if len(gap_starts) > 0:
+                                        ax.axvspan(gap_starts[0], gap_ends[0], color="orange", alpha=0.15, zorder=0, label="Data gap")
                                 ax.plot(datenum_to_datetime(smooth_x), smooth_y, color="black", linewidth=1, label="Spline")
-                                ax.scatter(pks_x_sub, pks_y_sub, color="orange", s=50, marker="o", zorder=4, label="Peaks")
+                                qa_colors = {0: "blue", 1: "orange", 2: "red"}
+                                qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
+                                for qa in (0, 1, 2):
+                                        pm = pks_qa_sub == qa
+                                        tm = trgs_qa_sub == qa
+                                        if pm.any():
+                                                ax.scatter(pks_x_sub[pm], pks_y_sub[pm], color=qa_colors[qa], s=50,
+                                                           marker="o", edgecolors="black", linewidths=0.5,
+                                                           zorder=4, label=qa_labels[qa])
+                                        if tm.any():
+                                                ax.scatter(trgs_x_sub[tm], trgs_y_sub[tm], color=qa_colors[qa], s=50,
+                                                           marker="o", edgecolors="black", linewidths=0.5,
+                                                           zorder=4, label=qa_labels[qa] if not pm.any() else None)
                                 if (pks_y_sub < 0).any():
                                         mask =  pks_y_sub<0
                                         pks_x_neg_before = pks_x_sub[mask]
@@ -1982,7 +2015,6 @@ class PhenologyVisualization:
                                         neg_label_before = True
                                         warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
 
-                                ax.scatter(trgs_x_sub, trgs_y_sub, color="blue", s=50, marker="o", zorder=4, label="Troughs")
                                 if (trgs_y_sub < 0).any():
                                         mask =  trgs_y_sub<0
                                         trgs_x_neg_before = trgs_x_sub[mask]
