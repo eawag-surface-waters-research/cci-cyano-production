@@ -8,6 +8,8 @@ from scipy.signal import find_peaks
 from datetime import datetime, timezone
 import warnings
 from scipy.sparse import SparseEfficiencyWarning
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from shapely.geometry import Point
 import pandas as pd
@@ -348,7 +350,7 @@ def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_
 
 
 
-def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_splits, summary_types=["n_peaks", "r2", "rmse", "mad", "correlation", "values"]):
+def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_splits, summary_types=["n_peaks", "r2", "rmse", "mad", "correlation", "values", "qa"]):
 
     with netCDF4.Dataset(eda_instance.p_path) as nc:
         smoothing_arr = nc.variables["smoothing_parameter"][:]
@@ -384,6 +386,33 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
                     file.write(f"        Correlation: {round(eda_instance.pixel_correlation(i, j, start=start, end=end), 4)}\n")
                 if "values" in summary_types:
                     file.write(f"        Values: {round(eda_instance.pixel_values(i, j, start=start, end=end), 4)}\n")
+
+            if "qa" in summary_types:
+                px = eda_instance._load_pixel_data(i, j)
+                pks_x  = px["pks_x"]
+                pks_qa = px["pks_qa"]
+
+                trgs_x  = px["trgs_x"]
+                trgs_qa = px["trgs_qa"]
+
+                qa_periods = [
+                    ("full ts",   0,    9999),
+                    ("2002-2012", 2002, 2012),
+                    ("2016-2024", 2016, 2024),
+                ]
+                file.write(f"    Peak QA:\n")
+                file.write(f"        {'Period':<14}  {'Good':>6}  {'Fair':>6}  {'Poor':>6}\n")
+                for period_label, s, e in qa_periods:
+                    mask   = np.array([(d.year >= s) & (d.year <= e) for d in pks_x])
+                    qa_sub_pks = pks_qa[mask]
+                    file.write(f"        {period_label:<14}  {int(np.sum(qa_sub_pks == 0)):>6}  {int(np.sum(qa_sub_pks == 1)):>6}  {int(np.sum(qa_sub_pks == 2)):>6}\n")
+
+                file.write(f"    Trough QA:\n")
+                file.write(f"        {'Period':<14}  {'Good':>6}  {'Fair':>6}  {'Poor':>6}\n")
+                for period_label, s, e in qa_periods:
+                    mask   = np.array([(d.year >= s) & (d.year <= e) for d in trgs_x])
+                    qa_sub_trgs = trgs_qa[mask]
+                    file.write(f"        {period_label:<14}  {int(np.sum(qa_sub_trgs == 0)):>6}  {int(np.sum(qa_sub_trgs == 1)):>6}  {int(np.sum(qa_sub_trgs == 2)):>6}\n")
 
             file.write("\n")
 
