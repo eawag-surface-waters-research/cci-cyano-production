@@ -13,6 +13,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from shapely.geometry import Point
 import pandas as pd
+import plotly.graph_objects as go
+from matplotlib.patches import Rectangle
+
+
 
 warnings.filterwarnings("ignore", category=SparseEfficiencyWarning)
 
@@ -504,6 +508,48 @@ def prep_dimark_data(insitu_df,start=0, end=9999,  insitu_date_col="datetime", i
         insitu = insitu[insitu["depth"]< max_depth]
         insitu_mean = (insitu.groupby("datetime", as_index=False)[insitu_value_col].mean())
         return insitu_mean
+
+
+
+
+
+def bivariate_legend( ax, color_set):
+
+    labels = ["0", "1", "2", "2+"]
+
+    cell_size = 1
+
+    for row in range(4):
+        for col in range(4):
+
+            idx = row * 4 + col
+
+            ax.add_patch(
+                Rectangle(
+                    (col, row),          # x,y
+                    cell_size,           # width
+                    cell_size,           # height
+                    facecolor=color_set[idx],
+                    edgecolor="black"
+                )
+            )
+
+    ax.set_xlim(0, 4)
+    ax.set_ylim(0, 4)
+
+    ax.set_xticks([0.5, 1.5, 2.5, 3.5])
+    ax.set_xticklabels(labels)
+
+    ax.set_yticks([0.5, 1.5, 2.5, 3.5])
+    ax.set_yticklabels(labels)
+
+    ax.set_xlabel("# Troughs")
+    ax.set_ylabel("# Peaks")
+
+    ax.set_aspect("equal")
+
+    plt.show()
+
 
 
 def init_phenology_output(out, lat, lon, p=None):
