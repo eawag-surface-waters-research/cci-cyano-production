@@ -379,7 +379,7 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
 
                 file.write(f"    {label}:\n")
                 if "n_peaks" in summary_types:
-                    file.write(f"        Number of Peaks: {eda_instance.count_peaks(i, j, start=start, end=end)}\n")
+                    file.write(f"        Number of Peaks: {eda_instance.count_extrema(i, j, start=start, end=end, peaks = True)}\n")
                 if "r2" in summary_types:
                     file.write(f"        R2: {round(eda_instance.pixel_r2(i, j, start=start, end=end), 4)}\n")
                 if "rmse" in summary_types:
@@ -548,7 +548,44 @@ def bivariate_legend( ax, color_set):
 
     ax.set_aspect("equal")
 
-    plt.show()
+
+
+def create_empty_heatmap(nrows=4, ncols=4):
+
+    data = np.full((nrows, ncols), np.nan)
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+
+    ax.set_xlim(0, 3)
+    ax.set_ylim(int(2001), int(2024))
+
+    # Draw grid lines
+    ax.set_xticks(np.arange(0, 5, 1), minor=True)
+    ax.grid(which='minor')
+    ax.set_yticks(np.arange(2001, 2024), minor = True)
+
+
+    ax.set_xticks(np.arange(0.5, 4, 1))
+    ax.set_yticks(np.arange(2001.5, 2024.5, 1))
+    months = ["Jan-Mar", "Apr-Jun", "Jul-Sep", "Oct-Dez"]
+    years = ["2002", "2003", "2004", "2005", 
+             "2006", "2007", "2008", "2009", "2010", 
+             "2011", "2012", "2013", "2014", "2015", 
+             "2016", "2017", "2018", "2019","2020", 
+             "2021", "2022", "2023", "2024"]
+    ax.set_xticklabels(months, horizontalalignment = "center")
+    ax.set_yticklabels(years, horizontalalignment = "center")
+
+    # Hide tick marks
+    ax.tick_params(axis='x', length=0)
+    ax.tick_params(axis='y', length=0, pad = 20)
+
+
+
+    return fig, ax, data
+
+
+
 
 
 

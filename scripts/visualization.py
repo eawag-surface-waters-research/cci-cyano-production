@@ -11,10 +11,11 @@ import csv
 import statistics
 import warnings
 from matplotlib.colors import ListedColormap, BoundaryNorm
+from matplotlib.patches import Rectangle
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import pearsonr
 from csaps import csaps
-from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data
+from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data, create_empty_heatmap, bivariate_legend
 import multiprocessing
 from functools import partial
 import shapely.ops as ops
@@ -74,6 +75,34 @@ def _init_worker(p_path, e_path):
     _GLOBALS["qa_all"] = qa_all
     _GLOBALS["lats"] = lats
     _GLOBALS["lons"] = lons
+
+
+color_sets_4x4 = {
+    'pink-blue': [
+        '#e8e8e8', '#cfdfe6', '#95d3d8', '#5ac8c8',
+        '#e0c0d5', '#c4bfd7', '#8fb9d1', '#5698b9',
+        '#d398c1', '#b29fcb', '#7f93be', '#4a72a7',
+        '#be64ac', '#9762ae', '#6760a5', '#3b4994'
+    ],
+    'teal-red': [
+        '#e8e8e8', '#e7c0c0', '#dc8b8b', '#c85a5a',
+        '#c1dde4', '#c0bdbd', '#b48a8d', '#985356',
+        '#8fd0da', '#92adaf', '#8b7879', '#755357',
+        '#64acbe', '#667f93', '#625b67', '#574249'
+    ],
+    'teal-red1': [
+        '#e7e7e7', '#cfd9dd', '#9abec9', '#64abbd',
+        '#ddc4c4', '#c1b4b8', '#949ca3', '#5d7783',
+        '#d08e8e', '#b18488', '#8a7175', '#6d5e63',
+        '#c75a5a', '#a15355', '#7b4c4f', '#574249'
+    ],
+    'blue-orange': [
+        '#fef1e4', '#fcd1b7', '#f8a474', '#f3742d',
+        '#c8e1e6', '#c6c0bc', '#bb917c', '#ab5f37',
+        '#7fc8e6', '#7ea2bb', '#7a7879', '#6f5a47',
+        '#18aee5', '#2b96c7', '#3a7ea9', '#5c473d'
+    ]
+}
 
 
 class PhenologyVisualization:
@@ -1723,7 +1752,7 @@ class PhenologyVisualization:
 
 
 
-        def count_peaks(self, latitude, longitude, start= 0, end= 9999):
+        def count_extrema(self, latitude, longitude, start= 0, end= 9999, peaks = True):
                 """Return the number of detected peaks for a pixel within a year range.
 
                 Parameters
@@ -1742,13 +1771,78 @@ class PhenologyVisualization:
                 int
                     Number of peaks falling within the specified year range.
                 """
+                if peaks:
+                        with netCDF4.Dataset(self.p_path) as nc:
+                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
+                                mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
+                                pks_x_sub = pks_x[mask_pks]
+
+                                return len(pks_x_sub)
+                else:
+                        with netCDF4.Dataset(self.p_path) as nc:
+                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
+                                mask_trgs = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
+                                trgs_x_sub = trgs_x[mask_trgs]
+
+                                return len(trgs_x_sub) 
+                        
+
+
+
+        def create_heatmap_output(self, latitude, longitude, start_year=2002, end_year=2024):
+                """Return peak/trough counts per year and quarter for heatmap plotting.
+
+                Returns
+                -------
+                dict
+                    Keys are years (int). Values are lists of 4 (n_peaks, n_troughs) tuples,
+                    one per quarter: [(Jan-Mar), (Apr-Jun), (Jul-Sep), (Oct-Dec)].
+                """
+                quarters = [(1, 3), (4, 6), (7, 9), (10, 12)]
+                result = {}
+
                 with netCDF4.Dataset(self.p_path) as nc:
                         pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
-                        mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
-                        pks_x_sub = pks_x[mask_pks]
+                        trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
 
-                        return len(pks_x_sub)
-                
+                        for year in range(start_year, end_year + 1):
+                                year_counts = []
+                                for (q_start, q_end) in quarters:
+                                        n_pks = sum(
+                                                1 for d in pks_x
+                                                if d.year == year and q_start <= d.month <= q_end
+                                        )
+                                        n_trgs = sum(
+                                                1 for d in trgs_x
+                                                if d.year == year and q_start <= d.month <= q_end
+                                        )
+                                        year_counts.append((n_pks, n_trgs))
+                                result[year] = year_counts
+
+                return result
+        
+        def yearly_heatmap(self, latitude, longitude, color_scheme='pink-blue'):
+                heatmap_data = self.create_heatmap_output(latitude=latitude, longitude=longitude)
+                fig, ax, _ = create_empty_heatmap()
+                textstr = f"Yearly Heatmap \n {os.path.basename(os.path.dirname(self.p_path))}, Lake ID:{os.path.basename(self.p_path)[:-3]}"
+                ax.set_title(textstr)
+
+                color_set = color_sets_4x4[color_scheme]
+
+                for year, quarters in heatmap_data.items():
+                        for q_idx, (n_pks, n_trgs) in enumerate(quarters):
+                                pk_bin  = min(n_pks,  3)
+                                trg_bin = min(n_trgs, 3)
+                                color = color_set[trg_bin * 4 + pk_bin]
+                                ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
+
+                ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform = ax.transAxes)
+                bivariate_legend(ax_legend, color_set)
+
+                return fig, ax
+
+
+
         def pixel_r2(self, latitude, longitude, start, end):
                 """Return the R² score for a single pixel within a year range.
 
