@@ -4,6 +4,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.lines as mlines
+import matplotlib.colors as mcolors
 import numpy as np
 import datetime
 import os
@@ -2403,6 +2405,112 @@ class PhenologyVisualization:
                         loc="upper left",
                         ncol=2
                 )
+
+
+
+        def yearly_cubic_spline(self, ax, latitude, longitude, years= ["2002", "2003", "2004", "2005", 
+             "2006", "2007", "2008", "2009", "2010", 
+             "2011", "2012", "2013", "2014", "2015", 
+             "2016", "2017", "2018", "2019","2020", 
+             "2021", "2022", "2023", "2024"]):
+                g  = self._load_extracted_globals()
+                px = self._load_pixel_data(latitude, longitude)
+                lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
+
+                smoothing = px["smoothing"]
+                cmap = plt.cm.get_cmap("tab20", len(years))
+                year_colors = {year: cmap(i) for i, year in enumerate(years)}
+
+                # Fit one spline over all valid data
+                mask_all     = (px["values"] != -9999) & (px["qa"] == 0)
+                values_m_all = px["values"][mask_all]
+                time_m_all   = t_all[mask_all]
+                smooth_x_all = np.arange(t_all.min(), t_all.max() + 1, 1)
+                smooth_y_all = csaps(time_m_all, values_m_all, smooth_x_all, smooth=smoothing)
+                smooth_dates_all = np.array(datenum_to_datetime(smooth_x_all))
+
+                for year in years:
+                        start= year
+                        end = year
+                        mask_pks     = np.array([(d.year <= int(end)) & (d.year >= int(start)) for d in px["pks_x"]])
+                        pks_x_sub    = px["pks_x"][mask_pks]
+                        pks_y_sub    = px["pks_y"][mask_pks]
+                        pks_qa_sub   = px["pks_qa"][mask_pks]
+
+                        mask_trgs    = np.array([(d.year <= int(end)) & (d.year >= int(start)) for d in px["trgs_x"]])
+                        trgs_x_sub   = px["trgs_x"][mask_trgs]
+                        trgs_y_sub   = px["trgs_y"][mask_trgs]
+                        trgs_qa_sub  = px["trgs_qa"][mask_trgs]
+
+                        # Subset the pre-fitted spline to this year and convert to fractional month (1–12)
+                        mask_year = np.array([d.year == int(year) for d in smooth_dates_all])
+                        smooth_dates_year = smooth_dates_all[mask_year]
+                        smooth_y  = smooth_y_all[mask_year]
+
+                        def to_frac_month(dates):
+                                result = []
+                                for d in dates:
+                                        days_in_month = (
+                                                pd.Timestamp(d.year, d.month % 12 + 1, 1) - pd.Timedelta(days=1)
+                                        ).day if d.month < 12 else 31
+                                        result.append(d.month + (d.day - 1) / days_in_month)
+                                return np.array(result)
+
+                        if len(smooth_dates_year) > 2:
+                                smooth_x_month = to_frac_month(smooth_dates_year)
+                                ax.plot(smooth_x_month, smooth_y, color=year_colors[year], linewidth=1, label=str(year))
+
+                                qa_markers = {0: "o", 1: ".", 2: "x"}
+                                qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
+                                for qa in (0, 1, 2):
+                                        pm = pks_qa_sub == qa
+                                        tm = trgs_qa_sub == qa
+                                        if pm.any():
+                                                ax.scatter(to_frac_month(pks_x_sub[pm]), pks_y_sub[pm], color="black", s=50,
+                                                        marker=qa_markers[qa], edgecolors="black", linewidths=0.5,
+                                                        zorder=4, label=qa_labels[qa] if year == years[0] else None)
+                                        if tm.any():
+                                                ax.scatter(to_frac_month(trgs_x_sub[tm]), trgs_y_sub[tm], color="black", s=50,
+                                                        marker=qa_markers[qa], edgecolors="black", linewidths=0.5,
+                                                        zorder=4, label=qa_labels[qa] if (year == years[0] and not pm.any()) else None)
+                        else:
+                                warnings.warn(f"Not enough data to plot for year {year}")
+
+                # One-time axis setup after all years are plotted
+                int_years = [int(y) for y in years]
+                ax.set_xlim(1, 12)
+                ax.set_xticks(range(1, 13))
+                ax.set_xticklabels(["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"])
+                all_pks_y = px["pks_y"][np.array([d.year in int_years for d in px["pks_x"]])]
+                all_trgs_y = px["trgs_y"][np.array([d.year in int_years for d in px["trgs_x"]])]
+                if len(all_pks_y) > 0 and len(all_trgs_y) > 0:
+                        pks_sorted = sorted(all_pks_y)
+                        ymax = pks_sorted[-2] if pks_sorted[-1] > 10 and len(pks_sorted) > 1 else pks_sorted[-1]
+                        ax.set_ylim(sorted(all_trgs_y)[0] - 0.5, ymax + 0.5)
+                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}"
+                ax.set_title(textstr)
+                ax.grid(axis="x", linewidth=0.5)
+                ax.grid(axis="y")
+                ax.set_ylabel("[ug/L]")
+
+                # QA legend (markers only, no year lines)
+                qa_markers = {0: "o", 1: ".", 2: "x"}
+                qa_labels  = {0: "Good", 1: "Fair", 2: "Poor"}
+                qa_handles = [
+                        mlines.Line2D([], [], color="black", marker=qa_markers[qa],
+                                      linestyle="None", markersize=6, label=qa_labels[qa])
+                        for qa in (0, 1, 2)
+                ]
+                ax.legend(handles=qa_handles, loc="upper left")
+
+                # Colorbar for year colors
+                norm = mcolors.BoundaryNorm(boundaries=range(len(years) + 1), ncolors=len(years))
+                sm   = plt.cm.ScalarMappable(cmap=plt.cm.get_cmap("tab20", len(years)), norm=norm)
+                sm.set_array([])
+                cbar = plt.colorbar(sm, ax=ax, orientation="vertical", pad=0.01, aspect=30)
+                cbar.set_ticks([i + 0.5 for i in range(len(years))])
+                cbar.set_ticklabels(years)
+
 
 
 
