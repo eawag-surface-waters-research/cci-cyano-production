@@ -130,7 +130,7 @@ class PhenologyVisualization:
                     Formatted string containing the lake name.
                 """
                 df = self.geom
-                return f"ID: {df.loc[df["short_name"]==short_name, "name"][1]}"
+                return f"ID: {df.loc[df['short_name']==short_name, 'name'][1]}"
 
         def ID_to_name(self, id:int):
                 """Return the lake name for a given numeric lake ID.
@@ -162,7 +162,7 @@ class PhenologyVisualization:
                     Formatted string containing the lake ID.
                 """
                 df = self.geom
-                return f"ID: {list(df.loc[df["name"]==name, "id"])[0]}"
+                return f"ID: {list(df.loc[df['name']==name, 'id'])[0]}"
 
         def name_to_shortname(self, name:str):
                 """Return the short_name for a given lake name.
@@ -178,7 +178,7 @@ class PhenologyVisualization:
                     Formatted string containing the short_name.
                 """
                 df = self.geom
-                return f"short_name: {list(df.loc[df["name"]==name, "short_name"])[0]}"
+                return f"short_name: {list(df.loc[df['name']==name, 'short_name'])[0]}"
 
         def index_to_lat_lon(self, lat_index, lon_index):
                 """Return the geographic coordinates for a grid index pair.
