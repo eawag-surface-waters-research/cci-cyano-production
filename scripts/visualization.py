@@ -17,7 +17,7 @@ from matplotlib.patches import Rectangle
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import pearsonr
 from csaps import csaps
-from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data, create_empty_heatmap, bivariate_legend
+from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data, create_empty_heatmap, bivariate_legend, to_frac_month
 import multiprocessing
 from functools import partial
 import shapely.ops as ops
@@ -26,6 +26,7 @@ import geopandas
 from shapely.prepared import prep
 from shapely.geometry import Point
 from numpy.lib.stride_tricks import sliding_window_view
+import colorcet as cc
 
 
 
@@ -2418,7 +2419,7 @@ class PhenologyVisualization:
                 lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
 
                 smoothing = px["smoothing"]
-                cmap = plt.cm.get_cmap("tab20", len(years))
+                cmap = ListedColormap(cc.glasbey_light[:len(years)])
                 year_colors = {year: cmap(i) for i, year in enumerate(years)}
 
                 # Fit one spline over all valid data
@@ -2447,15 +2448,6 @@ class PhenologyVisualization:
                         smooth_dates_year = smooth_dates_all[mask_year]
                         smooth_y  = smooth_y_all[mask_year]
 
-                        def to_frac_month(dates):
-                                result = []
-                                for d in dates:
-                                        days_in_month = (
-                                                pd.Timestamp(d.year, d.month % 12 + 1, 1) - pd.Timedelta(days=1)
-                                        ).day if d.month < 12 else 31
-                                        result.append(d.month + (d.day - 1) / days_in_month)
-                                return np.array(result)
-
                         if len(smooth_dates_year) > 2:
                                 smooth_x_month = to_frac_month(smooth_dates_year)
                                 ax.plot(smooth_x_month, smooth_y, color=year_colors[year], linewidth=1, label=str(year))
@@ -2468,9 +2460,9 @@ class PhenologyVisualization:
                                         if pm.any():
                                                 ax.scatter(to_frac_month(pks_x_sub[pm]), pks_y_sub[pm], color="black", s=50,
                                                         marker=qa_markers[qa], edgecolors="black", linewidths=0.5,
-                                                        zorder=4, label=qa_labels[qa] if year == years[0] else None)
+                                                        zorder=4, label= qa_labels[qa] if year == years[0] else None)
                                         if tm.any():
-                                                ax.scatter(to_frac_month(trgs_x_sub[tm]), trgs_y_sub[tm], color="black", s=50,
+                                                ax.scatter(to_frac_month(trgs_x_sub[tm]), trgs_y_sub[tm], color="darkgray", s=50,
                                                         marker=qa_markers[qa], edgecolors="black", linewidths=0.5,
                                                         zorder=4, label=qa_labels[qa] if (year == years[0] and not pm.any()) else None)
                         else:
@@ -2496,33 +2488,32 @@ class PhenologyVisualization:
                 # QA legend (markers only, no year lines)
                 qa_markers = {0: "o", 1: ".", 2: "x"}
                 qa_labels  = {0: "Good", 1: "Fair", 2: "Poor"}
-                qa_handles = [
-                        mlines.Line2D([], [], color="black", marker=qa_markers[qa],
+                qa_handles = [mlines.Line2D([], [], color="black", marker=qa_markers[qa],
                                       linestyle="None", markersize=6, label=qa_labels[qa])
                         for qa in (0, 1, 2)
                 ]
-                ax.legend(handles=qa_handles, loc="upper left")
+
+                # Color legend for pks and trgs
+                type_handles = [
+                mlines.Line2D([], [], color="black", marker="o",
+                                linestyle="None", markersize=8, label="Peak"),
+                mlines.Line2D([], [], color="darkgray", marker="o",
+                                linestyle="None", markersize=8, label="Trough"),]
+
+
+                leg1 = ax.legend(handles=qa_handles, loc="upper left")
+                ax.add_artist(leg1)
+                ax.legend(handles= type_handles, loc = "upper right")
+
+
 
                 # Colorbar for year colors
                 norm = mcolors.BoundaryNorm(boundaries=range(len(years) + 1), ncolors=len(years))
-                sm   = plt.cm.ScalarMappable(cmap=plt.cm.get_cmap("tab20", len(years)), norm=norm)
+                sm   = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
                 sm.set_array([])
                 cbar = plt.colorbar(sm, ax=ax, orientation="vertical", pad=0.01, aspect=30)
                 cbar.set_ticks([i + 0.5 for i in range(len(years))])
                 cbar.set_ticklabels(years)
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

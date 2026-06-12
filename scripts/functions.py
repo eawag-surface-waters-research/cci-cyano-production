@@ -584,6 +584,13 @@ def create_empty_heatmap(nrows=4, ncols=4):
 
     return fig, ax, data
 
+def to_frac_month(dates):
+    result = []
+    for d in dates:
+        days_in_month = (pd.Timestamp(d.year, d.month % 12 + 1, 1) - pd.Timedelta(days=1)).day if d.month < 12 else 31
+        result.append(d.month + (d.day - 1) / days_in_month)
+    return np.array(result)
+
 
 
 
