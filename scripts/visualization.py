@@ -2615,9 +2615,12 @@ class PhenologyVisualization:
 
                 # One-time axis setup after all years are plotted
                 int_years = [int(y) for y in years]
-                ax.set_xlim(1, 12)
-                ax.set_xticks(range(1, 13))
-                ax.set_xticklabels(["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"])
+                # derive months from data
+                all_months = sorted(set(d.month for d in smooth_dates_all if d.year in int_years))
+                month_names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+                ax.set_xlim(min(all_months), max(all_months))
+                ax.set_xticks(all_months)
+                ax.set_xticklabels([month_names[m - 1] for m in all_months])
                 all_pks_y = px["pks_y"][np.array([d.year in int_years for d in px["pks_x"]])]
                 all_trgs_y = px["trgs_y"][np.array([d.year in int_years for d in px["trgs_x"]])]
                 if len(all_pks_y) > 0 and len(all_trgs_y) > 0:
