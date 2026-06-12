@@ -298,6 +298,7 @@ class PhenologyVisualization:
                     and a datetime index named Time.
                 """
                 p = netCDF4.Dataset(self.p_path)
+                lakeID = os.path.basename(self.p_path)[:-3]
                 exclude = ['lat','lon','smoothing_parameter','trgs_qa','data_gap_start','data_gap_end']
                 l = list(set(list(p.variables))-set(exclude))
                 variables_x = sorted([i for i in l if i[-1]== "x"])
@@ -314,7 +315,8 @@ class PhenologyVisualization:
                         df = pd.DataFrame({"Value":var_y,
                                         "Variable": var_label,
                                         "latitude": lat[latitude],
-                                        "longitude": lon[longitude]},
+                                        "longitude": lon[longitude], 
+                                        "lake_ID": lakeID},
                                         index = var_x)
                         df.index.names = ["Time"]
                         result[y[:-2]] = df
