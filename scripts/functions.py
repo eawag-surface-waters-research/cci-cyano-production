@@ -11,6 +11,7 @@ from scipy.sparse import SparseEfficiencyWarning
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from shapely.geometry import Point
 import pandas as pd
 import plotly.graph_objects as go
@@ -379,7 +380,7 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
 
                 file.write(f"    {label}:\n")
                 if "n_peaks" in summary_types:
-                    file.write(f"        Number of Peaks: {eda_instance.count_peaks(i, j, start=start, end=end)}\n")
+                    file.write(f"        Number of Peaks: {eda_instance.count_extrema(i, j, start=start, end=end, peaks = True)}\n")
                 if "r2" in summary_types:
                     file.write(f"        R2: {round(eda_instance.pixel_r2(i, j, start=start, end=end), 4)}\n")
                 if "rmse" in summary_types:
@@ -522,7 +523,7 @@ def bivariate_legend( ax, color_set):
     for row in range(4):
         for col in range(4):
 
-            idx = row * 4 + col
+            idx = col * 4 + row
 
             ax.add_patch(
                 Rectangle(
@@ -548,7 +549,92 @@ def bivariate_legend( ax, color_set):
 
     ax.set_aspect("equal")
 
-    plt.show()
+
+def bivariate_continuous_legend(ax, color_set, n=64):
+    """Render a smooth 2D gradient legend for a continuous bivariate colormap.
+
+    Bilinearly interpolates over the 4×4 color_set grid to produce a continuous
+    gradient image. X-axis = peaks fraction, Y-axis = troughs fraction (both 0–1).
+    """
+    grid = np.zeros((n, n, 3))
+    for row in range(n):
+        for col in range(n):
+            # normalize pixel coordinates to fractions in [0, 1]
+            trg_frac = col / (n - 1)
+            pk_frac = row / (n - 1)
+
+            # map fractions to positions in the 4×4 color grid (indices 0–3) 
+            pk_pos = np.clip(pk_frac * 3, 0, 3)
+            trg_pos = np.clip(trg_frac * 3, 0, 3)
+
+            # find the neighboring grid cell indices
+            pk0 = int(np.floor(pk_pos))
+            pk1 = min(pk0 + 1, 3)
+            trg0 = int(np.floor(trg_pos))
+            trg1 = min(trg0 + 1, 3)
+
+            # compute interpolation weights within the grid cell
+            t_pk = pk_pos - pk0
+            t_trg = trg_pos - trg0
+
+            # retrieve the four surrounding colors from the discrete 4×4 color grid
+            c00 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk0]))
+            c10 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk1]))
+            c01 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk0]))
+            c11 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk1]))
+
+            # bilinearly interpolate between the four colors
+            grid[row, col] = (c00 * (1 - t_pk) * (1 - t_trg) + c10 * t_pk * (1 - t_trg) +
+                              c01 * (1 - t_pk) * t_trg + c11 * t_pk * t_trg)
+    ax.imshow(grid, origin='lower', extent=[0, 1, 0, 1], aspect='equal')
+    ax.set_xticks([0, 0.5, 1])
+    ax.set_yticks([0, 0.5, 1])
+    ax.set_xlabel("Troughs fraction")
+    ax.set_ylabel("Peaks fraction")
+
+
+
+def create_empty_heatmap(nrows=4, ncols=4):
+
+    data = np.full((nrows, ncols), np.nan)
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+
+    ax.set_xlim(0, 3)
+    ax.set_ylim(int(2001), int(2024))
+
+    # Draw grid lines
+    ax.set_xticks(np.arange(0, 5, 1), minor=True)
+    ax.grid(which='minor')
+    ax.set_yticks(np.arange(2001, 2024), minor = True)
+
+
+    ax.set_xticks(np.arange(0.5, 4, 1))
+    ax.set_yticks(np.arange(2001.5, 2024.5, 1))
+    months = ["Jan-Mar", "Apr-Jun", "Jul-Sep", "Oct-Dez"]
+    years = ["2002", "2003", "2004", "2005", 
+             "2006", "2007", "2008", "2009", "2010", 
+             "2011", "2012", "2013", "2014", "2015", 
+             "2016", "2017", "2018", "2019","2020", 
+             "2021", "2022", "2023", "2024"]
+    ax.set_xticklabels(months, horizontalalignment = "center")
+    ax.set_yticklabels(years, horizontalalignment = "center")
+
+    # Hide tick marks
+    ax.tick_params(axis='x', length=0)
+    ax.tick_params(axis='y', length=0, pad = 20)
+
+
+
+    return fig, ax, data
+
+def to_frac_month(dates):
+    result = []
+    for d in dates:
+        days_in_month = (pd.Timestamp(d.year, d.month % 12 + 1, 1) - pd.Timedelta(days=1)).day if d.month < 12 else 31
+        result.append(d.month + (d.day - 1) / days_in_month)
+    return np.array(result)
+
 
 
 

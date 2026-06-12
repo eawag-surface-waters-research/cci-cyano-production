@@ -4,6 +4,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.lines as mlines
+import matplotlib.colors as mcolors
 import numpy as np
 import datetime
 import os
@@ -11,10 +13,11 @@ import csv
 import statistics
 import warnings
 from matplotlib.colors import ListedColormap, BoundaryNorm
+from matplotlib.patches import Rectangle
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import pearsonr
 from csaps import csaps
-from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data
+from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data, create_empty_heatmap, bivariate_legend, bivariate_continuous_legend, to_frac_month
 import multiprocessing
 from functools import partial
 import shapely.ops as ops
@@ -23,10 +26,30 @@ import geopandas
 from shapely.prepared import prep
 from shapely.geometry import Point
 from numpy.lib.stride_tricks import sliding_window_view
+import colorcet as cc
 
 
 
 _GLOBALS = {}
+
+
+def _bilerp_color(pk_frac, trg_frac, color_set):
+    """Bilinearly interpolate an RGB color from a 4×4 color_set grid.
+
+    Maps pk_frac and trg_frac (both in [0, 1]) onto the [0, 3] grid axes and
+    interpolates between the four surrounding grid-point colors.
+    """
+    pk_pos = float(np.clip(pk_frac * 3, 0, 3))
+    trg_pos = float(np.clip(trg_frac * 3, 0, 3))
+    pk0 = int(np.floor(pk_pos)); pk1 = min(pk0 + 1, 3)
+    trg0 = int(np.floor(trg_pos)); trg1 = min(trg0 + 1, 3)
+    t_pk = pk_pos - pk0; t_trg = trg_pos - trg0
+    c00 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk0]))
+    c10 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk1]))
+    c01 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk0]))
+    c11 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk1]))
+    return c00 * (1 - t_pk) * (1 - t_trg) + c10 * t_pk * (1 - t_trg) + \
+           c01 * (1 - t_pk) * t_trg + c11 * t_pk * t_trg
 
 
 def _init_worker(p_path, e_path):
@@ -74,6 +97,38 @@ def _init_worker(p_path, e_path):
     _GLOBALS["qa_all"] = qa_all
     _GLOBALS["lats"] = lats
     _GLOBALS["lons"] = lons
+
+
+
+# color_sets_4x4: bivariate color palettes for the 4×4 heatmap legend.
+# Color palettes are adapted from:
+# https://medium.com/@leodpereda/mastering-bivariate-maps-with-plotly-a-step-by-step-guide-ad9cae150d8a
+color_sets_4x4 = {
+    'pink-blue': [
+        '#e8e8e8', '#cfdfe6', '#95d3d8', '#5ac8c8',
+        '#e0c0d5', '#c4bfd7', '#8fb9d1', '#5698b9',
+        '#d398c1', '#b29fcb', '#7f93be', '#4a72a7',
+        '#be64ac', '#9762ae', '#6760a5', '#3b4994'
+    ],
+    'teal-red': [
+        '#e8e8e8', '#e7c0c0', '#dc8b8b', '#c85a5a',
+        '#c1dde4', '#c0bdbd', '#b48a8d', '#985356',
+        '#8fd0da', '#92adaf', '#8b7879', '#755357',
+        '#64acbe', '#667f93', '#625b67', '#574249'
+    ],
+    'teal-red1': [
+        '#e7e7e7', '#cfd9dd', '#9abec9', '#64abbd',
+        '#ddc4c4', '#c1b4b8', '#949ca3', '#5d7783',
+        '#d08e8e', '#b18488', '#8a7175', '#6d5e63',
+        '#c75a5a', '#a15355', '#7b4c4f', '#574249'
+    ],
+    'blue-orange': [
+        '#fef1e4', '#fcd1b7', '#f8a474', '#f3742d',
+        '#c8e1e6', '#c6c0bc', '#bb917c', '#ab5f37',
+        '#7fc8e6', '#7ea2bb', '#7a7879', '#6f5a47',
+        '#18aee5', '#2b96c7', '#3a7ea9', '#5c473d'
+    ]
+}
 
 
 class PhenologyVisualization:
@@ -1723,7 +1778,7 @@ class PhenologyVisualization:
 
 
 
-        def count_peaks(self, latitude, longitude, start= 0, end= 9999):
+        def count_extrema(self, latitude, longitude, start= 0, end= 9999, peaks = True):
                 """Return the number of detected peaks for a pixel within a year range.
 
                 Parameters
@@ -1742,13 +1797,184 @@ class PhenologyVisualization:
                 int
                     Number of peaks falling within the specified year range.
                 """
-                with netCDF4.Dataset(self.p_path) as nc:
-                        pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
-                        mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
-                        pks_x_sub = pks_x[mask_pks]
+                if peaks:
+                        with netCDF4.Dataset(self.p_path) as nc:
+                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
+                                mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
+                                pks_x_sub = pks_x[mask_pks]
 
-                        return len(pks_x_sub)
-                
+                                return len(pks_x_sub)
+                else:
+                        with netCDF4.Dataset(self.p_path) as nc:
+                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
+                                mask_trgs = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
+                                trgs_x_sub = trgs_x[mask_trgs]
+
+                                return len(trgs_x_sub) 
+                        
+
+
+
+        def create_heatmap_output(self, latitude, longitude, start_year=2002, end_year=2024, fraction = False):
+                """Return peak/trough counts or lake-wide fractions per year and quarter.
+
+                When fraction=False, counts are read from the single pixel at (latitude,
+                longitude). When fraction=True, all pixels in the lake are aggregated and
+                each quarter value is expressed as the fraction of that year's total events
+                occurring in that quarter (0.0 – 1.0); years with no events return 0.0.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel. Only used when fraction=False.
+                longitude : int
+                    Column (lon) index of the pixel. Only used when fraction=False.
+                start_year : int, optional
+                    First calendar year to include (inclusive). Default 2002.
+                end_year : int, optional
+                    Last calendar year to include (inclusive). Default 2024.
+                fraction : bool, optional
+                    If False (default), return per-pixel integer counts.
+                    If True, return lake-wide fractions aggregated across all pixels.
+
+                Returns
+                -------
+                dict
+                    Keys are years (int). Values are lists of 4 tuples, one per quarter
+                    (Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec). Each tuple is
+                    (n_peaks, n_troughs) when fraction=False, or
+                    (peaks_fraction, troughs_fraction) when fraction=True.
+                """
+                quarters = [(1, 3), (4, 6), (7, 9), (10, 12)]
+                result = {}
+                if not fraction:
+
+                        with netCDF4.Dataset(self.p_path) as nc:
+                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
+                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
+                        
+                                for year in range(start_year, end_year + 1):
+                                        year_counts = []
+                                        for (q_start, q_end) in quarters:
+                                                n_pks = sum(
+                                                        1 for d in pks_x
+                                                        if d.year == year and q_start <= d.month <= q_end
+                                                )
+                                                n_trgs = sum(
+                                                        1 for d in trgs_x
+                                                        if d.year == year and q_start <= d.month <= q_end
+                                                )
+                                                year_counts.append((n_pks, n_trgs))
+                                        result[year] = year_counts
+                else:
+                        with netCDF4.Dataset(self.p_path) as nc:
+                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][:, :, :]))
+                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][:, :, :]))
+                        
+                                for year in range(start_year, end_year + 1):
+                                        year_fractions = []
+                                        for (q_start, q_end) in quarters:
+                                                n_pks = sum(
+                                                        1 for d in pks_x
+                                                        if d.year == year and q_start <= d.month <= q_end
+                                                )
+                                                yearly_pks = sum(1 for d in pks_x if d.year == year)
+                                                pks_fraction = n_pks / yearly_pks if yearly_pks > 0 else 0.0
+
+                                                n_trgs = sum(
+                                                        1 for d in trgs_x
+                                                        if d.year == year and q_start <= d.month <= q_end
+                                                )
+                                                yearly_trgs = sum(1 for d in trgs_x if d.year == year)
+                                                trgs_fraction = n_trgs / yearly_trgs if yearly_trgs > 0 else 0.0
+
+                                                year_fractions.append((pks_fraction, trgs_fraction))
+                                        result[year] = year_fractions
+
+
+
+                return result
+        
+        def yearly_heatmap(self, latitude, longitude, color_scheme='pink-blue', whole_lake=False):
+                """Plot a bivariate heatmap of peak and trough counts or fractions by year and quarter.
+
+                Each cell in the heatmap represents one calendar quarter of one year. The
+                cell colour encodes two variables simultaneously using a 4×4 bivariate
+                colour palette from color_sets_4x4.
+
+                When whole_lake=False, counts for the single pixel at (latitude, longitude)
+                are binned into four levels (0, 1, 2, 3+) and the cell is coloured from the
+                discrete 4×4 grid using bivariate_legend.
+
+                When whole_lake=True, peak and trough events are aggregated across all
+                lake pixels and each cell shows the fraction of that year's total events
+                falling in that quarter. Colours are interpolated continuously across the
+                4×4 grid using _bilerp_color, and the legend is a smooth 2-D gradient
+                rendered by bivariate_continuous_legend.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel. Only used when whole_lake=False.
+                longitude : int
+                    Column (lon) index of the pixel. Only used when whole_lake=False.
+                color_scheme : str, optional
+                    Key into color_sets_4x4 selecting the bivariate palette.
+                    One of 'pink-blue', 'teal-red', 'teal-red1', 'blue-orange'.
+                    Default 'pink-blue'.
+                whole_lake : bool, optional
+                    If False (default), plot per-pixel counts with a discrete legend.
+                    If True, plot lake-wide fractions with a continuous gradient legend.
+
+                Returns
+                -------
+                fig : matplotlib.figure.Figure
+                    The figure containing the heatmap.
+                ax : matplotlib.axes.Axes
+                    The axes on which the heatmap is drawn.
+                """
+                if not whole_lake:
+                        heatmap_data = self.create_heatmap_output(latitude=latitude, longitude=longitude, fraction = False)
+                        fig, ax, _ = create_empty_heatmap()
+                        g  = self._load_extracted_globals()
+                        lat, lon = g["lat"], g["lon"]
+                        textstr = f"Yearly Heatmap for Pixel\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}\n {os.path.basename(os.path.dirname(self.p_path))}, Lake ID:{os.path.basename(self.p_path)[:-3]}"
+                        ax.set_title(textstr)
+
+                        color_set = color_sets_4x4[color_scheme]
+
+                        for year, quarters in heatmap_data.items():
+                                for q_idx, (n_pks, n_trgs) in enumerate(quarters):
+                                        pk_bin  = min(n_pks,  3)
+                                        trg_bin = min(n_trgs, 3)
+                                        color = color_set[trg_bin * 4 + pk_bin]
+                                        ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
+
+                        ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform = ax.transAxes)
+                        bivariate_legend(ax_legend, color_set)
+
+                        return fig, ax
+                else:
+                        heatmap_data = self.create_heatmap_output(latitude=latitude, longitude=longitude, fraction=True)
+                        fig, ax, _ = create_empty_heatmap()
+                        textstr = f"Yearly Heatmap for Lake ID: {os.path.basename(self.p_path)[:-3]}\n  {os.path.basename(os.path.dirname(self.p_path))}"
+                        ax.set_title(textstr)
+
+                        color_set = color_sets_4x4[color_scheme]
+
+                        for year, quarters in heatmap_data.items():
+                                for q_idx, (pks_frac, trgs_frac) in enumerate(quarters):
+                                        color = _bilerp_color(pks_frac, trgs_frac, color_set)
+                                        ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
+
+                        ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform=ax.transAxes)
+                        bivariate_continuous_legend(ax_legend, color_set)
+
+                        return fig, ax
+
+
+
+
         def pixel_r2(self, latitude, longitude, start, end):
                 """Return the R² score for a single pixel within a year range.
 
@@ -2312,15 +2538,140 @@ class PhenologyVisualization:
 
 
 
+        def yearly_cubic_spline(self, ax, latitude, longitude, years= ["2002", "2003", "2004", "2005",
+             "2006", "2007", "2008", "2009", "2010",
+             "2011", "2012", "2013", "2014", "2015",
+             "2016", "2017", "2018", "2019","2020",
+             "2021", "2022", "2023", "2024"]):
+                """Overlay csaps splines for multiple years on a common fractional-month x-axis.
+
+                Fits a single spline over the full valid time series for the pixel at
+                (latitude, longitude), then slices it year by year and plots each slice
+                against fractional month (1–12) using a distinct colour from the
+                cc.glasbey_light palette. Detected peaks and troughs are overlaid as
+                scatter markers coloured by QA level.
+
+                A vertical colorbar maps year indices to their assigned colours, and two
+                separate legends show QA marker styles (Good / Fair / Poor) and event
+                types (Peak / Trough).
+
+                Parameters
+                ----------
+                ax : matplotlib.axes.Axes
+                    Axes on which to draw the overlaid splines and markers.
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                years : list of str, optional
+                    Calendar years to include. Each element must be a string (e.g. '2005').
+                    Defaults to 2002–2024. Years with fewer than 3 spline points are
+                    skipped with a warning.
+
+                Returns
+                -------
+                None
+                """
+                g  = self._load_extracted_globals()
+                px = self._load_pixel_data(latitude, longitude)
+                lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
+
+                smoothing = px["smoothing"]
+                cmap = ListedColormap(cc.glasbey_light[:len(years)])
+                year_colors = {year: cmap(i) for i, year in enumerate(years)}
+
+                # Fit one spline over all valid data
+                mask_all     = (px["values"] != -9999) & (px["qa"] == 0)
+                values_m_all = px["values"][mask_all]
+                time_m_all   = t_all[mask_all]
+                smooth_x_all = np.arange(t_all.min(), t_all.max() + 1, 1)
+                smooth_y_all = csaps(time_m_all, values_m_all, smooth_x_all, smooth=smoothing)
+                smooth_dates_all = np.array(datenum_to_datetime(smooth_x_all))
+
+                for year in years:
+                        start= year
+                        end = year
+                        mask_pks     = np.array([(d.year <= int(end)) & (d.year >= int(start)) for d in px["pks_x"]])
+                        pks_x_sub    = px["pks_x"][mask_pks]
+                        pks_y_sub    = px["pks_y"][mask_pks]
+                        pks_qa_sub   = px["pks_qa"][mask_pks]
+
+                        mask_trgs    = np.array([(d.year <= int(end)) & (d.year >= int(start)) for d in px["trgs_x"]])
+                        trgs_x_sub   = px["trgs_x"][mask_trgs]
+                        trgs_y_sub   = px["trgs_y"][mask_trgs]
+                        trgs_qa_sub  = px["trgs_qa"][mask_trgs]
+
+                        # Subset the pre-fitted spline to this year and convert to fractional month (1–12)
+                        mask_year = np.array([d.year == int(year) for d in smooth_dates_all])
+                        smooth_dates_year = smooth_dates_all[mask_year]
+                        smooth_y  = smooth_y_all[mask_year]
+
+                        if len(smooth_dates_year) > 2:
+                                smooth_x_month = to_frac_month(smooth_dates_year)
+                                ax.plot(smooth_x_month, smooth_y, color=year_colors[year], linewidth=1, label=str(year))
+
+                                qa_markers = {0: "o", 1: ".", 2: "x"}
+                                qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
+                                for qa in (0, 1, 2):
+                                        pm = pks_qa_sub == qa
+                                        tm = trgs_qa_sub == qa
+                                        if pm.any():
+                                                ax.scatter(to_frac_month(pks_x_sub[pm]), pks_y_sub[pm], color="black", s=50,
+                                                        marker=qa_markers[qa], edgecolors="black", linewidths=0.5,
+                                                        zorder=4, label= qa_labels[qa] if year == years[0] else None)
+                                        if tm.any():
+                                                ax.scatter(to_frac_month(trgs_x_sub[tm]), trgs_y_sub[tm], color="darkgray", s=50,
+                                                        marker=qa_markers[qa], edgecolors="black", linewidths=0.5,
+                                                        zorder=4, label=qa_labels[qa] if (year == years[0] and not pm.any()) else None)
+                        else:
+                                warnings.warn(f"Not enough data to plot for year {year}")
+
+                # One-time axis setup after all years are plotted
+                int_years = [int(y) for y in years]
+                ax.set_xlim(1, 12)
+                ax.set_xticks(range(1, 13))
+                ax.set_xticklabels(["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"])
+                all_pks_y = px["pks_y"][np.array([d.year in int_years for d in px["pks_x"]])]
+                all_trgs_y = px["trgs_y"][np.array([d.year in int_years for d in px["trgs_x"]])]
+                if len(all_pks_y) > 0 and len(all_trgs_y) > 0:
+                        pks_sorted = sorted(all_pks_y)
+                        ymax = pks_sorted[-2] if pks_sorted[-1] > 10 and len(pks_sorted) > 1 else pks_sorted[-1]
+                        ax.set_ylim(sorted(all_trgs_y)[0] - 0.5, ymax + 0.5)
+                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}"
+                ax.set_title(textstr)
+                ax.grid(axis="x", linewidth=0.5)
+                ax.grid(axis="y")
+                ax.set_ylabel("[ug/L]")
+
+                # QA legend (markers only, no year lines)
+                qa_markers = {0: "o", 1: ".", 2: "x"}
+                qa_labels  = {0: "Good", 1: "Fair", 2: "Poor"}
+                qa_handles = [mlines.Line2D([], [], color="black", marker=qa_markers[qa],
+                                      linestyle="None", markersize=6, label=qa_labels[qa])
+                        for qa in (0, 1, 2)
+                ]
+
+                # Color legend for pks and trgs
+                type_handles = [
+                mlines.Line2D([], [], color="black", marker="o",
+                                linestyle="None", markersize=8, label="Peak"),
+                mlines.Line2D([], [], color="darkgray", marker="o",
+                                linestyle="None", markersize=8, label="Trough"),]
+
+
+                leg1 = ax.legend(handles=qa_handles, loc="upper left")
+                ax.add_artist(leg1)
+                ax.legend(handles= type_handles, loc = "upper right")
 
 
 
-
-
-
-
-
-
+                # Colorbar for year colors
+                norm = mcolors.BoundaryNorm(boundaries=range(len(years) + 1), ncolors=len(years))
+                sm   = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+                sm.set_array([])
+                cbar = plt.colorbar(sm, ax=ax, orientation="vertical", pad=0.01, aspect=30)
+                cbar.set_ticks([i + 0.5 for i in range(len(years))])
+                cbar.set_ticklabels(years)
 
 
 
