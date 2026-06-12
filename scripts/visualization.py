@@ -2561,8 +2561,11 @@ class PhenologyVisualization:
                 lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
 
                 smoothing = px["smoothing"]
-                cmap = ListedColormap(cc.glasbey_light[:len(years)])
-                year_colors = {year: cmap(i) for i, year in enumerate(years)}
+                cmap = cc.cm.rainbow
+
+                year_colors = {year: cmap(i / max(len(years) - 1, 1)) for i, year in enumerate(years)}
+
+                cmap_discrete = ListedColormap([year_colors[y] for y in years])
 
                 # Fit one spline over all valid data
                 mask_all     = (px["values"] != -9999) & (px["qa"] == 0)
@@ -2621,7 +2624,7 @@ class PhenologyVisualization:
                         pks_sorted = sorted(all_pks_y)
                         ymax = pks_sorted[-2] if pks_sorted[-1] > 10 and len(pks_sorted) > 1 else pks_sorted[-1]
                         ax.set_ylim(sorted(all_trgs_y)[0] - 0.5, ymax + 0.5)
-                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}"
+                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[latitude]), 4)}"
                 ax.set_title(textstr)
                 ax.grid(axis="x", linewidth=0.5)
                 ax.grid(axis="y")
@@ -2651,7 +2654,7 @@ class PhenologyVisualization:
 
                 # Colorbar for year colors
                 norm = mcolors.BoundaryNorm(boundaries=range(len(years) + 1), ncolors=len(years))
-                sm   = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+                sm   = plt.cm.ScalarMappable(cmap=cmap_discrete, norm=norm)
                 sm.set_array([])
                 cbar = plt.colorbar(sm, ax=ax, orientation="vertical", pad=0.01, aspect=30)
                 cbar.set_ticks([i + 0.5 for i in range(len(years))])
