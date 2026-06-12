@@ -11,6 +11,7 @@ from scipy.sparse import SparseEfficiencyWarning
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from shapely.geometry import Point
 import pandas as pd
 import plotly.graph_objects as go
@@ -549,6 +550,49 @@ def bivariate_legend( ax, color_set):
     ax.set_aspect("equal")
 
 
+def bivariate_continuous_legend(ax, color_set, n=64):
+    """Render a smooth 2D gradient legend for a continuous bivariate colormap.
+
+    Bilinearly interpolates over the 4×4 color_set grid to produce a continuous
+    gradient image. X-axis = peaks fraction, Y-axis = troughs fraction (both 0–1).
+    """
+    grid = np.zeros((n, n, 3))
+    for row in range(n):
+        for col in range(n):
+            # normalize pixel coordinates to fractions in [0, 1]
+            pk_frac = col / (n - 1)
+            trg_frac = row / (n - 1)
+
+            # map fractions to positions in the 4×4 color grid (indices 0–3) 
+            pk_pos = np.clip(pk_frac * 3, 0, 3)
+            trg_pos = np.clip(trg_frac * 3, 0, 3)
+
+            # find the neighboring grid cell indices
+            pk0 = int(np.floor(pk_pos))
+            pk1 = min(pk0 + 1, 3)
+            trg0 = int(np.floor(trg_pos))
+            trg1 = min(trg0 + 1, 3)
+
+            # compute interpolation weights within the grid cell
+            t_pk = pk_pos - pk0
+            t_trg = trg_pos - trg0
+
+            # retrieve the four surrounding colors from the discrete 4×4 color grid
+            c00 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk0]))
+            c10 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk1]))
+            c01 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk0]))
+            c11 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk1]))
+
+            # bilinearly interpolate between the four colors
+            grid[row, col] = (c00 * (1 - t_pk) * (1 - t_trg) + c10 * t_pk * (1 - t_trg) +
+                              c01 * (1 - t_pk) * t_trg + c11 * t_pk * t_trg)
+    ax.imshow(grid, origin='lower', extent=[0, 1, 0, 1], aspect='equal')
+    ax.set_xticks([0, 0.5, 1])
+    ax.set_yticks([0, 0.5, 1])
+    ax.set_xlabel("Peaks fraction")
+    ax.set_ylabel("Troughs fraction")
+
+
 
 def create_empty_heatmap(nrows=4, ncols=4):
 
@@ -590,8 +634,6 @@ def to_frac_month(dates):
         days_in_month = (pd.Timestamp(d.year, d.month % 12 + 1, 1) - pd.Timedelta(days=1)).day if d.month < 12 else 31
         result.append(d.month + (d.day - 1) / days_in_month)
     return np.array(result)
-
-
 
 
 
