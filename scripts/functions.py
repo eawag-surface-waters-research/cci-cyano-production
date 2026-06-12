@@ -523,7 +523,7 @@ def bivariate_legend( ax, color_set):
     for row in range(4):
         for col in range(4):
 
-            idx = row * 4 + col
+            idx = col * 4 + row
 
             ax.add_patch(
                 Rectangle(
@@ -560,8 +560,8 @@ def bivariate_continuous_legend(ax, color_set, n=64):
     for row in range(n):
         for col in range(n):
             # normalize pixel coordinates to fractions in [0, 1]
-            pk_frac = col / (n - 1)
-            trg_frac = row / (n - 1)
+            trg_frac = col / (n - 1)
+            pk_frac = row / (n - 1)
 
             # map fractions to positions in the 4×4 color grid (indices 0–3) 
             pk_pos = np.clip(pk_frac * 3, 0, 3)
@@ -589,8 +589,8 @@ def bivariate_continuous_legend(ax, color_set, n=64):
     ax.imshow(grid, origin='lower', extent=[0, 1, 0, 1], aspect='equal')
     ax.set_xticks([0, 0.5, 1])
     ax.set_yticks([0, 0.5, 1])
-    ax.set_xlabel("Peaks fraction")
-    ax.set_ylabel("Troughs fraction")
+    ax.set_xlabel("Troughs fraction")
+    ax.set_ylabel("Peaks fraction")
 
 
 
