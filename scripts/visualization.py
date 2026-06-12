@@ -17,7 +17,7 @@ from matplotlib.patches import Rectangle
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import pearsonr
 from csaps import csaps
-from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data, create_empty_heatmap, bivariate_legend, bivariate_continuous_legend, to_frac_month
+from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data, create_empty_heatmap, bivariate_legend, bivariate_continuous_legend, interpolate_from_color_set, to_frac_month, bivariate_continuous_legend
 import multiprocessing
 from functools import partial
 import shapely.ops as ops
@@ -31,25 +31,6 @@ import colorcet as cc
 
 
 _GLOBALS = {}
-
-
-def _bilerp_color(pk_frac, trg_frac, color_set):
-    """Bilinearly interpolate an RGB color from a 4×4 color_set grid.
-
-    Maps pk_frac and trg_frac (both in [0, 1]) onto the [0, 3] grid axes and
-    interpolates between the four surrounding grid-point colors.
-    """
-    pk_pos = float(np.clip(pk_frac * 3, 0, 3))
-    trg_pos = float(np.clip(trg_frac * 3, 0, 3))
-    pk0 = int(np.floor(pk_pos)); pk1 = min(pk0 + 1, 3)
-    trg0 = int(np.floor(trg_pos)); trg1 = min(trg0 + 1, 3)
-    t_pk = pk_pos - pk0; t_trg = trg_pos - trg0
-    c00 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk0]))
-    c10 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk1]))
-    c01 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk0]))
-    c11 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk1]))
-    return c00 * (1 - t_pk) * (1 - t_trg) + c10 * t_pk * (1 - t_trg) + \
-           c01 * (1 - t_pk) * t_trg + c11 * t_pk * t_trg
 
 
 def _init_worker(p_path, e_path):
@@ -1909,7 +1890,7 @@ class PhenologyVisualization:
                 When whole_lake=True, peak and trough events are aggregated across all
                 lake pixels and each cell shows the fraction of that year's total events
                 falling in that quarter. Colours are interpolated continuously across the
-                4×4 grid using _bilerp_color, and the legend is a smooth 2-D gradient
+                4×4 grid using bivariate_continuous_legend(), and the legend is a smooth 2-D gradient
                 rendered by bivariate_continuous_legend.
 
                 Parameters
@@ -1966,7 +1947,7 @@ class PhenologyVisualization:
 
                 for year, quarters in heatmap_data.items():
                         for q_idx, (pks_frac, trgs_frac) in enumerate(quarters):
-                                color = _bilerp_color(pks_frac, trgs_frac, color_set)
+                                color = interpolate_from_color_set(pks_frac, trgs_frac, color_set)
                                 ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
 
                 ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform=ax.transAxes)
