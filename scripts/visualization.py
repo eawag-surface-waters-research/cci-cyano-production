@@ -1895,7 +1895,7 @@ class PhenologyVisualization:
 
                 return result
         
-        def yearly_heatmap(self, latitude, longitude, color_scheme='pink-blue', whole_lake=False):
+        def yearly_heatmap_pixel(self, latitude, longitude, color_scheme='pink-blue'):
                 """Plot a bivariate heatmap of peak and trough counts or fractions by year and quarter.
 
                 Each cell in the heatmap represents one calendar quarter of one year. The
@@ -1933,44 +1933,47 @@ class PhenologyVisualization:
                 ax : matplotlib.axes.Axes
                     The axes on which the heatmap is drawn.
                 """
-                if not whole_lake:
-                        heatmap_data = self.create_heatmap_output(latitude=latitude, longitude=longitude, fraction = False)
-                        fig, ax, _ = create_empty_heatmap()
-                        g  = self._load_extracted_globals()
-                        lat, lon = g["lat"], g["lon"]
-                        textstr = f"Yearly Heatmap for Pixel\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}\n {os.path.basename(os.path.dirname(self.p_path))}, Lake ID:{os.path.basename(self.p_path)[:-3]}"
-                        ax.set_title(textstr)
+             
+                heatmap_data = self.create_heatmap_output(latitude=latitude, longitude=longitude, fraction = False)
+                fig, ax, _ = create_empty_heatmap()
+                g  = self._load_extracted_globals()
+                lat, lon = g["lat"], g["lon"]
+                textstr = f"Yearly Heatmap for Pixel\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}\n {os.path.basename(os.path.dirname(self.p_path))}, Lake ID:{os.path.basename(self.p_path)[:-3]}"
+                ax.set_title(textstr)
 
-                        color_set = color_sets_4x4[color_scheme]
+                color_set = color_sets_4x4[color_scheme]
 
-                        for year, quarters in heatmap_data.items():
-                                for q_idx, (n_pks, n_trgs) in enumerate(quarters):
-                                        pk_bin  = min(n_pks,  3)
-                                        trg_bin = min(n_trgs, 3)
-                                        color = color_set[trg_bin * 4 + pk_bin]
-                                        ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
+                for year, quarters in heatmap_data.items():
+                        for q_idx, (n_pks, n_trgs) in enumerate(quarters):
+                                pk_bin  = min(n_pks,  3)
+                                trg_bin = min(n_trgs, 3)
+                                color = color_set[trg_bin * 4 + pk_bin]
+                                ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
 
-                        ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform = ax.transAxes)
-                        bivariate_legend(ax_legend, color_set)
+                ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform = ax.transAxes)
+                bivariate_legend(ax_legend, color_set)
 
-                        return fig, ax
-                else:
-                        heatmap_data = self.create_heatmap_output(latitude=latitude, longitude=longitude, fraction=True)
-                        fig, ax, _ = create_empty_heatmap()
-                        textstr = f"Yearly Heatmap for Lake ID: {os.path.basename(self.p_path)[:-3]}\n  {os.path.basename(os.path.dirname(self.p_path))}"
-                        ax.set_title(textstr)
+                return fig, ax
+        
+        def yearly_heatmap_lake(self, color_scheme= "pink-blue"):
+                # lat and lon are not needed as the heatmap uses all pixels from the lake, thus they can be arbitrary
+                heatmap_data = self.create_heatmap_output(latitude=-1, longitude=-1, fraction=True)
+                fig, ax, _ = create_empty_heatmap()
+                textstr = f"Yearly Heatmap for Lake ID: {os.path.basename(self.p_path)[:-3]}\n  {os.path.basename(os.path.dirname(self.p_path))}"
+                ax.set_title(textstr)
 
-                        color_set = color_sets_4x4[color_scheme]
+                color_set = color_sets_4x4[color_scheme]
 
-                        for year, quarters in heatmap_data.items():
-                                for q_idx, (pks_frac, trgs_frac) in enumerate(quarters):
-                                        color = _bilerp_color(pks_frac, trgs_frac, color_set)
-                                        ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
+                for year, quarters in heatmap_data.items():
+                        for q_idx, (pks_frac, trgs_frac) in enumerate(quarters):
+                                color = _bilerp_color(pks_frac, trgs_frac, color_set)
+                                ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
 
-                        ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform=ax.transAxes)
-                        bivariate_continuous_legend(ax_legend, color_set)
+                ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform=ax.transAxes)
+                bivariate_continuous_legend(ax_legend, color_set)
 
-                        return fig, ax
+                return fig, ax
+                
 
 
 
@@ -2606,7 +2609,7 @@ class PhenologyVisualization:
                         smooth_dates_year = smooth_dates_all[mask_year]
                         smooth_y  = smooth_y_all[mask_year]
 
-                        if len(smooth_dates_year) > 2:
+                        if len(smooth_dates_year) > 1:
                                 smooth_x_month = to_frac_month(smooth_dates_year)
                                 ax.plot(smooth_x_month, smooth_y, color=year_colors[year], linewidth=1, label=str(year))
 
