@@ -550,6 +550,35 @@ def bivariate_legend( ax, color_set):
     ax.set_aspect("equal")
 
 
+def interpolate_from_color_set(pks_fraction, trgs_fraction, color_set):
+    """Bilinearly interpolate an RGB color from a 4×4 color_set grid.
+
+    Maps pk_frac and trg_frac (both in [0, 1]) onto the [0, 3] grid axes and
+    interpolates between the four surrounding grid-point colors.
+    """
+
+    # map fractions to positions in the 4×4 color grid (indices 0–3)
+    pk_pos = float(np.clip(pks_fraction * 3, 0, 3))
+    trg_pos = float(np.clip(trgs_fraction * 3, 0, 3))
+
+    # find the neighboring grid cell indices
+    pk0 = int(np.floor(pk_pos))
+    pk1 = min(pk0 + 1, 3)
+    trg0 = int(np.floor(trg_pos))
+    trg1 = min(trg0 + 1, 3)
+
+    # compute interpolation weights within the grid cell
+    t_pk = pk_pos - pk0
+    t_trg = trg_pos - trg0
+    c00 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk0]))
+    c10 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk1]))
+    c01 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk0]))
+    c11 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk1]))
+    return (c00 * (1 - t_pk) * (1 - t_trg) + c10 * t_pk * (1 - t_trg) +
+           c01 * (1 - t_pk) * t_trg + c11 * t_pk * t_trg)
+
+
+
 def bivariate_continuous_legend(ax, color_set, n=64):
     """Render a smooth 2D gradient legend for a continuous bivariate colormap.
 
@@ -563,29 +592,8 @@ def bivariate_continuous_legend(ax, color_set, n=64):
             trg_frac = col / (n - 1)
             pk_frac = row / (n - 1)
 
-            # map fractions to positions in the 4×4 color grid (indices 0–3) 
-            pk_pos = np.clip(pk_frac * 3, 0, 3)
-            trg_pos = np.clip(trg_frac * 3, 0, 3)
-
-            # find the neighboring grid cell indices
-            pk0 = int(np.floor(pk_pos))
-            pk1 = min(pk0 + 1, 3)
-            trg0 = int(np.floor(trg_pos))
-            trg1 = min(trg0 + 1, 3)
-
-            # compute interpolation weights within the grid cell
-            t_pk = pk_pos - pk0
-            t_trg = trg_pos - trg0
-
-            # retrieve the four surrounding colors from the discrete 4×4 color grid
-            c00 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk0]))
-            c10 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk1]))
-            c01 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk0]))
-            c11 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk1]))
-
             # bilinearly interpolate between the four colors
-            grid[row, col] = (c00 * (1 - t_pk) * (1 - t_trg) + c10 * t_pk * (1 - t_trg) +
-                              c01 * (1 - t_pk) * t_trg + c11 * t_pk * t_trg)
+            grid[row, col] = interpolate_from_color_set(pk_frac, trg_frac, color_set=color_set)
     ax.imshow(grid, origin='lower', extent=[0, 1, 0, 1], aspect='equal')
     ax.set_xticks([0, 0.5, 1])
     ax.set_yticks([0, 0.5, 1])
