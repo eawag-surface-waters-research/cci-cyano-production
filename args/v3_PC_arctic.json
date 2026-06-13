@@ -1,0 +1,19 @@
+{
+  "variable": "phycocyanin",
+  "qa": "lwlr_quality_flags",
+  "shapefile": "C:/Users/schelian/Downloads/lakes_cci_v2.1.0_shp/shapefile/lakescci_v2.1.0_data-availability.shp",
+  "images": "D:/lakecci_data/raw/v3.0/merged_product",
+  "out_folder": "C:/Users/schelian/Documents/phyto_phenology_local",
+  "lakes": [9, 339, 212],
+  "extract": false,
+  "qa_filter": true,
+  "phenology": false,
+  "analysis": true,
+  "purple_chla21": true,
+  "maps": true,
+  "aggregation": true,
+  "background_pts": true,
+  "comparison": true,
+  "time_splits": [[0,9999]], 
+  "pixel_plots": "C:\\Users\\schelian\\cci-cyano-production\\pixel_dicts\\v3_chla_pixels.json"
+}
