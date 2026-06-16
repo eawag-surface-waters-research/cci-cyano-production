@@ -8,12 +8,12 @@ import geopandas as gpd
 from concurrent.futures import ProcessPoolExecutor
 import os
 
-from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots
+from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, write_provenance
 from extract import extract
 from phenology import phenology
 from visualization import PhenologyVisualization
 
-def main(args, log=False, threads=1, parallel="lake", batch_size=100):
+def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=None):
     set_logging(log)
     args = parse_args(args)
 
@@ -37,6 +37,8 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
         else:
             with ProcessPoolExecutor(max_workers=threads) as executor:
                 executor.map(extract, lakes, itertools.repeat(args), itertools.repeat(files))
+        write_provenance(args["out_folder"], "extract", args, args_file=args_file,
+                         extra={"lakes": [int(lake["id"]) for lake in lakes], "threads": threads, "parallel": parallel})
     else:
         logging.info("Skipping extraction step.")
 
@@ -49,11 +51,16 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
             with ProcessPoolExecutor(max_workers=threads) as executor:
                 executor.map(phenology, lakes, itertools.repeat(args),
                              itertools.repeat(1), itertools.repeat(batch_size))
-                
+        write_provenance(args["out_folder"], "phenology", args, args_file=args_file,
+                         extra={"lakes": [int(lake["id"]) for lake in lakes], "threads": threads,
+                                "parallel": parallel, "batch_size": batch_size})
+
     if args["analysis"]:
         logging.info("Starting Analysis")
         PhenologyVisualization.set_shapefile_path(args["shapefile"])
         lake_analysis_folder = os.path.join(os.path.dirname(os.path.dirname(args["out_folder"])), "lake_analysis")
+        write_provenance(args["out_folder"], "analysis", args, args_file=args_file,
+                         extra={"lakes": [int(lake["id"]) for lake in lakes]})
         for lake in lakes:
             e_path = os.path.join(args["out_folder"], "extract", args["variable"], f"{lake['id']}.nc")
             p_path = os.path.join(args["out_folder"], "phenology", args["variable"], f"{lake['id']}.nc")
@@ -138,4 +145,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     with open(args.file) as f:
         file_args = json.load(f)
-    main(file_args, log=args.logs, threads=int(args.threads), parallel=args.parallel, batch_size=args.batch_size)
+    main(file_args, log=args.logs, threads=int(args.threads), parallel=args.parallel,
+         batch_size=args.batch_size, args_file=os.path.splitext(os.path.basename(args.file))[0])

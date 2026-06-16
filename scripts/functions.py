@@ -1,5 +1,7 @@
 import os
 import sys
+import json
+import subprocess
 import logging
 import netCDF4
 import numpy as np
@@ -84,6 +86,62 @@ def verify_arg_file(value):
         if os.path.splitext(file)[0] == value or file == value:
             return os.path.join(arg_folder, file)
     raise ValueError("Argument file {} not found in the args folder.".format(value))
+
+
+def get_git_commit():
+    """Return the short hash of the currently checked-out commit, or None if unavailable."""
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=repo, stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        return None
+
+
+def write_provenance(out_folder, stage, args, args_file=None, extra=None):
+    """Append a provenance record for one pipeline stage to out_folder/provenance.json.
+
+    out_folder is the version-named run directory (e.g. .../v3.0) that the
+    extract/phenology/analysis stage just wrote into. Each call appends a new
+    entry to the "runs" list rather than overwriting the file, so partial or
+    resumed runs build up a full history instead of erasing prior stages' records.
+
+    Parameters
+    ----------
+    out_folder : str
+        The run's out_folder (must be named v{version}; see README).
+    stage : str
+        Which pipeline stage produced this entry: "extract", "phenology", or "analysis".
+    args : dict
+        The resolved parameters dict used for this run (post parse_args defaults).
+    args_file : str, optional
+        Name of the args/ JSON file this run was launched from.
+    extra : dict, optional
+        Additional stage-specific fields (e.g. lakes processed, thread count).
+    """
+    os.makedirs(out_folder, exist_ok=True)
+    path = os.path.join(out_folder, "provenance.json")
+
+    if os.path.isfile(path):
+        with open(path) as f:
+            record = json.load(f)
+    else:
+        record = {"out_folder": os.path.basename(out_folder), "runs": []}
+
+    entry = {
+        "stage": stage,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "git_commit": get_git_commit(),
+        "args_file": args_file,
+        "args": args,
+    }
+    if extra:
+        entry.update(extra)
+    record["runs"].append(entry)
+
+    with open(path, "w") as f:
+        json.dump(record, f, indent=2, default=str)
 
 
 def _datenum_to_unix(datenum):
