@@ -1250,9 +1250,10 @@ class PhenologyVisualization:
                 """Plot detected peaks or troughs as a stem plot with optional background scatter.
 
                 Displays summer peaks or winter troughs for the pixel at (latitude, longitude)
-                as vertical stems. Background observations may be shown as a raw scatter or
-                3×3 spatial median (aggregation=True). Negative values are flagged with red
-                crosses and trigger a warning.
+                as vertical stems, with each extremum marker shaped by its QA flag
+                while keeping the product's colour. Background observations may be shown as
+                a raw scatter (QA==0 only) or 3×3 spatial median (when aggregation=True). Negative
+                values are flagged with red crosses and trigger a warning.
 
                 Parameters
                 ----------
@@ -1298,12 +1299,14 @@ class PhenologyVisualization:
                         mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
                         x_sub = pks_x[mask_pks]
                         y_sub = pks_y[mask_pks]
+                        qa_sub = px["pks_qa"][mask_pks]
 
                 else:
                         trgs_x, trgs_y = px["trgs_x"], px["trgs_y"]
                         mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
                         x_sub = trgs_x[mask_pks]
                         y_sub = trgs_y[mask_pks]
+                        qa_sub = px["trgs_qa"][mask_pks]
 
                 mask     = (px["values"] != -9999) & (px["qa"] == 0)
                 values_m = px["values"][mask]
@@ -1326,26 +1329,25 @@ class PhenologyVisualization:
                         neg_label_before = False
                         phenology_name = os.path.basename(os.path.dirname(self.p_path))
                         if purple_chla21:
-                                if phenology_name == "phycocyanin":
-                                        label = "phyco"
-                                        color = "blue"
-                                elif phenology_name == "chla_mean":
-                                        label = "chla v2.1"
-                                        color = "purple"
-                                else:
-                                        label = "chla v3.1"
-                                        color = "green"
+                                label_dict = {"phycocyanin": "phyco",
+                                              "chla_mean": "chla v2.1",
+                                              "chla": "chla v3.0"
+                                              }
+                                color_dict = {"phycocyanin": "blue",
+                                              "chla_mean": "purple",
+                                              "chla": "green"
+                                              }
+                                
 
                         else:
-                                if phenology_name == "phycocyanin":
-                                        label = "phyco"
-                                        color = "blue"
-                                elif phenology_name == "chla_mean":
-                                        label = "chla v2.1"
-                                        color = "lightgreen"
-                                else:
-                                        label = "chla v3.1"
-                                        color = "green"
+                                label_dict = {"phycocyanin": "phyco",
+                                              "chla_mean": "chla v2.1",
+                                              "chla": "chla v3.0"
+                                              }
+                                color_dict = {"phycocyanin": "blue",
+                                              "chla_mean": "lightgreen",
+                                              "chla": "green"
+                                              }
 
                         if not background_pts and aggregation:
                                 raise ValueError("Either aggreagte background points or not plot them at all.")
@@ -1360,14 +1362,30 @@ class PhenologyVisualization:
 
                                 background_values = background_sub["MA_value"]
 
-                                ax.scatter(datenum_to_datetime(background_time), background_values, color=color, alpha=0.3, s=10, label=f"{label} Data")
+                                ax.scatter(datenum_to_datetime(background_time), background_values, color=color_dict[phenology_name], alpha=0.3, s=10, label=f"{label_dict[phenology_name]} Data")
                         elif background_pts and not aggregation:
-                                ax.scatter(datenum_to_datetime(time_m), values_m, color=color, alpha=0.3, s=10, label=f"{label} Data")
+                                ax.scatter(datenum_to_datetime(time_m), values_m, color=color_dict[phenology_name], alpha=0.3, s=10, label=f"{label_dict[phenology_name]} Data")
                         else:
                                 pass
 
+                        gap_starts = px["gap_starts"]
+                        gap_ends   = px["gap_ends"]
+                        _, existing_labels = ax.get_legend_handles_labels()
+                        gap_label_already = "Data gap" in existing_labels
+                        for idx, (gs, ge) in enumerate(zip(gap_starts, gap_ends)):
+                                gap_label = "Data gap" if idx == 0 and not gap_label_already else None
+                                ax.axvspan(gs, ge, color="orange", alpha=0.15, zorder=0, label=gap_label)
+
                         extrema_label = "Peaks" if peak else "Troughs"
-                        ax.stem(x_sub, y_sub, linefmt=color, label=f"{label} {extrema_label}", basefmt = " ")
+                        ax.stem(x_sub, y_sub, linefmt=color_dict[phenology_name], markerfmt=" ", basefmt = " ")
+                        qa_markers = {0: "o", 1: "s", 2: "x"}
+                        qa_labels  = {0: "Good", 1: "Fair", 2: "Poor"}
+                        for q in (0, 1, 2):
+                                qm = qa_sub == q
+                                if qm.any():
+                                        ax.scatter(x_sub[qm], y_sub[qm], color=color_dict[phenology_name], 
+                                                   marker=qa_markers[q], s=50, edgecolors="black", linewidths=0.5,
+                                                   zorder=4, label=f"{label_dict[phenology_name]} {extrema_label} ({qa_labels[q]})")
                         if (y_sub < 0).any():
                                 mask =  y_sub<0
                                 pks_x_neg_before = x_sub[mask]
@@ -1413,7 +1431,7 @@ class PhenologyVisualization:
 
                 Calls extrema_plot for self and other1 (and optionally other2), sharing the
                 same axes so that peaks or troughs from different products (e.g. chla v2.1
-                vs v3.1) can be compared directly. All instances must reference the same lake.
+                vs v3.0) can be compared directly. All instances must reference the same lake.
 
                 Parameters
                 ----------
@@ -1472,32 +1490,28 @@ class PhenologyVisualization:
                         phenology_name2 = os.path.basename(os.path.dirname(other1.p_path))
                         phenology_name3 = os.path.basename(os.path.dirname(other2.p_path))
                         
-                        if phenology_name1 == "phycocyanin":
-                                phenology_name1 = "phyco"
-                        elif phenology_name1 == "chla_mean":
-                                phenology_name1 = "chla v2.1"
-                        else:
-                                phenology_name1 = "chla v3.1"
+                        
+                        label_dict = {"phycocyanin": "phyco",
+                                              "chla_mean": "chla v2.1",
+                                              "chla": "chla v3.0"
+                                              }
+                        if purple_chla21:
 
-                        if phenology_name2 == "phycocyanin":
-                                phenology_name2 = "phyco"
-                        elif phenology_name2 == "chla_mean":
-                                phenology_name2 = "chla v2.1"
+                                color_dict = {"phycocyanin": "blue",
+                                              "chla_mean": "purple",
+                                              "chla": "green"
+                                              }
                         else:
-                                phenology_name2 = "chla v3.1"
-
-                        if phenology_name3 == "phycocyanin":
-                                phenology_name3 = "phyco"
-                        elif phenology_name3 == "chla_mean":
-                                phenology_name3 = "chla v2.1"
-                        else:
-                                phenology_name3 = "chla v3.1"
+                                color_dict = {"phycocyanin": "blue",
+                                              "chla_mean": "lightgreen",
+                                              "chla": "green"
+                                              }
 
 
                         if peak:
-                                textr =  f"{phenology_name1}, {phenology_name2} vs {phenology_name3} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textr =  f"{label_dict[phenology_name1]}, {label_dict[phenology_name2]} vs {label_dict[phenology_name3]} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
                         else:
-                                textr =  f"{phenology_name1}, {phenology_name2} vs {phenology_name3} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textr =  f"{label_dict[phenology_name1]}, {label_dict[phenology_name2]} vs {label_dict[phenology_name3]} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
                         ax.set_title(textr)
                         ax.set_ylim(top = max(y_lims))
                         ax.xaxis.set_minor_locator(mdates.YearLocator())
@@ -1505,7 +1519,27 @@ class PhenologyVisualization:
                         ax.grid(axis="x", which="major", linewidth=0.5)
                         ax.grid(axis="y", linewidth=0.5)
                         ax.set_ylabel("[ug/L]")
-                        ax.legend(loc="upper left", ncol= 2)
+                        # QA legend (markers only, no year lines)
+                        qa_markers = {0: "o", 1: "s", 2: "x"}
+                        qa_labels  = {0: "Good", 1: "Fair", 2: "Poor"}
+                        qa_handles = [mlines.Line2D([], [], color="black", marker=qa_markers[qa],
+                                        linestyle="None", markersize=6, label=qa_labels[qa])
+                                for qa in (0, 1, 2)
+                        ]
+
+                        # Color legend for pks and trgs
+                        type_handles = [
+                        mlines.Line2D([], [], color=color_dict[phenology_name1], marker="o",
+                                        linestyle="None", markersize=8, label="Peak"),
+                        mlines.Line2D([], [], color=color_dict[phenology_name2], marker="o",
+                                        linestyle="None", markersize=8, label="Trough"),
+                        mlines.Line2D([], [], color=color_dict[phenology_name3], marker="o",
+                                        linestyle="None", markersize=8, label="Trough"),]
+
+
+                        leg1 = ax.legend(handles=qa_handles, loc="upper left")
+                        ax.add_artist(leg1)
+                        ax.legend(handles= type_handles, loc = "upper right")
 
                 else:
 
@@ -1515,23 +1549,25 @@ class PhenologyVisualization:
                         phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
                         phenology_name2 = os.path.basename(os.path.dirname(other1.p_path))
 
-                        if phenology_name1 == "phycocyanin":
-                                phenology_name1 = "phyco"
-                        elif phenology_name1 == "chla_mean":
-                                phenology_name1 = "chla v2.1"
-                        else:
-                                phenology_name1 = "chla v3.1"
+                        label_dict = {"phycocyanin": "phyco",
+                                              "chla_mean": "chla v2.1",
+                                              "chla": "chla v3.0"
+                                              }
+                        if purple_chla21:
 
-                        if phenology_name2 == "phycocyanin":
-                                phenology_name2 = "phyco"
-                        elif phenology_name2 == "chla_mean":
-                                phenology_name2 = "chla v2.1"
+                                color_dict = {"phycocyanin": "blue",
+                                              "chla_mean": "purple",
+                                              "chla": "green"
+                                              }
                         else:
-                                phenology_name2 = "chla v3.1"
-                        if peak: 
-                                textr =  f"{phenology_name1} vs {phenology_name2} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                color_dict = {"phycocyanin": "blue",
+                                              "chla_mean": "lightgreen",
+                                              "chla": "green"
+                                              }
+                        if peak:
+                                textr =  f"{label_dict[phenology_name1]} vs {label_dict[phenology_name2]} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
                         else:
-                                textr =  f"{phenology_name1} vs {phenology_name2} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textr =  f"{label_dict[phenology_name1]} vs {label_dict[phenology_name2]} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
                         
                         ax.set_title(textr)
                         ax.set_ylim(top = max(y_lims))
@@ -1540,7 +1576,25 @@ class PhenologyVisualization:
                         ax.grid(axis="x", which="major", linewidth=0.5)
                         ax.grid(axis="y", linewidth=0.5)
                         ax.set_ylabel("[ug/L]")
-                        ax.legend(loc="upper left", ncol= 2)
+                        # QA legend (markers only, no year lines)
+                        qa_markers = {0: "o", 1: "s", 2: "x"}
+                        qa_labels  = {0: "Good", 1: "Fair", 2: "Poor"}
+                        qa_handles = [mlines.Line2D([], [], color="black", marker=qa_markers[qa],
+                                        linestyle="None", markersize=6, label=qa_labels[qa])
+                                for qa in (0, 1, 2)
+                        ]
+
+                        # Color legend for pks and trgs
+                        type_handles = [
+                        mlines.Line2D([], [], color=color_dict[phenology_name1], marker="o",
+                                        linestyle="None", markersize=8, label="Peak"),
+                        mlines.Line2D([], [], color=color_dict[phenology_name2], marker="o",
+                                        linestyle="None", markersize=8, label="Trough"),]
+
+
+                        leg1 = ax.legend(handles=qa_handles, loc="upper left")
+                        ax.add_artist(leg1)
+                        ax.legend(handles= type_handles, loc = "upper right")
 
 
 
