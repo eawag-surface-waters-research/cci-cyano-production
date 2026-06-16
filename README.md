@@ -229,30 +229,34 @@ Global attributes store the run parameters used to produce the file.
 
 Metric CSVs and spatial aggregation values are written relative to the phenology file's root (`out_folder`). Analysis plots are written to a separate lake analysis folder passed at runtime.
 
-```
-out_folder/
-├── extract/
-│   └── {variable}/
-│       └── {lake_id}.nc
-├── phenology/
-│   └── {variable}/
-│       ├── {lake_id}.nc
-│       └── checkpoints/
-│           └── {lake_id}/
-│               └── bs{batch_size}/
-│                   └── *.npy          # temporary; deleted after successful write
-└── calculated_values/
-    ├── metrics/
-    │   └── {metric_name}/             # r2 | MAD | RMSE | correlation | values_per_pixel
-    │       ├── full_ts.csv                          # time_split [0, 9999]
-    │       ├── ts_end_{year}.csv                    # time_split [0, year]
-    │       ├── ts_start_{year}.csv                  # time_split [year, 9999]
-    │       └── ts_start_{year}_end_{year}.csv       # time_split [start, end]
-    └── spatial_aggregation_values/
-        └── aggregation_background_values.csv
+> **Naming requirement:** `out_folder` itself must be a directory literally named `v{version}` (e.g. `v2.1`, `v3.1`), and it must sit alongside any other version folders under a shared parent directory. `PhenologyVisualization` derives `self.version` by reading the basename of `out_folder` from the `phenology_path` it is given (stripping the leading `v`), and `main.py`'s `comparison` stage locates other versions as siblings of `out_folder` (`os.path.join(os.path.dirname(out_folder), other_version)`). Renaming or nesting `out_folder` differently breaks both the version label shown in plots and the comparison stage.
 
-lake_analysis_folder/
-└── {lake_str}/
+```
+{parent}/                            # shared parent of all version folders
+├── v2.1/                            # = out_folder for a v2.1 run
+│   ├── extract/
+│   │   └── {variable}/
+│   │       └── {lake_id}.nc
+│   ├── phenology/
+│   │   └── {variable}/
+│   │       ├── {lake_id}.nc
+│   │       └── checkpoints/
+│   │           └── {lake_id}/
+│   │               └── bs{batch_size}/
+│   │                   └── *.npy          # temporary; deleted after successful write
+│   └── calculated_values/
+│       ├── metrics/
+│       │   └── {metric_name}/             # r2 | MAD | RMSE | correlation | values_per_pixel
+│       │       ├── full_ts.csv                          # time_split [0, 9999]
+│       │       ├── ts_end_{year}.csv                    # time_split [0, year]
+│       │       ├── ts_start_{year}.csv                  # time_split [year, 9999]
+│       │       └── ts_start_{year}_end_{year}.csv       # time_split [start, end]
+│       └── spatial_aggregation_values/
+│           └── aggregation_background_values.csv
+└── v3.1/                            # = out_folder for a v3.1 run; same layout as v2.1/
+
+lake_analysis_folder/                # = {parent}/../lake_analysis, derived as
+└── {lake_str}/                      #   dirname(dirname(out_folder))/lake_analysis
     └── plots/
         ├── metric_maps/
         │   ├── {variable}_v{version}_{metric}_full_ts.png      # single time_split [0, 9999]
