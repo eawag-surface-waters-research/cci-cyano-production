@@ -106,8 +106,8 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
                 else:
                     _class_paths = {
                         "chla21":        ("v2.1", "chla_mean"),
-                        "chla31":        ("v3.1", "chla"),
-                        "phycocyanin31": ("v3.1", "phycocyanin"),
+                        "chla3":        ("v3.0", "chla"),
+                        "phycocyanin3": ("v3.0", "phycocyanin"),
                     }
                     instances = {}
                     for class_name in args["comparison_classes"]:

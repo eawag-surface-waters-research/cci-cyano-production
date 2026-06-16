@@ -39,8 +39,8 @@ def parse_args(args):
         "maps": False,
         "pixel_plots": False,
         "comparison": False,
-        "comparison_classes": ["chla21", "chla31", "phycocyanin31"],
-        "comparison_plot_types": ["chla21 vs chla31", "chla21 vs phyco", "chla31 vs phyco", "triple"],
+        "comparison_classes": ["chla21", "chla3", "phycocyanin3"],
+        "comparison_plot_types": ["chla21 vs chla3", "chla21 vs phyco", "chla3 vs phyco", "triple"],
         "background_pts": True,
         "purple_chla21": True,
         "time_splits" : [(0,9999)], 
@@ -486,8 +486,8 @@ def save_comparison_plots(instances, pixels, lake_analysis_folder, lake_str,
                           time_splits, comparison_plot_types,
                           aggregation=True, background_pts=False, purple_chla21=False):
     chla21 = instances.get("chla21")
-    chla31 = instances.get("chla31")
-    phyco  = instances.get("phycocyanin31")
+    chla3 = instances.get("chla3")
+    phyco  = instances.get("phycocyanin3")
     agg = "_agg" if aggregation else ""
 
     for start, end in time_splits:
@@ -495,14 +495,14 @@ def save_comparison_plots(instances, pixels, lake_analysis_folder, lake_str,
             raise ValueError("Beginning of time split cannot be larger than the end")
 
     pair_plots = []
-    if "chla21 vs chla31" in comparison_plot_types and chla21 and chla31:
-        pair_plots.append((chla21, chla31, None, "chla21_chla31"))
+    if "chla21 vs chla3" in comparison_plot_types and chla21 and chla3:
+        pair_plots.append((chla21, chla3, None, "chla21_chla3"))
     if "chla21 vs phyco" in comparison_plot_types and chla21 and phyco:
-        pair_plots.append((chla21, phyco, None, "chla21_phyco"))
-    if "chla31 vs phyco" in comparison_plot_types and chla31 and phyco:
-        pair_plots.append((chla31, phyco, None, "chla31_phyco"))
-    if "triple" in comparison_plot_types and chla21 and chla31 and phyco:
-        pair_plots.append((chla21, chla31, phyco, "chla21_chla31_phyco"))
+        pair_plots.append((chla21, phyco, None, "chla2_phyco"))
+    if "chla3 vs phyco" in comparison_plot_types and chla3 and phyco:
+        pair_plots.append((chla3, phyco, None, "chla3_phyco"))
+    if "triple" in comparison_plot_types and chla21 and chla3 and phyco:
+        pair_plots.append((chla21, chla3, phyco, "chla2_chla3_phyco"))
 
     n = len(time_splits)
 
