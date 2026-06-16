@@ -2142,6 +2142,78 @@ class PhenologyVisualization:
 
 
 
+        def grab_plotting_variables(self, start, end, pixel_data, variables = ["pks", "trgs", "midUP", "midDOWN"]):      
+                if "pks" in variables:
+                        mask_pks     = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["pks_x"]])
+                        pks_x_sub    = pixel_data["pks_x"][mask_pks]
+                        pks_y_sub    = pixel_data["pks_y"][mask_pks]
+                        pks_qa_sub   = pixel_data["pks_qa"][mask_pks]
+                
+                if "trgs" in variables:
+                        dict_key = "trgs"
+                        mask_trgs    = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["trgs_x"]])
+                        trgs_x_sub   = pixel_data["trgs_x"][mask_trgs]
+                        trgs_y_sub   = pixel_data["trgs_y"][mask_trgs]
+                        trgs_qa_sub  = pixel_data["trgs_qa"][mask_trgs]
+                if "midUP" in variables:
+                        dict_key = "midUP"
+                        mask_midUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midUP_x"]])
+                        midUP_x_sub  = pixel_data["midUP_x"][mask_midUP]
+                        midUP_y_sub  = pixel_data["midUP_y"][mask_midUP]
+                if "midDOWN" in variables:
+                        dict_key = "midDOWN"
+                        mask_midDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midDOWN_x"]])
+                        midDOWN_x_sub = pixel_data["midDOWN_x"][mask_midDOWN]
+                        midDOWN_y_sub = pixel_data["midDOWN_y"][mask_midDOWN]
+
+                return {"pks": [pks_x_sub, pks_y_sub, pks_qa_sub],
+                        "trgs": [trgs_x_sub, trgs_y_sub, trgs_qa_sub],
+                        "midUP": [midUP_x_sub, midUP_y_sub],
+                        "midDOWN": [midDOWN_x_sub, midDOWN_y_sub]}
+        
+
+        def calculate_spline(self, whole_timeframe, masked_values, masked_time, smoothing_parameter ):
+                if len(masked_values) > 1:
+
+                        smooth_x = np.arange(whole_timeframe.min(), whole_timeframe.max() + 1, 1)
+                        smooth_y = csaps(masked_time, masked_values, smooth_x, smooth=smoothing_parameter)
+
+                        return smooth_x, smooth_y
+                
+
+        def calculate_metrics_to_plot(self, start, end, masked_values, masked_time, smoothing_parameter):
+                limits = sorted(datenum_to_datetime(masked_time))
+                if start == 0:
+                        function_start = min(limits).year
+                else:
+                        function_start = start
+                if end == 9999:
+                        function_end= max(limits).year
+                else:
+                        function_end = end
+                y_pred =csaps(masked_time, masked_values, masked_time, smooth=smoothing_parameter)
+                y_true = masked_values
+
+                time_slice = np.array(datenum_to_datetime(masked_time))
+
+                mask_sub = np.array([(d.year <=function_end) & (d.year >= function_start) for d in time_slice])
+
+                if mask_sub.sum()>2:
+                                rmse_sub = np.sqrt(mean_squared_error(y_true[mask_sub], y_pred[mask_sub]))
+                                r2_sub = r2_score(y_true[mask_sub], y_pred[mask_sub])
+                                mad_sub = np.median(np.abs(y_true[mask_sub]-y_pred[mask_sub]))
+
+                                rmse_tot = np.sqrt(mean_squared_error(y_true, y_pred))
+                                r2_tot = r2_score(y_true, y_pred)
+                                mad_tot = np.median(np.abs(y_true-y_pred))
+                
+                return {"rmse": [rmse_sub, rmse_tot],
+                        "r2": [r2_sub, r2_tot],
+                        "mad":[mad_sub, mad_tot]}, [function_start, function_end]
+
+
+
+
         def single_plot(self, latitude, longitude, ax, aggregation = False, start= 0, end= 9999, annotation = None):
                 """Plot raw observations, the smoothed spline, and all phenological events for a pixel.
 
@@ -2174,206 +2246,163 @@ class PhenologyVisualization:
 
 
                 g  = self._load_extracted_globals()
-                px = self._load_pixel_data(latitude, longitude)
+                pixel_data = self._load_pixel_data(latitude, longitude)
                 lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
+                smoothing = pixel_data["smoothing"]
 
-                smoothing = px["smoothing"]
-
-                mask_pks     = np.array([(d.year <= end) & (d.year >= start) for d in px["pks_x"]])
-                pks_x_sub    = px["pks_x"][mask_pks]
-                pks_y_sub    = px["pks_y"][mask_pks]
-                pks_qa_sub   = px["pks_qa"][mask_pks]
-
-                mask_trgs    = np.array([(d.year <= end) & (d.year >= start) for d in px["trgs_x"]])
-                trgs_x_sub   = px["trgs_x"][mask_trgs]
-                trgs_y_sub   = px["trgs_y"][mask_trgs]
-                trgs_qa_sub  = px["trgs_qa"][mask_trgs]
-
-                mask_midUP   = np.array([(d.year <= end) & (d.year >= start) for d in px["midUP_x"]])
-                midUP_x_sub  = px["midUP_x"][mask_midUP]
-                midUP_y_sub  = px["midUP_y"][mask_midUP]
-
-                mask_midDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in px["midDOWN_x"]])
-                midDOWN_x_sub = px["midDOWN_x"][mask_midDOWN]
-                midDOWN_y_sub = px["midDOWN_y"][mask_midDOWN]
-
-                mask     = (px["values"] != -9999) & (px["qa"] == 0)
-                values_m = px["values"][mask]
+                plotting_data = self.grab_plotting_variables(start = start, end = end, pixel_data=pixel_data, variables=["pks", "trgs", "midUP", "midDOWN"])
+        
+                mask     = (pixel_data["values"] != -9999) & (pixel_data["qa"] == 0)
+                values_m = pixel_data["values"][mask]
                 time_m   = t_all[mask]
 
                 
 
-                if len(values_m) > 1:
+                smooth_x, smooth_y = self.calculate_spline(whole_timeframe= t_all, masked_values=values_m, masked_time= time_m, smoothing_parameter=smoothing)
 
-                        limits = sorted(datenum_to_datetime(time_m))
-                        if start == 0:
-                                function_start = min(limits).year
-                        else:
-                                function_start = start
-                        if end == 9999:
-                                function_end= max(limits).year
-                        else:
-                                function_end = end
-                        neg_values_sub =[]
-                        smooth_x = np.arange(t_all.min(), t_all.max() + 1, 1)
-                        smooth_y = csaps(time_m, values_m, smooth_x, smooth=smoothing)
+                metrics_dict, plot_time_frame = self.calculate_metrics_to_plot(start = start, end = end, masked_values= values_m, masked_time=time_m, smoothing_parameter=smoothing)
 
-                        y_pred =csaps(time_m, values_m, time_m, smooth=smoothing)
-                        y_true = values_m
+                neg_values_sub =[]
 
-                        time_slice = np.array(datenum_to_datetime(time_m))
+                neg_label_before = False
 
-                        mask_sub = np.array([(d.year <=function_end) & (d.year >= function_start) for d in time_slice])
-                        if mask_sub.sum()>2:
-                                rmse_sub = np.sqrt(mean_squared_error(y_true[mask_sub], y_pred[mask_sub]))
-                                r2_sub = r2_score(y_true[mask_sub], y_pred[mask_sub])
-                                mad_sub = np.median(np.abs(y_true[mask_sub]-y_pred[mask_sub]))
+                if aggregation:
+                        if self.aggregation_df is None:
+                                self.spatial_aggregation()
 
-                                rmse_tot = np.sqrt(mean_squared_error(y_true, y_pred))
-                                r2_tot = r2_score(y_true, y_pred)
-                                mad_tot = np.median(np.abs(y_true-y_pred))
+                        background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
 
+                        background_time = background_sub["time"]
+                        background_time = background_time.to_numpy()
 
+                        background_values = background_sub["MA_value"]
 
-                                neg_label_before = False
-
-                                if aggregation:
-                                        if self.aggregation_df is None:
-                                                self.spatial_aggregation()
-
-                                        background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
-
-                                        background_time = background_sub["time"]
-                                        background_time = background_time.to_numpy()
-
-                                        background_values = background_sub["MA_value"]
-
-                                        ax.scatter(datenum_to_datetime(background_time), background_values, color="grey", alpha=0.3, s=10, label="Data")
-                                else:
-                                        ax.scatter(datenum_to_datetime(time_m), values_m, color="grey", alpha=0.3, s=10, label="Data")
-                                gap_starts = px["gap_starts"]
-                                gap_ends   = px["gap_ends"]
-                                for gs, ge in zip(gap_starts, gap_ends):
-                                        ax.axvspan(gs, ge, color="orange", alpha=0.15, zorder=0)
-                                if len(gap_starts) > 0:
-                                        ax.axvspan(gap_starts[0], gap_ends[0], color="orange", alpha=0.15, zorder=0, label="Data gap")
-                                ax.plot(datenum_to_datetime(smooth_x), smooth_y, color="black", linewidth=1, label="Spline")
-                                qa_colors = {0: "blue", 1: "orange", 2: "red"}
-                                qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
-                                for qa in (0, 1, 2):
-                                        pm = pks_qa_sub == qa
-                                        tm = trgs_qa_sub == qa
-                                        if pm.any():
-                                                ax.scatter(pks_x_sub[pm], pks_y_sub[pm], color=qa_colors[qa], s=50,
-                                                           marker="o", edgecolors="black", linewidths=0.5,
-                                                           zorder=4, label=qa_labels[qa])
-                                        if tm.any():
-                                                ax.scatter(trgs_x_sub[tm], trgs_y_sub[tm], color=qa_colors[qa], s=50,
-                                                           marker="o", edgecolors="black", linewidths=0.5,
-                                                           zorder=4, label=qa_labels[qa] if not pm.any() else None)
-                                if (pks_y_sub < 0).any():
-                                        mask =  pks_y_sub<0
-                                        pks_x_neg_before = pks_x_sub[mask]
-                                        pks_y_neg_before = pks_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(pks_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
-
-                                if (trgs_y_sub < 0).any():
-                                        mask =  trgs_y_sub<0
-                                        trgs_x_neg_before = trgs_x_sub[mask]
-                                        trgs_y_neg_before = trgs_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(trgs_x_neg_before, trgs_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(trgs_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Troughs(s) in time period {start}-{end}", Warning)
-
-                                ax.scatter(midUP_x_sub, midUP_y_sub, color="mediumseagreen", s=30, marker="^", zorder=4, label="Mid Up")
-                                if (midUP_y_sub < 0).any():
-                                        mask =  midUP_y_sub<0
-                                        midUP_x_neg_before = midUP_x_sub[mask]
-                                        midUP_y_neg_before = midUP_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(midUP_x_neg_before, midUP_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(midUP_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Mid Up(s) in time period {start}-{end}", Warning)
-
-                                ax.scatter(midDOWN_x_sub, midDOWN_y_sub, color="darkgreen", s=30, marker="v", zorder=4, label="Mid Down")
-                                if (midDOWN_y_sub < 0).any():
-                                        mask =  midDOWN_y_sub<0
-                                        midDOWN_x_neg_before = midDOWN_x_sub[mask]
-                                        midDOWN_y_neg_before = midDOWN_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(midDOWN_x_neg_before, midDOWN_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(midDOWN_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Mid Down(s) in time period {start}-{end}", Warning)
-
-                                ax.legend(loc="upper left", ncol= 2)
-                                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}\n Total RMSE, R$^2$, MAD: {round(rmse_tot,4)}, {round(r2_tot, 4)}, {round(mad_tot,4)}"
-                                ax.set_title(textstr)
-                                ax.xaxis.set_minor_locator(mdates.YearLocator())
-                                ax.grid(axis="x", which="minor", linewidth=0.5)
-                                ax.grid(axis="x", which="major", linewidth=0.5)
-                                ax.grid(axis="y")
-                                ax.set_ylabel("[ug/L]")
-                                ax.set_xlim(pd.to_datetime('01-01-' + str(function_start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(function_end), format='%d-%m-%Y'))
-
-
-                                pks_lim_sub = sorted(pks_y_sub)
-                                # if max(pks_lim_sub)> 10:
-                                #         ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-2]+0.5)
-                                # else:
-                                #         ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-1]+0.5)
-
-
-
-                                trgs_lim_sub = sorted(trgs_y_sub)
-
-                                if len(pks_lim_sub) > 0 and len(trgs_lim_sub) > 0:
-
-                                        ymax = pks_lim_sub[-1]
-
-                                        if ymax > 10 and len(pks_lim_sub) > 1:
-                                                ymax = pks_lim_sub[-2]
-
-                                        ymin = trgs_lim_sub[0]
-
-                                        ax.set_ylim(ymin - 0.5, ymax + 0.5)
-
-                                else:
-                                        warnings.warn(
-                                                f"No peaks/troughs available for {start}-{end}; using automatic y-limits."
-                                        )
-                                if not annotation:
-                                        if neg_values_sub:
-                                                ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {round(rmse_sub,3)}\n R$^2$: {round(r2_sub,3)}\n MAD: {round(mad_sub, 3)}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
-                                        else:
-                                                ax.text(0.99,0.99,f"RMSE:{round(rmse_sub,3)} \n R$^2$: {round(r2_sub,3)}\n MAD: {round(mad_sub, 3)}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
-                                else:
-                             
-                                        lines = []
-                                        if "R2" in annotation:
-                                                lines.append(f"R$^2$: {round(r2_sub, 3)}")
-                                        if "RMSE" in annotation:
-                                                lines.append(f"RMSE: {round(rmse_sub, 3)}")
-                                        if "MAD" in annotation:
-                                                lines.append(f"MAD: {round(mad_sub, 3)}")
-                                        if "neg" in annotation and neg_values_sub:
-                                                lines.append(f"# Neg.values: {sum(neg_values_sub)}")
-                                        
-                                        if lines:
-                                                ax.text(0.99, 0.99, "\n".join(lines),
-                                                        transform=ax.transAxes, ha="right", va="top", zorder = 10)
-                                        
-                        else:
-                                warnings.warn("Not enough data to plot or compute metrics for chosen time interval")
+                        ax.scatter(datenum_to_datetime(background_time), background_values, color="grey", alpha=0.3, s=10, label="Data")
                 else:
-                        warnings.warn("No data to plot")
+                        ax.scatter(datenum_to_datetime(time_m), values_m, color="grey", alpha=0.3, s=10, label="Data")
+                gap_starts = pixel_data["gap_starts"]
+                gap_ends   = pixel_data["gap_ends"]
+                for gs, ge in zip(gap_starts, gap_ends):
+                        ax.axvspan(gs, ge, color="orange", alpha=0.15, zorder=0)
+                if len(gap_starts) > 0:
+                        ax.axvspan(gap_starts[0], gap_ends[0], color="orange", alpha=0.15, zorder=0, label="Data gap")
+                ax.plot(datenum_to_datetime(smooth_x), smooth_y, color="black", linewidth=1, label="Spline")
+                qa_colors = {0: "blue", 1: "orange", 2: "red"}
+                qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
+                for qa in (0, 1, 2):
+                        pm = plotting_data["pks"][2] == qa
+                        tm = plotting_data["trgs"][2] == qa
+                        if pm.any():
+                                ax.scatter(plotting_data["pks"][0][pm], plotting_data["pks"][1][pm], color=qa_colors[qa], s=50,
+                                                marker="o", edgecolors="black", linewidths=0.5,
+                                                zorder=4, label=qa_labels[qa])
+                        if tm.any():
+                                ax.scatter(plotting_data["trgs"][0][tm], plotting_data["trgs"][1][tm], color=qa_colors[qa], s=50,
+                                                marker="o", edgecolors="black", linewidths=0.5,
+                                                zorder=4, label=qa_labels[qa] if not pm.any() else None)
+                if (plotting_data["pks"][1] < 0).any():
+                        mask =  plotting_data["pks"][1]<0
+                        pks_x_neg_before = plotting_data["pks"][0][mask]
+                        pks_y_neg_before = plotting_data["pks"][0][mask]
+                        label = "Negative Value" if not neg_label_before else None
+                        ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
+                        neg_values_sub.append(len(pks_x_neg_before))
+                        neg_label_before = True
+                        warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
+
+                if (plotting_data["trgs"][1] < 0).any():
+                        mask =  plotting_data["trgs"][1]<0
+                        trgs_x_neg_before = plotting_data["trgs"][0][mask]
+                        trgs_y_neg_before = plotting_data["trgs"][1][mask]
+                        label = "Negative Value" if not neg_label_before else None
+                        ax.scatter(trgs_x_neg_before, trgs_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
+                        neg_values_sub.append(len(trgs_x_neg_before))
+                        neg_label_before = True
+                        warnings.warn(f"Negative Troughs(s) in time period {start}-{end}", Warning)
+
+                ax.scatter(plotting_data["midUP"][0], plotting_data["midUP"][1], color="mediumseagreen", s=30, marker="^", zorder=4, label="Mid Up")
+                if (plotting_data["midUP"][1] < 0).any():
+                        mask =  plotting_data["midUP"][1]<0
+                        midUP_x_neg_before = plotting_data["midUP"][0][mask]
+                        midUP_y_neg_before = plotting_data["midUP"][1][mask]
+                        label = "Negative Value" if not neg_label_before else None
+                        ax.scatter(midUP_x_neg_before, midUP_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
+                        neg_values_sub.append(len(midUP_x_neg_before))
+                        neg_label_before = True
+                        warnings.warn(f"Negative Mid Up(s) in time period {start}-{end}", Warning)
+
+                ax.scatter(plotting_data["midDOWN"][0], plotting_data["midDOWN"][1], color="darkgreen", s=30, marker="v", zorder=4, label="Mid Down")
+                if (plotting_data["midDOWN"][1] < 0).any():
+                        mask =  plotting_data["midDOWN"][1]<0
+                        midDOWN_x_neg_before = plotting_data["midDOWN"][0][mask]
+                        midDOWN_y_neg_before = plotting_data["midDOWN"][1][mask]
+                        label = "Negative Value" if not neg_label_before else None
+                        ax.scatter(midDOWN_x_neg_before, midDOWN_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
+                        neg_values_sub.append(len(midDOWN_x_neg_before))
+                        neg_label_before = True
+                        warnings.warn(f"Negative Mid Down(s) in time period {start}-{end}", Warning)
+
+                ax.legend(loc="upper left", ncol= 2)
+                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}\n Total RMSE, R$^2$, MAD: {round(metrics_dict["rmse"][1],4)}, {round(metrics_dict["r2"][1], 4)}, {round(metrics_dict["mad"][1],4)}"
+                ax.set_title(textstr)
+                ax.xaxis.set_minor_locator(mdates.YearLocator())
+                ax.grid(axis="x", which="minor", linewidth=0.5)
+                ax.grid(axis="x", which="major", linewidth=0.5)
+                ax.grid(axis="y")
+                ax.set_ylabel("[ug/L]")
+                ax.set_xlim(pd.to_datetime('01-01-' + str(plot_time_frame[0]), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(plot_time_frame[1]), format='%d-%m-%Y'))
+
+
+                pks_lim_sub = sorted(plotting_data["pks"][1])
+                # if max(pks_lim_sub)> 10:
+                #         ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-2]+0.5)
+                # else:
+                #         ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-1]+0.5)
+
+
+
+                trgs_lim_sub = sorted(plotting_data["trgs"][1])
+
+                if len(pks_lim_sub) > 0 and len(trgs_lim_sub) > 0:
+
+                        ymax = pks_lim_sub[-1]
+
+                        if ymax > 10 and len(pks_lim_sub) > 1:
+                                ymax = pks_lim_sub[-2]
+
+                        ymin = trgs_lim_sub[0]
+
+                        ax.set_ylim(ymin - 0.5, ymax + 0.5)
+
+                else:
+                        warnings.warn(
+                                f"No peaks/troughs available for {start}-{end}; using automatic y-limits."
+                        )
+                if not annotation:
+                        if neg_values_sub:
+                                ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {round(metrics_dict["rmse"][0],3)}\n R$^2$: {round(metrics_dict["r2"][0],3)}\n MAD: {round(metrics_dict["mad"][0])}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
+                        else:
+                                ax.text(0.99,0.99,f"RMSE:{round(metrics_dict["rmse"][0],3)} \n R$^2$: {round(metrics_dict["r2"][0],3)}\n MAD: {round(metrics_dict["mad"][0], 3)}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
+                else:
+                
+                        lines = []
+                        if "R2" in annotation:
+                                lines.append(f"R$^2$: {round(metrics_dict["r2"][0], 3)}")
+                        if "RMSE" in annotation:
+                                lines.append(f"RMSE: {round(metrics_dict["rmse"][0], 3)}")
+                        if "MAD" in annotation:
+                                lines.append(f"MAD: {round(metrics_dict["mad"][0], 3)}")
+                        if "neg" in annotation and neg_values_sub:
+                                lines.append(f"# Neg.values: {sum(neg_values_sub)}")
+                        
+                        if lines:
+                                ax.text(0.99, 0.99, "\n".join(lines),
+                                        transform=ax.transAxes, ha="right", va="top", zorder = 10)
+                                
+                # else:
+                #         warnings.warn("Not enough data to plot or compute metrics for chosen time interval")
+                # else:
+                #         warnings.warn("No data to plot")
 
 
         def split_plot(self, latitude, longitude, ax0, ax1, aggregation = False, start0= 0, end0= 9999, start1= 0, end1=9999):
