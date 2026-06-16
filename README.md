@@ -281,3 +281,32 @@ lake_analysis_folder/                # = {parent}/../lake_analysis, derived as
 The phenology stage saves intermediate results as `.npy` checkpoint files in `data/{version}/phenology/{variable}/checkpoints/{lake_id}/bs{batch_size}/`. If a run is interrupted, re-running the same command will skip completed batches and resume from where it left off. Checkpoints are deleted after the final NetCDF is successfully written.
 
 Both stages skip lakes whose output file already exists, so it is safe to rerun the command after adding new lakes to the `lakes` list.
+
+## Provenance
+
+Each run of `main.py` appends a record to `{out_folder}/provenance.json`, one entry per pipeline stage that actually executes (`extract`, `phenology`, `analysis`). Stages that are skipped (`"extract": false`, etc.) do not add an entry, so a run like an analysis-only rerun against existing extract/phenology data still leaves a record of when it ran and with what settings.
+
+Each entry contains:
+
+| Field | Description |
+|-------|-------------|
+| `stage` | `"extract"`, `"phenology"`, or `"analysis"` |
+| `timestamp` | UTC timestamp when the stage was launched |
+| `git_commit` | Short hash of the checked-out commit, or `null` if not in a git repo |
+| `args_file` | Name of the `args/*.json` file the run was launched from |
+| `args` | The full resolved parameters dict (after `parse_args` defaults are applied) |
+| `lakes` | IDs of the lakes processed in this stage |
+| `threads`, `parallel`, `batch_size` | Parallelisation settings (extract/phenology only) |
+
+The file is appended to, never overwritten, so re-running a stage (e.g. after adding lakes, or resuming an interrupted run) accumulates a full history rather than erasing prior entries:
+
+```json
+{
+  "out_folder": "v3.1",
+  "runs": [
+    { "stage": "extract",   "timestamp": "...", "git_commit": "d979727", "args_file": "v3_chla", "args": {...}, "lakes": [5, 15, 6], "threads": 50, "parallel": "pixels" },
+    { "stage": "phenology", "timestamp": "...", "git_commit": "d979727", "args_file": "v3_chla", "args": {...}, "lakes": [5, 15, 6], "threads": 50, "parallel": "pixels", "batch_size": 100 },
+    { "stage": "analysis",  "timestamp": "...", "git_commit": "facdadb", "args_file": "v3_chla_analysis", "args": {...}, "lakes": [12] }
+  ]
+}
+```
