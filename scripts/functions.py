@@ -358,7 +358,7 @@ def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_
         rows, cols = close_factors(num_splits)
 
         # Single plots
-        fig, axs = plt.subplots(rows, cols, constrained_layout=True)
+        fig, axs = plt.subplots(rows, cols, constrained_layout=True, figsize = (10,5))
         for num, (start, end) in enumerate(time_splits):
             if start > end:
                 raise ValueError("Beginning of time split cannot be larger than the end")
@@ -385,7 +385,7 @@ def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_
         plt.close(fig)
 
         # Peaks plots
-        fig, axs = plt.subplots(rows, cols, constrained_layout=True)
+        fig, axs = plt.subplots(rows, cols, constrained_layout=True, figsize = (10,5))
         for num, (start, end) in enumerate(time_splits):
             if start > end:
                 raise ValueError("Beginning of time split cannot be larger than the end")
