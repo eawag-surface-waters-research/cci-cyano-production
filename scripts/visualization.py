@@ -1630,188 +1630,73 @@ class PhenologyVisualization:
                 None
                 """
 
-                with netCDF4.Dataset(self.e_path) as nc:
-                        # change np.array to np.asarry to avoid getting DeprecationError
-                        lat = np.asarray(nc.variables["lat"])
-                        lon = np.asarray(nc.variables["lon"])
-                        t_all = unix_to_datenum(nc.variables["time"])
+                g  = self._load_extracted_globals()
+                pixel_data = self._load_pixel_data(latitude, longitude)
+                lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
+                smoothing = pixel_data["smoothing"]
 
+                plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=pixel_data)
 
-                with netCDF4.Dataset(self.p_path) as nc:
-                        smoothing = float(nc.variables["smoothing_parameter"][latitude, longitude])
-                        pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
-                        pks_y = remove_nan(nc.variables["pks_y"][latitude, longitude, :])
-                        mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
-                        pks_x_sub = pks_x[mask_pks]
-                        pks_y_sub = pks_y[mask_pks]
+                # No QA==0 filter here — all non-fill values kept for QA-coloured scatter
+                mask     = (pixel_data["values"] != -9999)
+                values_m = pixel_data["values"][mask]
+                time_m   = t_all[mask]
+                qa_mask  = pixel_data["qa"][mask]
 
-                        trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
-                        trgs_y = remove_nan(nc.variables["trgs_y"][latitude, longitude, :])
-                        mask_trgs = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
-                        trgs_x_sub = trgs_x[mask_trgs]
-                        trgs_y_sub = trgs_y[mask_trgs]
-
-                        midUP_x = unix_to_datetime(remove_nan(nc.variables["green_up_mid_x"][latitude, longitude, :]))
-                        midUP_y = remove_nan(nc.variables["green_up_mid_y"][latitude, longitude, :])
-                        mask_midUP = np.array([(d.year <= end) & (d.year >= start) for d in midUP_x])
-                        midUP_x_sub = midUP_x[mask_midUP]
-                        midUP_y_sub = midUP_y[mask_midUP]
-
-                        midDOWN_x = unix_to_datetime(remove_nan(nc.variables["green_down_mid_x"][latitude, longitude, :]))
-                        midDOWN_y = remove_nan(nc.variables["green_down_mid_y"][latitude, longitude, :])
-                        mask_midDOWN= np.array([(d.year <= end) & (d.year >= start) for d in midDOWN_x])
-                        midDOWN_x_sub = midDOWN_x[mask_midDOWN]
-                        midDOWN_y_sub = midDOWN_y[mask_midDOWN]
-
-                with netCDF4.Dataset(self.e_path) as nc:
-                        variable = getattr(nc, "variable")
-                        variable_qa  = getattr(nc, "qa")
-                        values = np.array(nc.variables[variable][:, latitude, longitude])
-                        values_qa = np.array(nc.variables[variable_qa][:, latitude, longitude])
-                        mask = (values != -9999)
-                        values_m = values[mask]
-                        time_m = t_all[mask]
-                        qa_mask = values_qa[mask]
-                        qa_unique = sorted(np.unique(qa_mask))
-
-                if len(values_m) > 1:
-
-                        limits = sorted(datenum_to_datetime(time_m))
-                        if start == 0:
-                                function_start = min(limits).year
-                        else:
-                                function_start = start
-                        if end == 9999:
-                                function_end= max(limits).year
-                        else:
-                                function_end = end
-                        neg_values_sub =[]
-                        smooth_x = np.arange(t_all.min(), t_all.max() + 1, 1)
-                        smooth_y = csaps(time_m, values_m, smooth_x, smooth=smoothing)
-
-                        y_pred =csaps(time_m, values_m, time_m, smooth=smoothing)
-                        y_true = values_m
-
-                        time_slice = np.array(datenum_to_datetime(time_m))
-
-                        mask_sub = np.array([(d.year <=function_end) & (d.year >= function_start) for d in time_slice])
-                        if mask_sub.sum()>2:
-                                rmse_sub = np.sqrt(mean_squared_error(y_true[mask_sub], y_pred[mask_sub]))
-                                r2_sub = r2_score(y_true[mask_sub], y_pred[mask_sub])
-
-                                rmse_tot = np.sqrt(mean_squared_error(y_true, y_pred))
-                                r2_tot = r2_score(y_true, y_pred)
-
-                                # data1 = {"time": time_m,"data": values_m}
-                                # average_df1 = pd.DataFrame(data1)
-
-                                # data2 = {"data": values_m}
-                                # average_df2 = pd.DataFrame(data2)
-
-                                # average_df2["SMA15"] = average_df2.rolling(window = 15).mean()
-
-                                # average_background = pd.merge(average_df1, average_df2, on='data', how='inner')
-
-                                neg_label_before = False
-
-                                qa_unique = sorted(np.unique(qa_mask))
-
-                                # one discrete color per unique QA value
-                                cmap = plt.cm.get_cmap("tab10", len(qa_unique))
-                                cmap_new = ListedColormap(cmap(np.arange(len(qa_unique))))
-
-                                # map actual QA values to category indices 0..N-1
-                                qa_to_idx = {qa: i for i, qa in enumerate(qa_unique)}
-                                qa_idx = np.array([qa_to_idx[q] for q in qa_mask])
-
-                                # boundaries around category indices
-                                bounds = np.arange(-0.5, len(qa_unique) + 0.5, 1)
-                                norm = BoundaryNorm(bounds, cmap_new.N)
-
-                                if aggregation:
-                                        if self.aggregation_df is None:
-                                                self.spatial_aggregation()
-
-                                        background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
-                                        background_time = background_sub["time"]
-                                        background_time = background_time.to_numpy()
-
-                                        background_values = background_sub["MA_value"]
-
-                                        sc = ax.scatter(datenum_to_datetime(background_time), background_values, c=qa_idx, cmap = cmap_new, norm = norm, alpha=1, s=10, label="Data")
-                                else:
-                                        sc = ax.scatter(datenum_to_datetime(time_m), values_m, c=qa_idx, cmap = cmap_new, norm = norm, alpha=1, s=10, label="Data")
-                                ax.plot(datenum_to_datetime(smooth_x), smooth_y, color="black", linewidth=1, label="Spline")
-                                ax.scatter(pks_x_sub, pks_y_sub, color="orange", s=50, marker="o", zorder=4, label="Peaks")
-                                if (pks_y_sub < 0).any():
-                                        mask =  pks_y_sub<0
-                                        pks_x_neg_before = pks_x_sub[mask]
-                                        pks_y_neg_before = pks_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(pks_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
-
-                                ax.scatter(trgs_x_sub, trgs_y_sub, color="blue", s=50, marker="o", zorder=4, label="Troughs")
-                                if (trgs_y_sub < 0).any():
-                                        mask =  trgs_y_sub<0
-                                        trgs_x_neg_before = trgs_x_sub[mask]
-                                        trgs_y_neg_before = trgs_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(trgs_x_neg_before, trgs_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(trgs_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Troughs(s) in time period {start}-{end}", Warning)
-                                ax.scatter(midUP_x_sub, midUP_y_sub, color="mediumseagreen", s=30, marker="^", zorder=4, label="Mid Up")
-                                if (midUP_y_sub < 0).any():
-                                        mask =  midUP_y_sub<0
-                                        midUP_x_neg_before = midUP_x_sub[mask]
-                                        midUP_y_neg_before = midUP_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(midUP_x_neg_before, midUP_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(midUP_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Mid Up(s) in time period {start}-{end}", Warning)
-                                ax.scatter(midDOWN_x_sub, midDOWN_y_sub, color="darkgreen", s=30, marker="v", zorder=4, label="Mid Down")
-                                if (midDOWN_y_sub < 0).any():
-                                        mask =  midDOWN_y_sub<0
-                                        midDOWN_x_neg_before = midDOWN_x_sub[mask]
-                                        midDOWN_y_neg_before = midDOWN_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(midDOWN_x_neg_before, midDOWN_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(midDOWN_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Mid Down(s) in time period {start}-{end}", Warning)
-
-                                ax.legend(loc="upper left", ncol= 2)
-                                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}\n Total RMSE, R$^2$: {round(rmse_tot,4)}, {round(r2_tot, 4)}"
-                                ax.set_title(textstr)
-                                ax.grid()
-                                ax.set_ylabel("[ug/L]")
-                                ax.set_xlim(pd.to_datetime('01-01-' + str(function_start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(function_end), format='%d-%m-%Y'))
-                                cbar = fig.colorbar(sc, ax=ax, boundaries=bounds)
-                                cbar.set_label("QA indicators")
-
-                                # ticks at category centers
-                                cbar.set_ticks(np.arange(len(qa_unique)))
-                                cbar.set_ticklabels([str(q) for q in qa_unique])
-
-
-                                pks_lim_sub = sorted(pks_y_sub)
-                                if max(pks_lim_sub)> 10:
-                                        ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-2]+0.5)
-                                else:
-                                        ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-1]+0.5)
-
-                                if neg_values_sub:
-                                        ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {round(rmse_sub,4)}\n R$^2$: {round(r2_sub,4)}", transform = ax.transAxes,   ha= "right", va= "top")
-                                else:
-                                        ax.text(0.99,0.99,f"RMSE:{round(rmse_sub,4)} \n R$^2$: {round(r2_sub,4)}", transform = ax.transAxes,   ha= "right", va= "top")
-                        else:
-                                warnings.warn("Not enough data to plot or compute metrics for chosen time interval")
-                else:
+                if len(values_m) == 0:
                         warnings.warn("No data to plot")
+                        return
+
+                smooth_x, smooth_y = calculate_spline(
+                        whole_timeframe=t_all, masked_values=values_m,
+                        masked_time=time_m, smoothing_parameter=smoothing
+                )
+                if smooth_x is None:
+                        warnings.warn("No data to plot")
+                        return
+
+                metrics_dict, plot_time_frame = calculate_metrics_to_plot(
+                        start=start, end=end, masked_values=values_m,
+                        masked_time=time_m, smoothing_parameter=smoothing
+                )
+                if metrics_dict is None:
+                        return
+
+                # QA-coloured background scatter (unique to this method)
+                qa_unique = sorted(np.unique(qa_mask))
+                cmap = plt.cm.get_cmap("tab10", len(qa_unique))
+                cmap_new = ListedColormap(cmap(np.arange(len(qa_unique))))
+                qa_to_idx = {qa: i for i, qa in enumerate(qa_unique)}
+                qa_idx = np.array([qa_to_idx[q] for q in qa_mask])
+                bounds = np.arange(-0.5, len(qa_unique) + 0.5, 1)
+                norm = BoundaryNorm(bounds, cmap_new.N)
+
+                if aggregation:
+                        if self.aggregation_df is None:
+                                self.spatial_aggregation()
+                        background_sub    = self.aggregation_df[(self.aggregation_df["i"] == latitude) & (self.aggregation_df["j"] == longitude)]
+                        background_time   = background_sub["time"].to_numpy()
+                        background_values = background_sub["MA_value"]
+                        sc = ax.scatter(datenum_to_datetime(background_time), background_values, c=qa_idx, cmap=cmap_new, norm=norm, alpha=1, s=10, label="Data")
+                else:
+                        sc = ax.scatter(datenum_to_datetime(time_m), values_m, c=qa_idx, cmap=cmap_new, norm=norm, alpha=1, s=10, label="Data")
+
+                neg_values_sub = plot_variables(
+                        ax=ax, plotting_data=plotting_data, spline_x=smooth_x, spline_y=smooth_y,
+                        time_frame=plot_time_frame
+                )
+
+                self.annotations_and_limits(
+                        ax=ax, plotting_data=plotting_data, metrics_dict=metrics_dict,
+                        time_frame=plot_time_frame, lat=lat, lon=lon,
+                        latitude_idx=latitude, longitude_idx=longitude,
+                        neg_values_sub=neg_values_sub
+                )
+
+                cbar = fig.colorbar(sc, ax=ax, boundaries=bounds)
+                cbar.set_label("QA indicators")
+                cbar.set_ticks(np.arange(len(qa_unique)))
+                cbar.set_ticklabels([str(q) for q in qa_unique])
 
 
 
