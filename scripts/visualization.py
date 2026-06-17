@@ -13,7 +13,7 @@ import csv
 import statistics
 import warnings
 from matplotlib.colors import ListedColormap, BoundaryNorm
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Rectangle, Patch
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import pearsonr
 from csaps import csaps
@@ -1368,7 +1368,7 @@ class PhenologyVisualization:
                                 if qm.any():
                                         ax.scatter(x_sub[qm], y_sub[qm], color=color_dict[phenology_name],
                                                    marker=qa_markers[q], s=50, edgecolors="black", linewidths=0.5,
-                                                   zorder=4, label=f"{label_dict[phenology_name]} ({qa_labels[q]})")
+                                                   zorder=4, label=qa_labels[q])
                         if (y_sub < 0).any():
                                 mask =  y_sub<0
                                 pks_x_neg_before = x_sub[mask]
@@ -1509,6 +1509,12 @@ class PhenologyVisualization:
                                         linestyle="None", markersize=6, label=qa_labels[qa])
                                 for qa in (0, 1, 2)
                         ]
+                        # Add data gap legend entry
+                        qa_handles.append(Patch(facecolor="orange",
+                                edgecolor="orange",
+                                alpha=0.15,
+                                label="Data gap")
+                        )
 
                         # Color legend for product versions
                         type_handles = [
@@ -1566,6 +1572,12 @@ class PhenologyVisualization:
                                         linestyle="None", markersize=6, label=qa_labels[qa])
                                 for qa in (0, 1, 2)
                         ]
+                        # Add data gap legend entry
+                        qa_handles.append(Patch(facecolor="orange",
+                                edgecolor="orange",
+                                alpha=0.15,
+                                label="Data gap")
+                        )
 
                         # Color legend for product versions
                         type_handles = [
