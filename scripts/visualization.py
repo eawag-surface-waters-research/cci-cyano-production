@@ -1702,20 +1702,10 @@ class PhenologyVisualization:
                 int
                     Number of peaks falling within the specified year range.
                 """
-                if peaks:
-                        with netCDF4.Dataset(self.p_path) as nc:
-                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
-                                mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
-                                pks_x_sub = pks_x[mask_pks]
-
-                                return len(pks_x_sub)
-                else:
-                        with netCDF4.Dataset(self.p_path) as nc:
-                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
-                                mask_trgs = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
-                                trgs_x_sub = trgs_x[mask_trgs]
-
-                                return len(trgs_x_sub) 
+                var = "pks" if peaks else "trgs"
+                pixel_data = self._load_pixel_data(latitude, longitude)
+                plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=pixel_data, variables=[var])
+                return len(plotting_data[var][0])
                         
 
 
