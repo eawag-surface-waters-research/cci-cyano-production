@@ -1294,19 +1294,9 @@ class PhenologyVisualization:
                 px = self._load_pixel_data(latitude, longitude)
                 lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
                 smoothing = px["smoothing"]
-                if peak:
-                        pks_x, pks_y = px["pks_x"], px["pks_y"]
-                        mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
-                        x_sub = pks_x[mask_pks]
-                        y_sub = pks_y[mask_pks]
-                        qa_sub = px["pks_qa"][mask_pks]
-
-                else:
-                        trgs_x, trgs_y = px["trgs_x"], px["trgs_y"]
-                        mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
-                        x_sub = trgs_x[mask_pks]
-                        y_sub = trgs_y[mask_pks]
-                        qa_sub = px["trgs_qa"][mask_pks]
+                var = "pks" if peak else "trgs"
+                plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=px, variables=[var])
+                x_sub, y_sub, qa_sub = plotting_data[var]
 
                 mask     = (px["values"] != -9999) & (px["qa"] == 0)
                 values_m = px["values"][mask]
@@ -1362,30 +1352,23 @@ class PhenologyVisualization:
 
                                 background_values = background_sub["MA_value"]
 
-                                ax.scatter(datenum_to_datetime(background_time), background_values, color=color_dict[phenology_name], alpha=0.3, s=10, label=f"{label_dict[phenology_name]} Data")
+                                ax.scatter(datenum_to_datetime(background_time), background_values, color=color_dict[phenology_name], alpha=0.1, s=10, label=f"{label_dict[phenology_name]} Data")
                         elif background_pts and not aggregation:
-                                ax.scatter(datenum_to_datetime(time_m), values_m, color=color_dict[phenology_name], alpha=0.3, s=10, label=f"{label_dict[phenology_name]} Data")
+                                ax.scatter(datenum_to_datetime(time_m), values_m, color=color_dict[phenology_name], alpha=0.1, s=10, label=f"{label_dict[phenology_name]} Data")
                         else:
                                 pass
 
-                        gap_starts = px["gap_starts"]
-                        gap_ends   = px["gap_ends"]
-                        _, existing_labels = ax.get_legend_handles_labels()
-                        gap_label_already = "Data gap" in existing_labels
-                        for idx, (gs, ge) in enumerate(zip(gap_starts, gap_ends)):
-                                gap_label = "Data gap" if idx == 0 and not gap_label_already else None
-                                ax.axvspan(gs, ge, color="orange", alpha=0.15, zorder=0, label=gap_label)
+                        self.plot_data_gaps(ax=ax, pixel_data=px)
 
-                        extrema_label = "Peaks" if peak else "Troughs"
                         ax.stem(x_sub, y_sub, linefmt=color_dict[phenology_name], markerfmt=" ", basefmt = " ")
                         qa_markers = {0: "o", 1: "s", 2: "x"}
                         qa_labels  = {0: "Good", 1: "Fair", 2: "Poor"}
                         for q in (0, 1, 2):
                                 qm = qa_sub == q
                                 if qm.any():
-                                        ax.scatter(x_sub[qm], y_sub[qm], color=color_dict[phenology_name], 
+                                        ax.scatter(x_sub[qm], y_sub[qm], color=color_dict[phenology_name],
                                                    marker=qa_markers[q], s=50, edgecolors="black", linewidths=0.5,
-                                                   zorder=4, label=f"{label_dict[phenology_name]} {extrema_label} ({qa_labels[q]})")
+                                                   zorder=4, label=f"{label_dict[phenology_name]} ({qa_labels[q]})")
                         if (y_sub < 0).any():
                                 mask =  y_sub<0
                                 pks_x_neg_before = x_sub[mask]
@@ -1426,7 +1409,7 @@ class PhenologyVisualization:
 
 
 
-        def extrema_comparison(self, other1,  latitude, longitude, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = False, other2= None, purple_chla21= False, show_legend= False):
+        def extrema_comparison(self, other1,  latitude, longitude, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = True, other2= None, purple_chla21= False, show_legend= False):
                 """Overlay extrema plots from two or three PhenologyVisualization instances on one axis.
 
                 Calls extrema_plot for self and other1 (and optionally other2), sharing the
@@ -1527,14 +1510,14 @@ class PhenologyVisualization:
                                 for qa in (0, 1, 2)
                         ]
 
-                        # Color legend for pks and trgs
+                        # Color legend for product versions
                         type_handles = [
                         mlines.Line2D([], [], color=color_dict[phenology_name1], marker="o",
-                                        linestyle="None", markersize=8, label="Peak"),
+                                        linestyle="None", markersize=8, label=label_dict[phenology_name1]),
                         mlines.Line2D([], [], color=color_dict[phenology_name2], marker="o",
-                                        linestyle="None", markersize=8, label="Trough"),
+                                        linestyle="None", markersize=8, label=label_dict[phenology_name2]),
                         mlines.Line2D([], [], color=color_dict[phenology_name3], marker="o",
-                                        linestyle="None", markersize=8, label="Trough"),]
+                                        linestyle="None", markersize=8, label=label_dict[phenology_name3]),]
 
 
                         leg1 = ax.legend(handles=qa_handles, loc="upper left")
@@ -1584,12 +1567,12 @@ class PhenologyVisualization:
                                 for qa in (0, 1, 2)
                         ]
 
-                        # Color legend for pks and trgs
+                        # Color legend for product versions
                         type_handles = [
                         mlines.Line2D([], [], color=color_dict[phenology_name1], marker="o",
-                                        linestyle="None", markersize=8, label="Peak"),
+                                        linestyle="None", markersize=8, label=label_dict[phenology_name1]),
                         mlines.Line2D([], [], color=color_dict[phenology_name2], marker="o",
-                                        linestyle="None", markersize=8, label="Trough"),]
+                                        linestyle="None", markersize=8, label=label_dict[phenology_name2]),]
 
 
                         leg1 = ax.legend(handles=qa_handles, loc="upper left")
@@ -2029,7 +2012,7 @@ class PhenologyVisualization:
 
         
         
-        def plot_background_pts(self, ax, latitude, longitude, masked_values, masked_time, aggregation = False):
+        def plot_background_pts(self, ax, latitude, longitude, masked_values, masked_time, aggregation = False, alpha= 0.3):
                 if aggregation:
                         if self.aggregation_df is None:
                                 self.spatial_aggregation()
@@ -2041,9 +2024,9 @@ class PhenologyVisualization:
 
                         background_values = background_sub["MA_value"]
 
-                        ax.scatter(datenum_to_datetime(background_time), background_values, color="grey", alpha=0.3, s=10, label="Data")
+                        ax.scatter(datenum_to_datetime(background_time), background_values, color="grey", alpha=alpha, s=10, label="Data")
                 else:
-                        ax.scatter(datenum_to_datetime(masked_time), masked_values, color="grey", alpha=0.3, s=10, label="Data")
+                        ax.scatter(datenum_to_datetime(masked_time), masked_values, color="grey", alpha=alpha, s=10, label="Data")
                 
 
         def plot_data_gaps(self, ax, pixel_data):
@@ -2174,7 +2157,7 @@ class PhenologyVisualization:
                 if metrics_dict is None:
                         return
 
-                self.plot_background_pts(ax = ax, latitude= latitude, longitude = longitude, masked_values=values_m, masked_time=time_m)
+                self.plot_background_pts(ax = ax, latitude= latitude, longitude = longitude, masked_values=values_m, masked_time=time_m, aggregation=aggregation)
                 self.plot_data_gaps(ax = ax, pixel_data = pixel_data)
                 neg_values_sub =  plot_variables(ax = ax, plotting_data= plotting_data, spline_x= smooth_x, spline_y= smooth_y, time_frame= plot_time_frame, variables= ["pks", "trgs", "midUP", "midDOWN"])
                 self.annotations_and_limits(ax = ax, plotting_data= plotting_data, metrics_dict= metrics_dict, time_frame=plot_time_frame, lat= lat, lon = lon, latitude_idx=latitude, longitude_idx=longitude, neg_values_sub=neg_values_sub, annotation = None)
