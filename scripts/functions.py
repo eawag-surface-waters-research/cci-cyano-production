@@ -315,6 +315,8 @@ def calculate_spline(whole_timeframe, masked_values, masked_time, smoothing_para
                         smooth_y = csaps(masked_time, masked_values, smooth_x, smooth=smoothing_parameter)
 
                         return smooth_x, smooth_y
+                else:
+                     warnings.warn("not enough data to plot")
                 
 
 def calculate_metrics_to_plot(start, end, masked_values, masked_time, smoothing_parameter):
