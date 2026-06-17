@@ -278,7 +278,7 @@ class PhenologyVisualization:
                         return [tuple(int(x) for x in idx) for idx in np.argwhere(valid_counts > 1)]
                 
 
-        def create_DataFrame(self, latitude, longitude):
+        def create_DataFrame(self, latitude_idx, longitude_idx):
                 """Build a combined long-format DataFrame of all phenology variables for a single pixel.
 
                 Reads all _x (time) and _y (value) variable pairs from the phenology NetCDF
@@ -286,15 +286,15 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel in the grid.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel in the grid.
 
                 Returns
                 -------
                 pandas.DataFrame
-                    Long-format DataFrame with columns Value, Variable, latitude, longitude
+                    Long-format DataFrame with columns Value, Variable, latitude_idx, longitude_idx
                     and a datetime index named Time.
                 """
                 p = netCDF4.Dataset(self.p_path)
@@ -309,13 +309,13 @@ class PhenologyVisualization:
                 result = {}
 
                 for x,y in zip(variables_x, variables_y):
-                        var_x = unix_to_datetime(remove_nan(p[x][latitude,longitude,:]))
-                        var_y = remove_nan(p[y][latitude,longitude,:])
+                        var_x = unix_to_datetime(remove_nan(p[x][latitude_idx,longitude_idx,:]))
+                        var_y = remove_nan(p[y][latitude_idx,longitude_idx,:])
                         var_label = [x[:-2]]*len(var_y)
                         df = pd.DataFrame({"Value":var_y,
                                         "Variable": var_label,
-                                        "latitude": lat[latitude],
-                                        "longitude": lon[longitude], 
+                                        "latitude": lat[latitude_idx],
+                                        "longitude": lon[longitude_idx], 
                                         "lake_ID": lakeID},
                                         index = var_x)
                         df.index.names = ["Time"]
@@ -746,7 +746,7 @@ class PhenologyVisualization:
 
 
 
-        def pixel_map(self, latitude, longitude, ax):
+        def pixel_map(self, latitude_idx, longitude_idx, ax):
                 """Plot a grayscale coverage map with the selected pixel marked.
 
                 Reads the summary grid from the extract NetCDF and displays it in
@@ -755,9 +755,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel to highlight.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel to highlight.
                 ax : matplotlib.axes.Axes
                     Axes on which to draw the map.
@@ -780,7 +780,7 @@ class PhenologyVisualization:
                 im = ax.imshow(masked_summary, cmap=cmap, aspect="auto", origin="lower")
 
                 # plot selected pixel
-                ax.plot(longitude, latitude, "r*", markersize=14, zorder=5, label="Pixel")
+                ax.plot(longitude_idx, latitude_idx, "r*", markersize=14, zorder=5, label="Pixel")
 
                 ax.set_xlabel("Lon index")
                 ax.set_ylabel("Lat index")
@@ -1246,10 +1246,10 @@ class PhenologyVisualization:
                 return pd.Series(index=time_dt,data=values_m)
 
 
-        def extrema_plot(self, latitude, longitude, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False, show_legend = True):
+        def extrema_plot(self, latitude_idx, longitude_idx, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False, show_legend = True):
                 """Plot detected peaks or troughs as a stem plot with optional background scatter.
 
-                Displays summer peaks or winter troughs for the pixel at (latitude, longitude)
+                Displays summer peaks or winter troughs for the pixel at (latitude_idx, longitude_idx)
                 as vertical stems, with each extremum marker shaped by its QA flag
                 while keeping the product's colour. Background observations may be shown as
                 a raw scatter (QA==0 only) or 3×3 spatial median (when aggregation=True). Negative
@@ -1257,9 +1257,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 ax : matplotlib.axes.Axes
                     Axes on which to draw the plot.
@@ -1291,7 +1291,7 @@ class PhenologyVisualization:
 
 
                 g = self._load_extracted_globals()
-                px = self._load_pixel_data(latitude, longitude)
+                px = self._load_pixel_data(latitude_idx, longitude_idx)
                 lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
                 smoothing = px["smoothing"]
                 var = "pks" if peak else "trgs"
@@ -1346,7 +1346,7 @@ class PhenologyVisualization:
                                 if self.aggregation_df is None:
                                         self.spatial_aggregation()
 
-                                background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
+                                background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude_idx) & (self.aggregation_df["j"]==longitude_idx)]
                                 background_time = background_sub["time"]
                                 background_time = background_time.to_numpy()
 
@@ -1382,9 +1382,9 @@ class PhenologyVisualization:
                         if show_legend:
                                 ax.legend(loc="upper left", ncol= 2)
                         if peak:
-                                textstr = f"Peak Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textstr = f"Peak Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
                         else:
-                                textstr = f"Trough Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textstr = f"Trough Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
                         ax.set_title(textstr)
                         ax.xaxis.set_minor_locator(mdates.YearLocator())
                         ax.grid(axis="x", which="minor", linewidth=0.5)
@@ -1409,7 +1409,7 @@ class PhenologyVisualization:
 
 
 
-        def extrema_comparison(self, other1,  latitude, longitude, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = True, other2= None, purple_chla21= False, show_legend= False):
+        def extrema_comparison(self, other1,  latitude_idx, longitude_idx, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = True, other2= None, purple_chla21= False, show_legend= False):
                 """Overlay extrema plots from two or three PhenologyVisualization instances on one axis.
 
                 Calls extrema_plot for self and other1 (and optionally other2), sharing the
@@ -1420,9 +1420,9 @@ class PhenologyVisualization:
                 ----------
                 other1 : PhenologyVisualization
                     Second instance to overlay (must share the same lake ID as self).
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 ax : matplotlib.axes.Axes
                     Axes on which to draw all overlaid plots.
@@ -1465,9 +1465,9 @@ class PhenologyVisualization:
                 if other2:
                         if lakeID2!= lakeID3:
                                 raise Warning("Comparison must be made on the same lake!")
-                        ymax1 = self.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
-                        ymax2 = other1.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
-                        ymax3 = other2.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
+                        ymax1 = self.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
+                        ymax2 = other1.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
+                        ymax3 = other2.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
                         y_lims = [ymax1, ymax2, ymax3]
                         phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
                         phenology_name2 = os.path.basename(os.path.dirname(other1.p_path))
@@ -1492,9 +1492,9 @@ class PhenologyVisualization:
 
 
                         if peak:
-                                textr =  f"{label_dict[phenology_name1]}, {label_dict[phenology_name2]} vs {label_dict[phenology_name3]} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textr =  f"{label_dict[phenology_name1]}, {label_dict[phenology_name2]} vs {label_dict[phenology_name3]} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
                         else:
-                                textr =  f"{label_dict[phenology_name1]}, {label_dict[phenology_name2]} vs {label_dict[phenology_name3]} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textr =  f"{label_dict[phenology_name1]}, {label_dict[phenology_name2]} vs {label_dict[phenology_name3]} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
                         ax.set_title(textr)
                         ax.set_ylim(top = max(y_lims))
                         ax.xaxis.set_minor_locator(mdates.YearLocator())
@@ -1526,8 +1526,8 @@ class PhenologyVisualization:
 
                 else:
 
-                        ymax1 = self.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak= peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
-                        ymax2 = other1.extrema_plot(latitude=latitude, longitude=longitude, ax = ax,  peak= peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
+                        ymax1 = self.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax, peak= peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
+                        ymax2 = other1.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax,  peak= peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
                         y_lims = [ymax1, ymax2]
                         phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
                         phenology_name2 = os.path.basename(os.path.dirname(other1.p_path))
@@ -1548,9 +1548,9 @@ class PhenologyVisualization:
                                               "chla": "green"
                                               }
                         if peak:
-                                textr =  f"{label_dict[phenology_name1]} vs {label_dict[phenology_name2]} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textr =  f"{label_dict[phenology_name1]} vs {label_dict[phenology_name2]} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
                         else:
-                                textr =  f"{label_dict[phenology_name1]} vs {label_dict[phenology_name2]} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textr =  f"{label_dict[phenology_name1]} vs {label_dict[phenology_name2]} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
                         
                         ax.set_title(textr)
                         ax.set_ylim(top = max(y_lims))
@@ -1583,7 +1583,7 @@ class PhenologyVisualization:
 
 
 
-        def single_plot_background(self, latitude, longitude, ax, fig, aggregation = False, start= 0, end= 9999):
+        def single_plot_background(self, latitude_idx, longitude_idx, ax, fig, aggregation = False, start= 0, end= 9999):
                 """Plot a pixel time series with QA-coloured scatter, spline, and phenological events.
 
                 Like single_plot, but colours each background scatter point by its QA flag
@@ -1592,9 +1592,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 ax : matplotlib.axes.Axes
                     Axes on which to draw the plot.
@@ -1614,7 +1614,7 @@ class PhenologyVisualization:
                 """
 
                 g  = self._load_extracted_globals()
-                pixel_data = self._load_pixel_data(latitude, longitude)
+                pixel_data = self._load_pixel_data(latitude_idx, longitude_idx)
                 lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
                 smoothing = pixel_data["smoothing"]
 
@@ -1657,7 +1657,7 @@ class PhenologyVisualization:
                 if aggregation:
                         if self.aggregation_df is None:
                                 self.spatial_aggregation()
-                        background_sub    = self.aggregation_df[(self.aggregation_df["i"] == latitude) & (self.aggregation_df["j"] == longitude)]
+                        background_sub    = self.aggregation_df[(self.aggregation_df["i"] == latitude_idx) & (self.aggregation_df["j"] == longitude_idx)]
                         background_time   = background_sub["time"].to_numpy()
                         background_values = background_sub["MA_value"]
                         sc = ax.scatter(datenum_to_datetime(background_time), background_values, c=qa_idx, cmap=cmap_new, norm=norm, alpha=1, s=10, label="Data")
@@ -1672,7 +1672,7 @@ class PhenologyVisualization:
                 self.annotations_and_limits(
                         ax=ax, plotting_data=plotting_data, metrics_dict=metrics_dict,
                         time_frame=plot_time_frame, lat=lat, lon=lon,
-                        latitude_idx=latitude, longitude_idx=longitude,
+                        latitude_idx=latitude_idx, longitude_idx=longitude_idx,
                         neg_values_sub=neg_values_sub
                 )
 
@@ -1683,14 +1683,14 @@ class PhenologyVisualization:
 
 
 
-        def count_extrema(self, latitude, longitude, start= 0, end= 9999, peaks = True):
+        def count_extrema(self, latitude_idx, longitude_idx, start= 0, end= 9999, peaks = True):
                 """Return the number of detected peaks for a pixel within a year range.
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 start : int, optional
                     First year to include (inclusive). 0 = earliest in the series.
@@ -1703,26 +1703,26 @@ class PhenologyVisualization:
                     Number of peaks falling within the specified year range.
                 """
                 var = "pks" if peaks else "trgs"
-                pixel_data = self._load_pixel_data(latitude, longitude)
+                pixel_data = self._load_pixel_data(latitude_idx, longitude_idx)
                 plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=pixel_data, variables=[var])
                 return len(plotting_data[var][0])
                         
 
 
 
-        def create_heatmap_output(self, latitude, longitude, start_year=2002, end_year=2024, fraction = False):
+        def create_heatmap_output(self, latitude_idx, longitude_idx, start_year=2002, end_year=2024, fraction = False):
                 """Return peak/trough counts or lake-wide fractions per year and quarter.
 
-                When fraction=False, counts are read from the single pixel at (latitude,
-                longitude). When fraction=True, all pixels in the lake are aggregated and
+                When fraction=False, counts are read from the single pixel at (latitude_idx,
+                longitude_idx). When fraction=True, all pixels in the lake are aggregated and
                 each quarter value is expressed as the fraction of that year's total events
                 occurring in that quarter (0.0 – 1.0); years with no events return 0.0.
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel. Only used when fraction=False.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel. Only used when fraction=False.
                 start_year : int, optional
                     First calendar year to include (inclusive). Default 2002.
@@ -1745,8 +1745,8 @@ class PhenologyVisualization:
                 if not fraction:
 
                         with netCDF4.Dataset(self.p_path) as nc:
-                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
-                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
+                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude_idx, longitude_idx, :]))
+                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude_idx, longitude_idx, :]))
                         
                                 for year in range(start_year, end_year + 1):
                                         year_counts = []
@@ -1790,14 +1790,14 @@ class PhenologyVisualization:
 
                 return result
         
-        def yearly_heatmap_pixel(self, latitude, longitude, color_scheme='pink-blue'):
+        def yearly_heatmap_pixel(self, latitude_idx, longitude_idx, color_scheme='pink-blue'):
                 """Plot a bivariate heatmap of peak and trough counts or fractions by year and quarter.
 
                 Each cell in the heatmap represents one calendar quarter of one year. The
                 cell colour encodes two variables simultaneously using a 4×4 bivariate
                 colour palette from color_sets_4x4.
 
-                When whole_lake=False, counts for the single pixel at (latitude, longitude)
+                When whole_lake=False, counts for the single pixel at (latitude_idx, longitude_idx)
                 are binned into four levels (0, 1, 2, 3+) and the cell is coloured from the
                 discrete 4×4 grid using bivariate_legend.
 
@@ -1809,9 +1809,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel. Only used when whole_lake=False.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel. Only used when whole_lake=False.
                 color_scheme : str, optional
                     Key into color_sets_4x4 selecting the bivariate palette.
@@ -1829,11 +1829,11 @@ class PhenologyVisualization:
                     The axes on which the heatmap is drawn.
                 """
              
-                heatmap_data = self.create_heatmap_output(latitude=latitude, longitude=longitude, fraction = False)
+                heatmap_data = self.create_heatmap_output(latitude_idx=latitude_idx, longitude_idx=longitude_idx, fraction = False)
                 fig, ax, _ = create_empty_heatmap()
                 g  = self._load_extracted_globals()
                 lat, lon = g["lat"], g["lon"]
-                textstr = f"Yearly Heatmap for Pixel\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}\n {os.path.basename(os.path.dirname(self.p_path))}, Lake ID:{os.path.basename(self.p_path)[:-3]}"
+                textstr = f"Yearly Heatmap for Pixel\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}\n {os.path.basename(os.path.dirname(self.p_path))}, Lake ID:{os.path.basename(self.p_path)[:-3]}"
                 ax.set_title(textstr)
 
                 color_set = color_sets_4x4[color_scheme]
@@ -1852,7 +1852,7 @@ class PhenologyVisualization:
         
         def yearly_heatmap_lake(self, color_scheme= "pink-blue"):
                 # lat and lon are not needed as the heatmap uses all pixels from the lake, thus they can be arbitrary
-                heatmap_data = self.create_heatmap_output(latitude=-1, longitude=-1, fraction=True)
+                heatmap_data = self.create_heatmap_output(latitude_idx=-1, longitude_idx=-1, fraction=True)
                 fig, ax, _ = create_empty_heatmap()
                 textstr = f"Yearly Heatmap for Lake ID: {os.path.basename(self.p_path)[:-3]}\n  {os.path.basename(os.path.dirname(self.p_path))}"
                 ax.set_title(textstr)
@@ -1873,7 +1873,7 @@ class PhenologyVisualization:
 
 
 
-        def pixel_r2(self, latitude, longitude, start, end):
+        def pixel_r2(self, latitude_idx, longitude_idx, start, end):
                 """Return the R² score for a single pixel within a year range.
 
                 Delegates to r2_scores, which may trigger full-lake parallel computation
@@ -1881,9 +1881,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 start : int
                     First year of the evaluation window (0 = full series start).
@@ -1896,9 +1896,9 @@ class PhenologyVisualization:
                     R² score for the pixel, or np.nan if insufficient data.
                 """
                 scores = self.r2_scores([(start, end)])
-                return scores[(latitude, longitude)]
+                return scores[(latitude_idx, longitude_idx)]
 
-        def pixel_rmse(self, latitude, longitude, start, end):
+        def pixel_rmse(self, latitude_idx, longitude_idx, start, end):
                 """Return the RMSE for a single pixel within a year range.
 
                 Delegates to RMSE_scores, which may trigger full-lake parallel computation
@@ -1906,9 +1906,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 start : int
                     First year of the evaluation window (0 = full series start).
@@ -1921,9 +1921,9 @@ class PhenologyVisualization:
                     RMSE value for the pixel, or np.nan if insufficient data.
                 """
                 scores = self.RMSE_scores([(start, end)])
-                return scores[(latitude, longitude)]
+                return scores[(latitude_idx, longitude_idx)]
 
-        def pixel_mad(self, latitude, longitude, start, end):
+        def pixel_mad(self, latitude_idx, longitude_idx, start, end):
                 """Return the Median Absolute Deviation for a single pixel within a year range.
 
                 Delegates to MAD_scores, which may trigger full-lake parallel computation
@@ -1931,9 +1931,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 start : int
                     First year of the evaluation window (0 = full series start).
@@ -1946,9 +1946,9 @@ class PhenologyVisualization:
                     MAD value for the pixel, or np.nan if insufficient data.
                 """
                 scores = self.MAD_scores([(start, end)])
-                return scores[(latitude, longitude)]
+                return scores[(latitude_idx, longitude_idx)]
 
-        def pixel_correlation(self, latitude, longitude, start, end):
+        def pixel_correlation(self, latitude_idx, longitude_idx, start, end):
                 """Return the Pearson correlation coefficient for a single pixel within a year range.
 
                 Delegates to correlation_scores, which may trigger full-lake parallel
@@ -1956,9 +1956,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 start : int
                     First year of the evaluation window (0 = full series start).
@@ -1971,9 +1971,9 @@ class PhenologyVisualization:
                     Pearson r for the pixel, or np.nan if insufficient data.
                 """
                 scores = self.correlation_scores([(start, end)])
-                return scores[(latitude, longitude)]
+                return scores[(latitude_idx, longitude_idx)]
 
-        def pixel_values(self, latitude, longitude, start, end):
+        def pixel_values(self, latitude_idx, longitude_idx, start, end):
                 """Return the valid observation count for a single pixel within a year range.
 
                 Delegates to values_per_pixel, which may trigger full-lake parallel
@@ -1981,9 +1981,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 start : int
                     First year of the evaluation window (0 = full series start).
@@ -1996,18 +1996,18 @@ class PhenologyVisualization:
                     Number of valid (QA==0, value!=-9999) observations in the window.
                 """
                 scores = self.values_per_pixel([(start, end)])
-                return scores[(latitude, longitude)]
+                return scores[(latitude_idx, longitude_idx)]
 
 
 
         
         
-        def plot_background_pts(self, ax, latitude, longitude, masked_values, masked_time, aggregation = False, alpha= 0.3):
+        def plot_background_pts(self, ax, latitude_idx, longitude_idx, masked_values, masked_time, aggregation = False, alpha= 0.3):
                 if aggregation:
                         if self.aggregation_df is None:
                                 self.spatial_aggregation()
 
-                        background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
+                        background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude_idx) & (self.aggregation_df["j"]==longitude_idx)]
 
                         background_time = background_sub["time"]
                         background_time = background_time.to_numpy()
@@ -2094,7 +2094,7 @@ class PhenologyVisualization:
 
 
 
-        def single_plot(self, latitude, longitude, ax, aggregation = False, start= 0, end= 9999, annotation = None):
+        def single_plot(self, latitude_idx, longitude_idx, ax, aggregation = False, start= 0, end= 9999, annotation = None):
                 """Plot raw observations, the smoothed spline, and all phenological events for a pixel.
 
                 Displays a scatter of valid (QA==0) observations or 3×3 aggregated values,
@@ -2105,9 +2105,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 ax : matplotlib.axes.Axes
                     Axes on which to draw the plot.
@@ -2126,7 +2126,7 @@ class PhenologyVisualization:
 
 
                 g  = self._load_extracted_globals()
-                pixel_data = self._load_pixel_data(latitude, longitude)
+                pixel_data = self._load_pixel_data(latitude_idx, longitude_idx)
                 lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
                 smoothing = pixel_data["smoothing"]
 
@@ -2147,14 +2147,14 @@ class PhenologyVisualization:
                 if metrics_dict is None:
                         return
 
-                self.plot_background_pts(ax = ax, latitude= latitude, longitude = longitude, masked_values=values_m, masked_time=time_m, aggregation=aggregation)
+                self.plot_background_pts(ax = ax, latitude_idx= latitude_idx, longitude_idx = longitude_idx, masked_values=values_m, masked_time=time_m, aggregation=aggregation)
                 self.plot_data_gaps(ax = ax, pixel_data = pixel_data)
                 neg_values_sub =  plot_variables(ax = ax, plotting_data= plotting_data, spline_x= smooth_x, spline_y= smooth_y, time_frame= plot_time_frame, variables= ["pks", "trgs", "midUP", "midDOWN"])
-                self.annotations_and_limits(ax = ax, plotting_data= plotting_data, metrics_dict= metrics_dict, time_frame=plot_time_frame, lat= lat, lon = lon, latitude_idx=latitude, longitude_idx=longitude, neg_values_sub=neg_values_sub, annotation = None)
+                self.annotations_and_limits(ax = ax, plotting_data= plotting_data, metrics_dict= metrics_dict, time_frame=plot_time_frame, lat= lat, lon = lon, latitude_idx=latitude_idx, longitude_idx=longitude_idx, neg_values_sub=neg_values_sub, annotation = None)
 
 
 
-        def split_plot(self, latitude, longitude, ax0, ax1, aggregation = False, start0= 0, end0= 9999, start1= 0, end1=9999):
+        def split_plot(self, latitude_idx, longitude_idx, ax0, ax1, aggregation = False, start0= 0, end0= 9999, start1= 0, end1=9999):
                 """Plot two year-windowed single_plots side by side for the same pixel.
 
                 Calls single_plot twice — once on ax0 with [start0, end0] and once on ax1
@@ -2163,9 +2163,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 ax0 : matplotlib.axes.Axes
                     Axes for the first time window.
@@ -2189,10 +2189,10 @@ class PhenologyVisualization:
                 if start0 and start1 == 0 and end0 and end1 == 9999:
                         warnings.warn("split_plot needs a least end0 and start1 parameter, otherwise use full_plot")
 
-                self.single_plot(latitude = latitude, longitude= longitude, ax=ax0, aggregation = aggregation, start= start0, end = end0)
-                self.single_plot(latitude = latitude, longitude= longitude, ax=ax1, aggregation = aggregation, start=start1, end=end1)
+                self.single_plot(latitude_idx = latitude_idx, longitude_idx= longitude_idx, ax=ax0, aggregation = aggregation, start= start0, end = end0)
+                self.single_plot(latitude_idx = latitude_idx, longitude_idx= longitude_idx, ax=ax1, aggregation = aggregation, start=start1, end=end1)
 
-        def full_plot(self, latitude, longitude, ax, aggregation = False):
+        def full_plot(self, latitude_idx, longitude_idx, ax, aggregation = False):
                 """Plot the complete valid time series for a pixel.
 
                 Auto-detects the first and last years with valid observations and
@@ -2200,9 +2200,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 ax : matplotlib.axes.Axes
                     Axes on which to draw the plot.
@@ -2216,8 +2216,8 @@ class PhenologyVisualization:
                 with netCDF4.Dataset(self.e_path) as nc:
                         t_all = unix_to_datenum(nc.variables["time"])
                         variable = getattr(nc, "variable")
-                        values = np.array(nc.variables[variable][:, latitude, longitude])
-                        mask = (values != -9999) & (np.array(nc.variables[getattr(nc, 'qa')][:, latitude, longitude]) == 0)
+                        values = np.array(nc.variables[variable][:, latitude_idx, longitude_idx])
+                        mask = (values != -9999) & (np.array(nc.variables[getattr(nc, 'qa')][:, latitude_idx, longitude_idx]) == 0)
                         values_m = values[mask]
                         time_m = t_all[mask]
 
@@ -2225,13 +2225,13 @@ class PhenologyVisualization:
                         limits = sorted(datenum_to_datetime(time_m))
                         full_plot_start = min(limits).year
                         full_plot_end = max(limits).year
-                        self.single_plot(latitude= latitude, longitude= longitude, ax = ax, aggregation = aggregation, start=full_plot_start, end= full_plot_end)
+                        self.single_plot(latitude_idx= latitude_idx, longitude_idx= longitude_idx, ax = ax, aggregation = aggregation, start=full_plot_start, end= full_plot_end)
 
                 else:
                         warnings.warn("No data to plot")
 
 
-        def single_years_plot(self, latitude, longitude, years, ncol, nrow, annotation, ylim=None):
+        def single_years_plot(self, latitude_idx, longitude_idx, years, ncol, nrow, annotation, ylim=None):
                 """Plot one panel per year in a grid, each showing phenology for a single pixel.
 
                 Creates a figure with ``nrow × ncol`` subplots. Each subplot calls
@@ -2240,9 +2240,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 years : list of int
                     Calendar years to display, one per panel.
@@ -2265,7 +2265,7 @@ class PhenologyVisualization:
 
                 fig, axs = plt.subplots(nrow, ncol, constrained_layout=True, squeeze=False, figsize=(ncol * 5, nrow * 4))
                 for year, ax in zip(years, axs.flatten()):
-                        self.single_plot(latitude, longitude, ax, start=year, end=year, annotation=annotation)
+                        self.single_plot(latitude_idx, longitude_idx, ax, start=year, end=year, annotation=annotation)
 
                         for col in ax.collections:
                                 if col.get_label() in _MARKER_SIZES:
@@ -2290,7 +2290,7 @@ class PhenologyVisualization:
                 for ax in axs.flatten()[len(years):]:
                         ax.set_visible(False)
 
-        def single_plot_insitu(self, latitude,longitude,ax,insitu_df,aggregation=False, start = 0, end = 9999, insitu_date_col="datetime", insitu_value_col="chlorophyll_a", insitu_station_col=None, station_id=None, max_depth = 5):
+        def single_plot_insitu(self, latitude_idx,longitude_idx,ax,insitu_df,aggregation=False, start = 0, end = 9999, insitu_date_col="datetime", insitu_value_col="chlorophyll_a", insitu_station_col=None, station_id=None, max_depth = 5):
                 """
                 Plot satellite observations + spline + phenology + in situ overlay.
                 """
@@ -2300,8 +2300,8 @@ class PhenologyVisualization:
                 # -------------------------------------------------
 
                 self.single_plot(
-                        latitude=latitude,
-                        longitude=longitude,
+                        latitude_idx=latitude_idx,
+                        longitude_idx=longitude_idx,
                         ax=ax,
                         aggregation=aggregation,
                         start=start,
@@ -2356,7 +2356,7 @@ class PhenologyVisualization:
 
 
 
-        def yearly_cubic_spline(self, ax, latitude, longitude, years= ["2002", "2003", "2004", "2005",
+        def yearly_cubic_spline(self, ax, latitude_idx, longitude_idx, years= ["2002", "2003", "2004", "2005",
              "2006", "2007", "2008", "2009", "2010",
              "2011", "2012", "2013", "2014", "2015",
              "2016", "2017", "2018", "2019","2020",
@@ -2364,7 +2364,7 @@ class PhenologyVisualization:
                 """Overlay csaps splines for multiple years on a common fractional-month x-axis.
 
                 Fits a single spline over the full valid time series for the pixel at
-                (latitude, longitude), then slices it year by year and plots each slice
+                (latitude_idx, longitude_idx), then slices it year by year and plots each slice
                 against fractional month (1–12) using a distinct colour from the
                 cc.glasbey_light palette. Detected peaks and troughs are overlaid as
                 scatter markers coloured by QA level.
@@ -2377,9 +2377,9 @@ class PhenologyVisualization:
                 ----------
                 ax : matplotlib.axes.Axes
                     Axes on which to draw the overlaid splines and markers.
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 years : list of str, optional
                     Calendar years to include. Each element must be a string (e.g. '2005').
@@ -2391,7 +2391,7 @@ class PhenologyVisualization:
                 None
                 """
                 g  = self._load_extracted_globals()
-                px = self._load_pixel_data(latitude, longitude)
+                px = self._load_pixel_data(latitude_idx, longitude_idx)
                 lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
 
                 smoothing = px["smoothing"]
@@ -2461,7 +2461,7 @@ class PhenologyVisualization:
                         pks_sorted = sorted(all_pks_y)
                         ymax = pks_sorted[-2] if pks_sorted[-1] > 10 and len(pks_sorted) > 1 else pks_sorted[-1]
                         ax.set_ylim(sorted(all_trgs_y)[0] - 0.5, ymax + 0.5)
-                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[latitude]), 4)}"
+                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[latitude_idx]), 4)}"
                 ax.set_title(textstr)
                 ax.grid(axis="x", linewidth=0.5)
                 ax.grid(axis="y")
