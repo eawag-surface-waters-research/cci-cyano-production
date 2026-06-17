@@ -2547,22 +2547,22 @@ class PhenologyVisualization:
                 mask_all     = (px["values"] != -9999) & (px["qa"] == 0)
                 values_m_all = px["values"][mask_all]
                 time_m_all   = t_all[mask_all]
-                smooth_x_all = np.arange(t_all.min(), t_all.max() + 1, 1)
-                smooth_y_all = csaps(time_m_all, values_m_all, smooth_x_all, smooth=smoothing)
+                smooth_x_all, smooth_y_all = calculate_spline(
+                        whole_timeframe=t_all, masked_values=values_m_all,
+                        masked_time=time_m_all, smoothing_parameter=smoothing
+                )
+                if smooth_x_all is None:
+                        warnings.warn("No data to plot")
+                        return
                 smooth_dates_all = np.array(datenum_to_datetime(smooth_x_all))
 
                 for year in years:
-                        start= year
-                        end = year
-                        mask_pks     = np.array([(d.year <= int(end)) & (d.year >= int(start)) for d in px["pks_x"]])
-                        pks_x_sub    = px["pks_x"][mask_pks]
-                        pks_y_sub    = px["pks_y"][mask_pks]
-                        pks_qa_sub   = px["pks_qa"][mask_pks]
-
-                        mask_trgs    = np.array([(d.year <= int(end)) & (d.year >= int(start)) for d in px["trgs_x"]])
-                        trgs_x_sub   = px["trgs_x"][mask_trgs]
-                        trgs_y_sub   = px["trgs_y"][mask_trgs]
-                        trgs_qa_sub  = px["trgs_qa"][mask_trgs]
+                        plotting_data = grab_plotting_variables(
+                                start=int(year), end=int(year),
+                                pixel_data=px, variables=["pks", "trgs"]
+                        )
+                        pks_x_sub, pks_y_sub, pks_qa_sub   = plotting_data["pks"]
+                        trgs_x_sub, trgs_y_sub, trgs_qa_sub = plotting_data["trgs"]
 
                         # Subset the pre-fitted spline to this year and convert to fractional month (1–12)
                         mask_year = np.array([d.year == int(year) for d in smooth_dates_all])
