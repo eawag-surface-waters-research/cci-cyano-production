@@ -18,6 +18,7 @@ from shapely.geometry import Point
 import pandas as pd
 import plotly.graph_objects as go
 from matplotlib.patches import Rectangle
+from sklearn.metrics import mean_squared_error, r2_score
 
 
 
@@ -269,6 +270,153 @@ def grab_time_data(e_path, p_path, valid_coords, buffered_geom_prep,
     return map_data, extent
 
 
+
+
+def grab_plotting_variables(start, end, pixel_data, variables = ["pks", "trgs", "midUP", "midDOWN"]):      
+                if "pks" in variables:
+                        mask_pks     = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["pks_x"]])
+                        pks_x_sub    = pixel_data["pks_x"][mask_pks]
+                        pks_y_sub    = pixel_data["pks_y"][mask_pks]
+                        pks_qa_sub   = pixel_data["pks_qa"][mask_pks]
+                     
+                
+                if "trgs" in variables:
+                        dict_key = "trgs"
+                        mask_trgs    = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["trgs_x"]])
+                        trgs_x_sub   = pixel_data["trgs_x"][mask_trgs]
+                        trgs_y_sub   = pixel_data["trgs_y"][mask_trgs]
+                        trgs_qa_sub  = pixel_data["trgs_qa"][mask_trgs]
+                if "midUP" in variables:
+                        dict_key = "midUP"
+                        mask_midUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midUP_x"]])
+                        midUP_x_sub  = pixel_data["midUP_x"][mask_midUP]
+                        midUP_y_sub  = pixel_data["midUP_y"][mask_midUP]
+                if "midDOWN" in variables:
+                        dict_key = "midDOWN"
+                        mask_midDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midDOWN_x"]])
+                        midDOWN_x_sub = pixel_data["midDOWN_x"][mask_midDOWN]
+                        midDOWN_y_sub = pixel_data["midDOWN_y"][mask_midDOWN]
+
+                result = {}
+                if "pks" in variables:
+                        result["pks"] = [pks_x_sub, pks_y_sub, pks_qa_sub]
+                if "trgs" in variables:
+                        result["trgs"] = [trgs_x_sub, trgs_y_sub, trgs_qa_sub]
+                if "midUP" in variables:
+                        result["midUP"] = [midUP_x_sub, midUP_y_sub]
+                if "midDOWN" in variables:
+                        result["midDOWN"] = [midDOWN_x_sub, midDOWN_y_sub]
+                return result
+
+def calculate_spline(whole_timeframe, masked_values, masked_time, smoothing_parameter ):
+                if len(masked_values) > 1:
+
+                        smooth_x = np.arange(whole_timeframe.min(), whole_timeframe.max() + 1, 1)
+                        smooth_y = csaps(masked_time, masked_values, smooth_x, smooth=smoothing_parameter)
+
+                        return smooth_x, smooth_y
+                
+
+def calculate_metrics_to_plot(start, end, masked_values, masked_time, smoothing_parameter):
+                limits = sorted(datenum_to_datetime(masked_time))
+                if start == 0:
+                        function_start = min(limits).year
+                else:
+                        function_start = start
+                if end == 9999:
+                        function_end= max(limits).year
+                else:
+                        function_end = end
+                y_pred =csaps(masked_time, masked_values, masked_time, smooth=smoothing_parameter)
+                y_true = masked_values
+
+                time_slice = np.array(datenum_to_datetime(masked_time))
+
+                mask_sub = np.array([(d.year <=function_end) & (d.year >= function_start) for d in time_slice])
+
+                if mask_sub.sum()>2:
+                                rmse_sub = np.sqrt(mean_squared_error(y_true[mask_sub], y_pred[mask_sub]))
+                                r2_sub = r2_score(y_true[mask_sub], y_pred[mask_sub])
+                                mad_sub = np.median(np.abs(y_true[mask_sub]-y_pred[mask_sub]))
+
+                                rmse_tot = np.sqrt(mean_squared_error(y_true, y_pred))
+                                r2_tot = r2_score(y_true, y_pred)
+                                mad_tot = np.median(np.abs(y_true-y_pred))
+
+                                return {"rmse": [rmse_sub, rmse_tot],
+                                        "r2": [r2_sub, r2_tot],
+                                        "mad":[mad_sub, mad_tot]}, [function_start, function_end]
+                else:
+                                warnings.warn("Not enough data to plot or compute metrics for chosen time interval")
+                                return None, [function_start, function_end]
+
+
+def plot_variables(ax, plotting_data, spline_x, spline_y, time_frame, variables = ["pks", "trgs", "midUP", "midDOWN"]):
+                neg_values_sub =[]
+                neg_label_before = False
+                start = time_frame[0]
+                end = time_frame[1]
+
+                
+                ax.plot(datenum_to_datetime(spline_x), spline_y, color="black", linewidth=1, label="Spline")
+                qa_colors = {0: "blue", 1: "orange", 2: "red"}
+                qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
+                for qa in (0, 1, 2):
+                        pm = plotting_data["pks"][2] == qa if "pks" in variables else None
+                        tm = plotting_data["trgs"][2] == qa if "trgs" in variables else None
+                        if pm is not None and pm.any():
+                                ax.scatter(plotting_data["pks"][0][pm], plotting_data["pks"][1][pm], color=qa_colors[qa], s=50,
+                                                marker="o", edgecolors="black", linewidths=0.5,
+                                                zorder=4, label=qa_labels[qa])
+                        if tm is not None and tm.any():
+                                ax.scatter(plotting_data["trgs"][0][tm], plotting_data["trgs"][1][tm], color=qa_colors[qa], s=50,
+                                                marker="o", edgecolors="black", linewidths=0.5,
+                                                zorder=4, label=qa_labels[qa] if (pm is not None and pm.any()) else None)
+                if "pks" in variables:
+                        if (plotting_data["pks"][1] < 0).any():
+                                mask =  plotting_data["pks"][1]<0
+                                pks_x_neg_before = plotting_data["pks"][0][mask]
+                                pks_y_neg_before = plotting_data["pks"][0][mask]
+                                label = "Negative Value" if not neg_label_before else None
+                                ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
+                                neg_values_sub.append(len(pks_x_neg_before))
+                                neg_label_before = True
+                                warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
+                if "trgs" in variables:
+                        if (plotting_data["trgs"][1] < 0).any():
+                                mask =  plotting_data["trgs"][1]<0
+                                trgs_x_neg_before = plotting_data["trgs"][0][mask]
+                                trgs_y_neg_before = plotting_data["trgs"][1][mask]
+                                label = "Negative Value" if not neg_label_before else None
+                                ax.scatter(trgs_x_neg_before, trgs_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
+                                neg_values_sub.append(len(trgs_x_neg_before))
+                                neg_label_before = True
+                                warnings.warn(f"Negative Troughs(s) in time period {start}-{end}", Warning)
+
+                if "midUP" in variables:
+                        ax.scatter(plotting_data["midUP"][0], plotting_data["midUP"][1], color="mediumseagreen", s=30, marker="^", zorder=4, label="Mid Up")
+                        if (plotting_data["midUP"][1] < 0).any():
+                                mask =  plotting_data["midUP"][1]<0
+                                midUP_x_neg_before = plotting_data["midUP"][0][mask]
+                                midUP_y_neg_before = plotting_data["midUP"][1][mask]
+                                label = "Negative Value" if not neg_label_before else None
+                                ax.scatter(midUP_x_neg_before, midUP_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
+                                neg_values_sub.append(len(midUP_x_neg_before))
+                                neg_label_before = True
+                                warnings.warn(f"Negative Mid Up(s) in time period {start}-{end}", Warning)
+
+                if "midDOWN" in variables:
+                        ax.scatter(plotting_data["midDOWN"][0], plotting_data["midDOWN"][1], color="darkgreen", s=30, marker="v", zorder=4, label="Mid Down")
+                        if (plotting_data["midDOWN"][1] < 0).any():
+                                mask =  plotting_data["midDOWN"][1]<0
+                                midDOWN_x_neg_before = plotting_data["midDOWN"][0][mask]
+                                midDOWN_y_neg_before = plotting_data["midDOWN"][1][mask]
+                                label = "Negative Value" if not neg_label_before else None
+                                ax.scatter(midDOWN_x_neg_before, midDOWN_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
+                                neg_values_sub.append(len(midDOWN_x_neg_before))
+                                neg_label_before = True
+                                warnings.warn(f"Negative Mid Down(s) in time period {start}-{end}", Warning)
+                return neg_values_sub
 
 def save_maps(eda_instance, lake_analysis_folder, lake_str,  time_splits, metric= ["R2", "MAD", "RMSE", "correlation", "values_per_pixel"]):
     for m in metric:

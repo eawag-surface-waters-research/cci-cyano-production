@@ -17,7 +17,7 @@ from matplotlib.patches import Rectangle
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import pearsonr
 from csaps import csaps
-from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data, create_empty_heatmap, bivariate_legend, bivariate_continuous_legend, interpolate_from_color_set, to_frac_month, bivariate_continuous_legend
+from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data, create_empty_heatmap, bivariate_legend, bivariate_continuous_legend, interpolate_from_color_set, to_frac_month, bivariate_continuous_legend, grab_plotting_variables, calculate_spline, calculate_metrics_to_plot, plot_variables
 import multiprocessing
 from functools import partial
 import shapely.ops as ops
@@ -2142,130 +2142,9 @@ class PhenologyVisualization:
 
 
 
-        def grab_plotting_variables(self, start, end, pixel_data, variables = ["pks", "trgs", "midUP", "midDOWN"]):      
-                if "pks" in variables:
-                        mask_pks     = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["pks_x"]])
-                        pks_x_sub    = pixel_data["pks_x"][mask_pks]
-                        pks_y_sub    = pixel_data["pks_y"][mask_pks]
-                        pks_qa_sub   = pixel_data["pks_qa"][mask_pks]
-                
-                if "trgs" in variables:
-                        dict_key = "trgs"
-                        mask_trgs    = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["trgs_x"]])
-                        trgs_x_sub   = pixel_data["trgs_x"][mask_trgs]
-                        trgs_y_sub   = pixel_data["trgs_y"][mask_trgs]
-                        trgs_qa_sub  = pixel_data["trgs_qa"][mask_trgs]
-                if "midUP" in variables:
-                        dict_key = "midUP"
-                        mask_midUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midUP_x"]])
-                        midUP_x_sub  = pixel_data["midUP_x"][mask_midUP]
-                        midUP_y_sub  = pixel_data["midUP_y"][mask_midUP]
-                if "midDOWN" in variables:
-                        dict_key = "midDOWN"
-                        mask_midDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midDOWN_x"]])
-                        midDOWN_x_sub = pixel_data["midDOWN_x"][mask_midDOWN]
-                        midDOWN_y_sub = pixel_data["midDOWN_y"][mask_midDOWN]
-
-                return {"pks": [pks_x_sub, pks_y_sub, pks_qa_sub],
-                        "trgs": [trgs_x_sub, trgs_y_sub, trgs_qa_sub],
-                        "midUP": [midUP_x_sub, midUP_y_sub],
-                        "midDOWN": [midDOWN_x_sub, midDOWN_y_sub]}
         
-
-        def calculate_spline(self, whole_timeframe, masked_values, masked_time, smoothing_parameter ):
-                if len(masked_values) > 1:
-
-                        smooth_x = np.arange(whole_timeframe.min(), whole_timeframe.max() + 1, 1)
-                        smooth_y = csaps(masked_time, masked_values, smooth_x, smooth=smoothing_parameter)
-
-                        return smooth_x, smooth_y
-                
-
-        def calculate_metrics_to_plot(self, start, end, masked_values, masked_time, smoothing_parameter):
-                limits = sorted(datenum_to_datetime(masked_time))
-                if start == 0:
-                        function_start = min(limits).year
-                else:
-                        function_start = start
-                if end == 9999:
-                        function_end= max(limits).year
-                else:
-                        function_end = end
-                y_pred =csaps(masked_time, masked_values, masked_time, smooth=smoothing_parameter)
-                y_true = masked_values
-
-                time_slice = np.array(datenum_to_datetime(masked_time))
-
-                mask_sub = np.array([(d.year <=function_end) & (d.year >= function_start) for d in time_slice])
-
-                if mask_sub.sum()>2:
-                                rmse_sub = np.sqrt(mean_squared_error(y_true[mask_sub], y_pred[mask_sub]))
-                                r2_sub = r2_score(y_true[mask_sub], y_pred[mask_sub])
-                                mad_sub = np.median(np.abs(y_true[mask_sub]-y_pred[mask_sub]))
-
-                                rmse_tot = np.sqrt(mean_squared_error(y_true, y_pred))
-                                r2_tot = r2_score(y_true, y_pred)
-                                mad_tot = np.median(np.abs(y_true-y_pred))
-                
-                return {"rmse": [rmse_sub, rmse_tot],
-                        "r2": [r2_sub, r2_tot],
-                        "mad":[mad_sub, mad_tot]}, [function_start, function_end]
-
-
-
-
-        def single_plot(self, latitude, longitude, ax, aggregation = False, start= 0, end= 9999, annotation = None):
-                """Plot raw observations, the smoothed spline, and all phenological events for a pixel.
-
-                Displays a scatter of valid (QA==0) observations or 3×3 aggregated values,
-                overlaid with the csaps spline and scatter markers for peaks, troughs,
-                green-up midpoints, and green-down midpoints. Negative values are flagged
-                with red crosses and trigger a warning. Fit metrics (RMSE, R², MAD) are
-                annotated on the plot.
-
-                Parameters
-                ----------
-                latitude : int
-                    Row (lat) index of the pixel.
-                longitude : int
-                    Column (lon) index of the pixel.
-                ax : matplotlib.axes.Axes
-                    Axes on which to draw the plot.
-                aggregation : bool, optional
-                    If True, replace raw scatter with the 3×3 neighbourhood spatial median.
-                    Requires spatial_aggregation() to have been called or available cache.
-                start : int, optional
-                    First year to display (inclusive). 0 = earliest in the series.
-                end : int, optional
-                    Last year to display (inclusive). 9999 = latest in the series.
-
-                Returns
-                -------
-                None
-                """
-
-
-                g  = self._load_extracted_globals()
-                pixel_data = self._load_pixel_data(latitude, longitude)
-                lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
-                smoothing = pixel_data["smoothing"]
-
-                plotting_data = self.grab_plotting_variables(start = start, end = end, pixel_data=pixel_data, variables=["pks", "trgs", "midUP", "midDOWN"])
         
-                mask     = (pixel_data["values"] != -9999) & (pixel_data["qa"] == 0)
-                values_m = pixel_data["values"][mask]
-                time_m   = t_all[mask]
-
-                
-
-                smooth_x, smooth_y = self.calculate_spline(whole_timeframe= t_all, masked_values=values_m, masked_time= time_m, smoothing_parameter=smoothing)
-
-                metrics_dict, plot_time_frame = self.calculate_metrics_to_plot(start = start, end = end, masked_values= values_m, masked_time=time_m, smoothing_parameter=smoothing)
-
-                neg_values_sub =[]
-
-                neg_label_before = False
-
+        def plot_background_pts(self, ax, latitude, longitude, masked_values, masked_time, aggregation = False):
                 if aggregation:
                         if self.aggregation_df is None:
                                 self.spatial_aggregation()
@@ -2279,79 +2158,32 @@ class PhenologyVisualization:
 
                         ax.scatter(datenum_to_datetime(background_time), background_values, color="grey", alpha=0.3, s=10, label="Data")
                 else:
-                        ax.scatter(datenum_to_datetime(time_m), values_m, color="grey", alpha=0.3, s=10, label="Data")
+                        ax.scatter(datenum_to_datetime(masked_time), masked_values, color="grey", alpha=0.3, s=10, label="Data")
+                
+
+        def plot_data_gaps(self, ax, pixel_data):
                 gap_starts = pixel_data["gap_starts"]
                 gap_ends   = pixel_data["gap_ends"]
                 for gs, ge in zip(gap_starts, gap_ends):
                         ax.axvspan(gs, ge, color="orange", alpha=0.15, zorder=0)
                 if len(gap_starts) > 0:
                         ax.axvspan(gap_starts[0], gap_ends[0], color="orange", alpha=0.15, zorder=0, label="Data gap")
-                ax.plot(datenum_to_datetime(smooth_x), smooth_y, color="black", linewidth=1, label="Spline")
-                qa_colors = {0: "blue", 1: "orange", 2: "red"}
-                qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
-                for qa in (0, 1, 2):
-                        pm = plotting_data["pks"][2] == qa
-                        tm = plotting_data["trgs"][2] == qa
-                        if pm.any():
-                                ax.scatter(plotting_data["pks"][0][pm], plotting_data["pks"][1][pm], color=qa_colors[qa], s=50,
-                                                marker="o", edgecolors="black", linewidths=0.5,
-                                                zorder=4, label=qa_labels[qa])
-                        if tm.any():
-                                ax.scatter(plotting_data["trgs"][0][tm], plotting_data["trgs"][1][tm], color=qa_colors[qa], s=50,
-                                                marker="o", edgecolors="black", linewidths=0.5,
-                                                zorder=4, label=qa_labels[qa] if not pm.any() else None)
-                if (plotting_data["pks"][1] < 0).any():
-                        mask =  plotting_data["pks"][1]<0
-                        pks_x_neg_before = plotting_data["pks"][0][mask]
-                        pks_y_neg_before = plotting_data["pks"][0][mask]
-                        label = "Negative Value" if not neg_label_before else None
-                        ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                        neg_values_sub.append(len(pks_x_neg_before))
-                        neg_label_before = True
-                        warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
 
-                if (plotting_data["trgs"][1] < 0).any():
-                        mask =  plotting_data["trgs"][1]<0
-                        trgs_x_neg_before = plotting_data["trgs"][0][mask]
-                        trgs_y_neg_before = plotting_data["trgs"][1][mask]
-                        label = "Negative Value" if not neg_label_before else None
-                        ax.scatter(trgs_x_neg_before, trgs_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                        neg_values_sub.append(len(trgs_x_neg_before))
-                        neg_label_before = True
-                        warnings.warn(f"Negative Troughs(s) in time period {start}-{end}", Warning)
 
-                ax.scatter(plotting_data["midUP"][0], plotting_data["midUP"][1], color="mediumseagreen", s=30, marker="^", zorder=4, label="Mid Up")
-                if (plotting_data["midUP"][1] < 0).any():
-                        mask =  plotting_data["midUP"][1]<0
-                        midUP_x_neg_before = plotting_data["midUP"][0][mask]
-                        midUP_y_neg_before = plotting_data["midUP"][1][mask]
-                        label = "Negative Value" if not neg_label_before else None
-                        ax.scatter(midUP_x_neg_before, midUP_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                        neg_values_sub.append(len(midUP_x_neg_before))
-                        neg_label_before = True
-                        warnings.warn(f"Negative Mid Up(s) in time period {start}-{end}", Warning)
-
-                ax.scatter(plotting_data["midDOWN"][0], plotting_data["midDOWN"][1], color="darkgreen", s=30, marker="v", zorder=4, label="Mid Down")
-                if (plotting_data["midDOWN"][1] < 0).any():
-                        mask =  plotting_data["midDOWN"][1]<0
-                        midDOWN_x_neg_before = plotting_data["midDOWN"][0][mask]
-                        midDOWN_y_neg_before = plotting_data["midDOWN"][1][mask]
-                        label = "Negative Value" if not neg_label_before else None
-                        ax.scatter(midDOWN_x_neg_before, midDOWN_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                        neg_values_sub.append(len(midDOWN_x_neg_before))
-                        neg_label_before = True
-                        warnings.warn(f"Negative Mid Down(s) in time period {start}-{end}", Warning)
+                
+        def annotations_and_limits(self, ax, plotting_data, metrics_dict, time_frame, lat, lon, latitude_idx, longitude_idx, neg_values_sub, annotation = None):
+                start, end = time_frame[0], time_frame[1]
 
                 ax.legend(loc="upper left", ncol= 2)
-                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}\n Total RMSE, R$^2$, MAD: {round(metrics_dict["rmse"][1],4)}, {round(metrics_dict["r2"][1], 4)}, {round(metrics_dict["mad"][1],4)}"
+                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}\n Total RMSE, R$^2$, MAD: {round(metrics_dict["rmse"][1],4)}, {round(metrics_dict["r2"][1], 4)}, {round(metrics_dict["mad"][1],4)}"
                 ax.set_title(textstr)
                 ax.xaxis.set_minor_locator(mdates.YearLocator())
                 ax.grid(axis="x", which="minor", linewidth=0.5)
                 ax.grid(axis="x", which="major", linewidth=0.5)
                 ax.grid(axis="y")
                 ax.set_ylabel("[ug/L]")
-                ax.set_xlim(pd.to_datetime('01-01-' + str(plot_time_frame[0]), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(plot_time_frame[1]), format='%d-%m-%Y'))
-
+                ax.set_xlim(pd.to_datetime('01-01-' + str(start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(end), format='%d-%m-%Y'))
+                trgs_y_sub = plotting_data["trgs"][1]
 
                 pks_lim_sub = sorted(plotting_data["pks"][1])
                 # if max(pks_lim_sub)> 10:
@@ -2399,10 +2231,69 @@ class PhenologyVisualization:
                                 ax.text(0.99, 0.99, "\n".join(lines),
                                         transform=ax.transAxes, ha="right", va="top", zorder = 10)
                                 
-                # else:
-                #         warnings.warn("Not enough data to plot or compute metrics for chosen time interval")
-                # else:
-                #         warnings.warn("No data to plot")
+        
+
+
+
+
+        def single_plot(self, latitude, longitude, ax, aggregation = False, start= 0, end= 9999, annotation = None):
+                """Plot raw observations, the smoothed spline, and all phenological events for a pixel.
+
+                Displays a scatter of valid (QA==0) observations or 3×3 aggregated values,
+                overlaid with the csaps spline and scatter markers for peaks, troughs,
+                green-up midpoints, and green-down midpoints. Negative values are flagged
+                with red crosses and trigger a warning. Fit metrics (RMSE, R², MAD) are
+                annotated on the plot.
+
+                Parameters
+                ----------
+                latitude : int
+                    Row (lat) index of the pixel.
+                longitude : int
+                    Column (lon) index of the pixel.
+                ax : matplotlib.axes.Axes
+                    Axes on which to draw the plot.
+                aggregation : bool, optional
+                    If True, replace raw scatter with the 3×3 neighbourhood spatial median.
+                    Requires spatial_aggregation() to have been called or available cache.
+                start : int, optional
+                    First year to display (inclusive). 0 = earliest in the series.
+                end : int, optional
+                    Last year to display (inclusive). 9999 = latest in the series.
+
+                Returns
+                -------
+                None
+                """
+
+
+                g  = self._load_extracted_globals()
+                pixel_data = self._load_pixel_data(latitude, longitude)
+                lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
+                smoothing = pixel_data["smoothing"]
+
+                plotting_data = grab_plotting_variables(start = start, end = end, pixel_data=pixel_data, variables=["pks", "trgs", "midUP", "midDOWN"])
+        
+                mask     = (pixel_data["values"] != -9999) & (pixel_data["qa"] == 0)
+                values_m = pixel_data["values"][mask]
+                time_m   = t_all[mask]
+
+                if len(values_m) == 0:
+                        warnings.warn("No data to plot")
+                        return
+
+                smooth_x, smooth_y = calculate_spline(whole_timeframe= t_all, masked_values=values_m, masked_time= time_m, smoothing_parameter=smoothing)
+
+                metrics_dict, plot_time_frame = calculate_metrics_to_plot(start = start, end = end, masked_values= values_m, masked_time=time_m, smoothing_parameter=smoothing)
+
+                if metrics_dict is None:
+                        return
+
+                self.plot_background_pts(ax = ax, latitude= latitude, longitude = longitude, masked_values=values_m, masked_time=time_m)
+                self.plot_data_gaps(ax = ax, pixel_data = pixel_data)
+                neg_values_sub =  plot_variables(ax = ax, plotting_data= plotting_data, spline_x= smooth_x, spline_y= smooth_y, time_frame= plot_time_frame, variables= ["pks", "trgs", "midUP", "midDOWN"])
+                self.annotations_and_limits(ax = ax, plotting_data= plotting_data, metrics_dict= metrics_dict, time_frame=plot_time_frame, lat= lat, lon = lon, latitude_idx=latitude, longitude_idx=longitude, neg_values_sub=neg_values_sub, annotation = None)
+
 
 
         def split_plot(self, latitude, longitude, ax0, ax1, aggregation = False, start0= 0, end0= 9999, start1= 0, end1=9999):
