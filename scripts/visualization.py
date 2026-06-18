@@ -2058,7 +2058,7 @@ class PhenologyVisualization:
                 start, end = time_frame[0], time_frame[1]
 
                 ax.legend(loc="upper left", ncol= 2)
-                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}\n Total RMSE, R$^2$, MAD: {round(metrics_dict["rmse"][1],4)}, {round(metrics_dict["r2"][1], 4)}, {round(metrics_dict["mad"][1],4)}"
+                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}\n Total RMSE, R$^2$, MAD: {round(metrics_dict['rmse'][1],4)}, {round(metrics_dict['r2'][1], 4)}, {round(metrics_dict['mad'][1],4)}"
                 ax.set_title(textstr)
                 ax.xaxis.set_minor_locator(mdates.YearLocator())
                 ax.grid(axis="x", which="minor", linewidth=0.5)
@@ -2095,18 +2095,18 @@ class PhenologyVisualization:
                         )
                 if not annotation:
                         if neg_values_sub:
-                                ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {round(metrics_dict["rmse"][0],3)}\n R$^2$: {round(metrics_dict["r2"][0],3)}\n MAD: {round(metrics_dict["mad"][0])}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
+                                ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {round(metrics_dict['rmse'][0],3)}\n R$^2$: {round(metrics_dict['r2'][0],3)}\n MAD: {round(metrics_dict['mad'][0])}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
                         else:
-                                ax.text(0.99,0.99,f"RMSE:{round(metrics_dict["rmse"][0],3)} \n R$^2$: {round(metrics_dict["r2"][0],3)}\n MAD: {round(metrics_dict["mad"][0], 3)}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
+                                ax.text(0.99,0.99,f"RMSE:{round(metrics_dict['rmse'][0],3)} \n R$^2$: {round(metrics_dict['r2'][0],3)}\n MAD: {round(metrics_dict['mad'][0], 3)}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
                 else:
                 
                         lines = []
                         if "R2" in annotation:
-                                lines.append(f"R$^2$: {round(metrics_dict["r2"][0], 3)}")
+                                lines.append(f"R$^2$: {round(metrics_dict['r2'][0], 3)}")
                         if "RMSE" in annotation:
-                                lines.append(f"RMSE: {round(metrics_dict["rmse"][0], 3)}")
+                                lines.append(f"RMSE: {round(metrics_dict['rmse'][0], 3)}")
                         if "MAD" in annotation:
-                                lines.append(f"MAD: {round(metrics_dict["mad"][0], 3)}")
+                                lines.append(f"MAD: {round(metrics_dict['mad'][0], 3)}")
                         if "neg" in annotation and neg_values_sub:
                                 lines.append(f"# Neg.values: {sum(neg_values_sub)}")
                         
