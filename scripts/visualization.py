@@ -2380,6 +2380,81 @@ class PhenologyVisualization:
                 )
 
 
+        def plot_background_ratio(self, other, ax, latitude_idx, longitude_idx, color="blue"):
+                """Plot the per-observation ratio between two instances at a single pixel.
+
+                For each timestep where both instances have a valid QA-0 observation,
+                computes self / other and renders the result as a scatter plot on ax.
+                Observations where other equals zero are excluded to avoid division by zero.
+                Both instances must refer to the same lake; a warning is raised otherwise.
+
+                Parameters
+                ----------
+                other : PhenologyVisualization
+                    Second instance whose values form the denominator of the ratio.
+                ax : matplotlib.axes.Axes
+                    Axes on which to draw the scatter plot.
+                latitude_idx : int
+                    Row (lat) index of the pixel.
+                longitude_idx : int
+                    Column (lon) index of the pixel.
+                color : str, optional
+                    Marker colour. Default is "blue".
+
+                Returns
+                -------
+                None
+                """
+                g_self  = self._load_extracted_globals()
+                g_other = other._load_extracted_globals()
+
+                pixel_data = self._load_pixel_data(latitude_idx, longitude_idx)
+
+                t_self  = g_self["t_all"]
+                t_other = g_other["t_all"]
+
+                lakeID1 = os.path.basename(self.p_path)[:-3]
+                lakeID2 = os.path.basename(other.p_path)[:-3]
+                if lakeID1 != lakeID2:
+                        raise Warning("Comparison must be made on the same lake!")
+
+                phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
+                phenology_name2 = os.path.basename(os.path.dirname(other.p_path))
+
+                pixel_self  = self._load_pixel_data(latitude_idx, longitude_idx)
+                pixel_other = other._load_pixel_data(latitude_idx, longitude_idx)
+
+                mask_self  = (pixel_self["values"]  != -9999) & (pixel_self["qa"]  == 0)
+                mask_other = (pixel_other["values"] != -9999) & (pixel_other["qa"] == 0)
+
+                df_self  = pd.DataFrame({"time": t_self[mask_self],   "value": pixel_self["values"][mask_self]})
+                df_other = pd.DataFrame({"time": t_other[mask_other], "value": pixel_other["values"][mask_other]})
+
+                merged = df_self.merge(df_other, on="time", suffixes=("_self", "_other"), how="inner")
+                merged = merged[merged["value_other"] != 0]
+
+                ratio = merged["value_self"] / merged["value_other"]
+
+                ax.scatter(
+                        datenum_to_datetime(merged["time"].to_numpy()),
+                        ratio,
+                        color=color,
+                        s=10,
+                        label="Ratio")
+                self.plot_data_gaps(ax = ax, pixel_data = pixel_data)
+
+                ax.legend(loc = "upper left")
+                ax.set_ylabel(f"{phenology_name1}/ {phenology_name2}")
+                ax.set_title(f"Background Points Ratio Lake ID: {lakeID1}")
+                ax.xaxis.set_minor_locator(mdates.YearLocator())
+                ax.grid(axis="x", which="minor", linewidth=0.5)
+                ax.grid(axis="x", which="major", linewidth=0.5)
+                ax.grid(axis="y")
+
+
+
+
+
 
         def yearly_cubic_spline(self, ax, latitude_idx, longitude_idx, years= ["2002", "2003", "2004", "2005",
              "2006", "2007", "2008", "2009", "2010",
