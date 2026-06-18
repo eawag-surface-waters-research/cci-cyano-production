@@ -1207,6 +1207,15 @@ class PhenologyVisualization:
                                 midUP_y    = remove_nan(nc.variables["green_up_mid_y"][i, j, :])
                                 midDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_mid_x"][i, j, :]))
                                 midDOWN_y  = remove_nan(nc.variables["green_down_mid_y"][i, j, :])
+                                onsetUP_x    = unix_to_datetime(remove_nan(nc.variables["green_up_onset_x"][i, j, :]))
+                                onsetUP_y    = remove_nan(nc.variables["green_up_onset_y"][i, j, :])
+                                onsetDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_onset_x"][i, j, :]))
+                                onsetDOWN_y  = remove_nan(nc.variables["green_down_onset_y"][i, j, :])
+                                advUP_x    = unix_to_datetime(remove_nan(nc.variables["green_up_advanced_x"][i, j, :]))
+                                advUP_y    = remove_nan(nc.variables["green_up_advanced_y"][i, j, :])
+                                advDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_advanced_x"][i, j, :]))
+                                advDOWN_y  = remove_nan(nc.variables["green_down_advanced_y"][i, j, :])
+
                                 gap_starts = unix_to_datetime(remove_nan(nc.variables["data_gap_start"][i, j, :]))
                                 gap_ends   = unix_to_datetime(remove_nan(nc.variables["data_gap_end"][i, j, :]))
                         self._pixel_cache[(i,j)] = {
@@ -1215,6 +1224,10 @@ class PhenologyVisualization:
                                 "trgs_x": trgs_x, "trgs_y": trgs_y, "trgs_qa": trgs_qa,
                                 "midUP_x": midUP_x, "midUP_y": midUP_y,
                                 "midDOWN_x": midDOWN_x, "midDOWN_y": midDOWN_y,
+                                "onsetUP_x": onsetUP_x, "onsetUP_y": onsetUP_y,
+                                "onsetDOWN_x": onsetDOWN_x, "onsetDOWN_y": onsetDOWN_y,
+                                "advUP_x": advUP_x, "advUP_y": advUP_y,
+                                "advDOWN_x": advDOWN_x, "advDOWN_y": advDOWN_y,
                                 "gap_starts": gap_starts, "gap_ends": gap_ends,
                         }
                 return self._pixel_cache[(i,j)]
@@ -1333,7 +1346,7 @@ class PhenologyVisualization:
                                         label = "chla v2.1"
                                         color = "purple"
                                 else:
-                                        label = "chla v3.1"
+                                        label = "chla v3.0"
                                         color = "green"
 
                         else:
@@ -1344,7 +1357,7 @@ class PhenologyVisualization:
                                         label = "chla v2.1"
                                         color = "lightgreen"
                                 else:
-                                        label = "chla v3.1"
+                                        label = "chla v3.0"
                                         color = "green"
 
                         if not background_pts and aggregation:
@@ -2088,7 +2101,7 @@ class PhenologyVisualization:
 
 
 
-        def single_plot(self, latitude, longitude, ax, aggregation = False, start= 0, end= 9999, annotation = None):
+        def single_plot(self, latitude, longitude, ax, aggregation = False, start= 0, end= 9999, annotation = None, all_pheno_features=False):
                 """Plot raw observations, the smoothed spline, and all phenological events for a pixel.
 
                 Displays a scatter of valid (QA==0) observations or 3×3 aggregated values,
@@ -2142,6 +2155,22 @@ class PhenologyVisualization:
                 mask_midDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in px["midDOWN_x"]])
                 midDOWN_x_sub = px["midDOWN_x"][mask_midDOWN]
                 midDOWN_y_sub = px["midDOWN_y"][mask_midDOWN]
+
+                mask_onsetUP   = np.array([(d.year <= end) & (d.year >= start) for d in px["onsetUP_x"]])
+                onsetUP_x_sub  = px["onsetUP_x"][mask_onsetUP]
+                onsetUP_y_sub  = px["onsetUP_y"][mask_onsetUP]
+
+                mask_onsetDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in px["onsetDOWN_x"]])
+                onsetDOWN_x_sub = px["onsetDOWN_x"][mask_onsetDOWN]
+                onsetDOWN_y_sub = px["onsetDOWN_y"][mask_onsetDOWN]
+
+                mask_advUP   = np.array([(d.year <= end) & (d.year >= start) for d in px["advUP_x"]])
+                advUP_x_sub  = px["advUP_x"][mask_advUP]
+                advUP_y_sub  = px["advUP_y"][mask_advUP]
+
+                mask_advDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in px["advDOWN_x"]])
+                advDOWN_x_sub = px["advDOWN_x"][mask_advDOWN]
+                advDOWN_y_sub = px["advDOWN_y"][mask_advDOWN]
 
                 mask     = (px["values"] != -9999) & (px["qa"] == 0)
                 values_m = px["values"][mask]
@@ -2258,7 +2287,11 @@ class PhenologyVisualization:
                                         neg_values_sub.append(len(midDOWN_x_neg_before))
                                         neg_label_before = True
                                         warnings.warn(f"Negative Mid Down(s) in time period {start}-{end}", Warning)
-
+                                if all_pheno_features:
+                                        ax.scatter(advUP_x_sub, advUP_y_sub, color="darkgreen", s=30, marker="^", zorder=4, label="Adv Up")
+                                        ax.scatter(advDOWN_x_sub, advDOWN_y_sub, color="darkgreen", s=30, marker="v", zorder=4, label="Adv Down")
+                                        ax.scatter(onsetUP_x_sub, onsetUP_y_sub, color="darkgreen", s=30, marker="^", zorder=4, label="Onset Up")
+                                        ax.scatter(onsetDOWN_x_sub, onsetDOWN_y_sub, color="darkgreen", s=30, marker="v", zorder=4, label="Onset Down")
                                 ax.legend(loc="upper left", ncol= 2)
                                 textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}\n Total RMSE, R$^2$, MAD: {round(rmse_tot,4)}, {round(r2_tot, 4)}, {round(mad_tot,4)}"
                                 ax.set_title(textstr)
