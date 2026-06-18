@@ -13,11 +13,11 @@ import csv
 import statistics
 import warnings
 from matplotlib.colors import ListedColormap, BoundaryNorm
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Rectangle, Patch
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import pearsonr
 from csaps import csaps
-from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data, create_empty_heatmap, bivariate_legend, bivariate_continuous_legend, interpolate_from_color_set, to_frac_month, bivariate_continuous_legend
+from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data, create_empty_heatmap, bivariate_legend, bivariate_continuous_legend, interpolate_from_color_set, to_frac_month, bivariate_continuous_legend, grab_plotting_variables, calculate_spline, calculate_metrics_to_plot, plot_variables
 import multiprocessing
 from functools import partial
 import shapely.ops as ops
@@ -278,7 +278,7 @@ class PhenologyVisualization:
                         return [tuple(int(x) for x in idx) for idx in np.argwhere(valid_counts > 1)]
                 
 
-        def create_DataFrame(self, latitude, longitude):
+        def create_DataFrame(self, latitude_idx, longitude_idx):
                 """Build a combined long-format DataFrame of all phenology variables for a single pixel.
 
                 Reads all _x (time) and _y (value) variable pairs from the phenology NetCDF
@@ -286,15 +286,15 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel in the grid.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel in the grid.
 
                 Returns
                 -------
                 pandas.DataFrame
-                    Long-format DataFrame with columns Value, Variable, latitude, longitude
+                    Long-format DataFrame with columns Value, Variable, latitude_idx, longitude_idx
                     and a datetime index named Time.
                 """
                 p = netCDF4.Dataset(self.p_path)
@@ -309,13 +309,13 @@ class PhenologyVisualization:
                 result = {}
 
                 for x,y in zip(variables_x, variables_y):
-                        var_x = unix_to_datetime(remove_nan(p[x][latitude,longitude,:]))
-                        var_y = remove_nan(p[y][latitude,longitude,:])
+                        var_x = unix_to_datetime(remove_nan(p[x][latitude_idx,longitude_idx,:]))
+                        var_y = remove_nan(p[y][latitude_idx,longitude_idx,:])
                         var_label = [x[:-2]]*len(var_y)
                         df = pd.DataFrame({"Value":var_y,
                                         "Variable": var_label,
-                                        "latitude": lat[latitude],
-                                        "longitude": lon[longitude], 
+                                        "latitude": lat[latitude_idx],
+                                        "longitude": lon[longitude_idx], 
                                         "lake_ID": lakeID},
                                         index = var_x)
                         df.index.names = ["Time"]
@@ -746,7 +746,7 @@ class PhenologyVisualization:
 
 
 
-        def pixel_map(self, latitude, longitude, ax):
+        def pixel_map(self, latitude_idx, longitude_idx, ax):
                 """Plot a grayscale coverage map with the selected pixel marked.
 
                 Reads the summary grid from the extract NetCDF and displays it in
@@ -755,9 +755,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel to highlight.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel to highlight.
                 ax : matplotlib.axes.Axes
                     Axes on which to draw the map.
@@ -780,7 +780,7 @@ class PhenologyVisualization:
                 im = ax.imshow(masked_summary, cmap=cmap, aspect="auto", origin="lower")
 
                 # plot selected pixel
-                ax.plot(longitude, latitude, "r*", markersize=14, zorder=5, label="Pixel")
+                ax.plot(longitude_idx, latitude_idx, "r*", markersize=14, zorder=5, label="Pixel")
 
                 ax.set_xlabel("Lon index")
                 ax.set_ylabel("Lat index")
@@ -1259,19 +1259,20 @@ class PhenologyVisualization:
                 return pd.Series(index=time_dt,data=values_m)
 
 
-        def extrema_plot(self, latitude, longitude, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False, show_legend = True):
+        def extrema_plot(self, latitude_idx, longitude_idx, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False, show_legend = True):
                 """Plot detected peaks or troughs as a stem plot with optional background scatter.
 
-                Displays summer peaks or winter troughs for the pixel at (latitude, longitude)
-                as vertical stems. Background observations may be shown as a raw scatter or
-                3×3 spatial median (aggregation=True). Negative values are flagged with red
-                crosses and trigger a warning.
+                Displays summer peaks or winter troughs for the pixel at (latitude_idx, longitude_idx)
+                as vertical stems, with each extremum marker shaped by its QA flag
+                while keeping the product's colour. Background observations may be shown as
+                a raw scatter (QA==0 only) or 3×3 spatial median (when aggregation=True). Negative
+                values are flagged with red crosses and trigger a warning.
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 ax : matplotlib.axes.Axes
                     Axes on which to draw the plot.
@@ -1303,20 +1304,12 @@ class PhenologyVisualization:
 
 
                 g = self._load_extracted_globals()
-                px = self._load_pixel_data(latitude, longitude)
+                px = self._load_pixel_data(latitude_idx, longitude_idx)
                 lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
                 smoothing = px["smoothing"]
-                if peak:
-                        pks_x, pks_y = px["pks_x"], px["pks_y"]
-                        mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
-                        x_sub = pks_x[mask_pks]
-                        y_sub = pks_y[mask_pks]
-
-                else:
-                        trgs_x, trgs_y = px["trgs_x"], px["trgs_y"]
-                        mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
-                        x_sub = trgs_x[mask_pks]
-                        y_sub = trgs_y[mask_pks]
+                var = "pks" if peak else "trgs"
+                plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=px, variables=[var])
+                x_sub, y_sub, qa_sub = plotting_data[var]
 
                 mask     = (px["values"] != -9999) & (px["qa"] == 0)
                 values_m = px["values"][mask]
@@ -1339,26 +1332,25 @@ class PhenologyVisualization:
                         neg_label_before = False
                         phenology_name = os.path.basename(os.path.dirname(self.p_path))
                         if purple_chla21:
-                                if phenology_name == "phycocyanin":
-                                        label = "phyco"
-                                        color = "blue"
-                                elif phenology_name == "chla_mean":
-                                        label = "chla v2.1"
-                                        color = "purple"
-                                else:
-                                        label = "chla v3.0"
-                                        color = "green"
+                                label_dict = {"phycocyanin": "phyco",
+                                              "chla_mean": "chla v2.1",
+                                              "chla": "chla v3.0"
+                                              }
+                                color_dict = {"phycocyanin": "blue",
+                                              "chla_mean": "purple",
+                                              "chla": "green"
+                                              }
+                                
 
                         else:
-                                if phenology_name == "phycocyanin":
-                                        label = "phyco"
-                                        color = "blue"
-                                elif phenology_name == "chla_mean":
-                                        label = "chla v2.1"
-                                        color = "lightgreen"
-                                else:
-                                        label = "chla v3.0"
-                                        color = "green"
+                                label_dict = {"phycocyanin": "phyco",
+                                              "chla_mean": "chla v2.1",
+                                              "chla": "chla v3.0"
+                                              }
+                                color_dict = {"phycocyanin": "blue",
+                                              "chla_mean": "lightgreen",
+                                              "chla": "green"
+                                              }
 
                         if not background_pts and aggregation:
                                 raise ValueError("Either aggreagte background points or not plot them at all.")
@@ -1367,20 +1359,29 @@ class PhenologyVisualization:
                                 if self.aggregation_df is None:
                                         self.spatial_aggregation()
 
-                                background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
+                                background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude_idx) & (self.aggregation_df["j"]==longitude_idx)]
                                 background_time = background_sub["time"]
                                 background_time = background_time.to_numpy()
 
                                 background_values = background_sub["MA_value"]
 
-                                ax.scatter(datenum_to_datetime(background_time), background_values, color=color, alpha=0.3, s=10, label=f"{label} Data")
+                                ax.scatter(datenum_to_datetime(background_time), background_values, color=color_dict[phenology_name], alpha=0.1, s=10, label=f"{label_dict[phenology_name]} Data")
                         elif background_pts and not aggregation:
-                                ax.scatter(datenum_to_datetime(time_m), values_m, color=color, alpha=0.3, s=10, label=f"{label} Data")
+                                ax.scatter(datenum_to_datetime(time_m), values_m, color=color_dict[phenology_name], alpha=0.1, s=10, label=f"{label_dict[phenology_name]} Data")
                         else:
                                 pass
 
-                        extrema_label = "Peaks" if peak else "Troughs"
-                        ax.stem(x_sub, y_sub, linefmt=color, label=f"{label} {extrema_label}", basefmt = " ")
+                        self.plot_data_gaps(ax=ax, pixel_data=px)
+
+                        ax.stem(x_sub, y_sub, linefmt=color_dict[phenology_name], markerfmt=" ", basefmt = " ")
+                        qa_markers = {0: "o", 1: "s", 2: "x"}
+                        qa_labels  = {0: "Good", 1: "Fair", 2: "Poor"}
+                        for q in (0, 1, 2):
+                                qm = qa_sub == q
+                                if qm.any():
+                                        ax.scatter(x_sub[qm], y_sub[qm], color=color_dict[phenology_name],
+                                                   marker=qa_markers[q], s=50, edgecolors="black", linewidths=0.5,
+                                                   zorder=4, label=qa_labels[q])
                         if (y_sub < 0).any():
                                 mask =  y_sub<0
                                 pks_x_neg_before = x_sub[mask]
@@ -1394,9 +1395,9 @@ class PhenologyVisualization:
                         if show_legend:
                                 ax.legend(loc="upper left", ncol= 2)
                         if peak:
-                                textstr = f"Peak Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textstr = f"Peak Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
                         else:
-                                textstr = f"Trough Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textstr = f"Trough Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
                         ax.set_title(textstr)
                         ax.xaxis.set_minor_locator(mdates.YearLocator())
                         ax.grid(axis="x", which="minor", linewidth=0.5)
@@ -1421,20 +1422,20 @@ class PhenologyVisualization:
 
 
 
-        def extrema_comparison(self, other1,  latitude, longitude, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = False, other2= None, purple_chla21= False, show_legend= False):
+        def extrema_comparison(self, other1,  latitude_idx, longitude_idx, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = True, other2= None, purple_chla21= False, show_legend= False):
                 """Overlay extrema plots from two or three PhenologyVisualization instances on one axis.
 
                 Calls extrema_plot for self and other1 (and optionally other2), sharing the
                 same axes so that peaks or troughs from different products (e.g. chla v2.1
-                vs v3.1) can be compared directly. All instances must reference the same lake.
+                vs v3.0) can be compared directly. All instances must reference the same lake.
 
                 Parameters
                 ----------
                 other1 : PhenologyVisualization
                     Second instance to overlay (must share the same lake ID as self).
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 ax : matplotlib.axes.Axes
                     Axes on which to draw all overlaid plots.
@@ -1477,40 +1478,36 @@ class PhenologyVisualization:
                 if other2:
                         if lakeID2!= lakeID3:
                                 raise Warning("Comparison must be made on the same lake!")
-                        ymax1 = self.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
-                        ymax2 = other1.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
-                        ymax3 = other2.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
+                        ymax1 = self.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
+                        ymax2 = other1.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
+                        ymax3 = other2.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
                         y_lims = [ymax1, ymax2, ymax3]
                         phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
                         phenology_name2 = os.path.basename(os.path.dirname(other1.p_path))
                         phenology_name3 = os.path.basename(os.path.dirname(other2.p_path))
                         
-                        if phenology_name1 == "phycocyanin":
-                                phenology_name1 = "phyco"
-                        elif phenology_name1 == "chla_mean":
-                                phenology_name1 = "chla v2.1"
-                        else:
-                                phenology_name1 = "chla v3.1"
+                        
+                        label_dict = {"phycocyanin": "phyco",
+                                              "chla_mean": "chla v2.1",
+                                              "chla": "chla v3.0"
+                                              }
+                        if purple_chla21:
 
-                        if phenology_name2 == "phycocyanin":
-                                phenology_name2 = "phyco"
-                        elif phenology_name2 == "chla_mean":
-                                phenology_name2 = "chla v2.1"
+                                color_dict = {"phycocyanin": "blue",
+                                              "chla_mean": "purple",
+                                              "chla": "green"
+                                              }
                         else:
-                                phenology_name2 = "chla v3.1"
-
-                        if phenology_name3 == "phycocyanin":
-                                phenology_name3 = "phyco"
-                        elif phenology_name3 == "chla_mean":
-                                phenology_name3 = "chla v2.1"
-                        else:
-                                phenology_name3 = "chla v3.1"
+                                color_dict = {"phycocyanin": "blue",
+                                              "chla_mean": "lightgreen",
+                                              "chla": "green"
+                                              }
 
 
                         if peak:
-                                textr =  f"{phenology_name1}, {phenology_name2} vs {phenology_name3} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textr =  f"{label_dict[phenology_name1]}, {label_dict[phenology_name2]} vs {label_dict[phenology_name3]} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
                         else:
-                                textr =  f"{phenology_name1}, {phenology_name2} vs {phenology_name3} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textr =  f"{label_dict[phenology_name1]}, {label_dict[phenology_name2]} vs {label_dict[phenology_name3]} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
                         ax.set_title(textr)
                         ax.set_ylim(top = max(y_lims))
                         ax.xaxis.set_minor_locator(mdates.YearLocator())
@@ -1518,33 +1515,61 @@ class PhenologyVisualization:
                         ax.grid(axis="x", which="major", linewidth=0.5)
                         ax.grid(axis="y", linewidth=0.5)
                         ax.set_ylabel("[ug/L]")
-                        ax.legend(loc="upper left", ncol= 2)
+                        # QA legend (markers only, no year lines)
+                        qa_markers = {0: "o", 1: "s", 2: "x"}
+                        qa_labels  = {0: "Good", 1: "Fair", 2: "Poor"}
+                        qa_handles = [mlines.Line2D([], [], color="black", marker=qa_markers[qa],
+                                        linestyle="None", markersize=6, label=qa_labels[qa])
+                                for qa in (0, 1, 2)
+                        ]
+                        # Add data gap legend entry
+                        qa_handles.append(Patch(facecolor="orange",
+                                edgecolor="orange",
+                                alpha=0.15,
+                                label="Data gap")
+                        )
+
+                        # Color legend for product versions
+                        type_handles = [
+                        mlines.Line2D([], [], color=color_dict[phenology_name1], marker="o",
+                                        linestyle="None", markersize=8, label=label_dict[phenology_name1]),
+                        mlines.Line2D([], [], color=color_dict[phenology_name2], marker="o",
+                                        linestyle="None", markersize=8, label=label_dict[phenology_name2]),
+                        mlines.Line2D([], [], color=color_dict[phenology_name3], marker="o",
+                                        linestyle="None", markersize=8, label=label_dict[phenology_name3]),]
+
+
+                        leg1 = ax.legend(handles=qa_handles, loc="upper left")
+                        ax.add_artist(leg1)
+                        ax.legend(handles= type_handles, loc = "upper right")
 
                 else:
 
-                        ymax1 = self.extrema_plot(latitude=latitude, longitude=longitude, ax = ax, peak= peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
-                        ymax2 = other1.extrema_plot(latitude=latitude, longitude=longitude, ax = ax,  peak= peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
+                        ymax1 = self.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax, peak= peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
+                        ymax2 = other1.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax,  peak= peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
                         y_lims = [ymax1, ymax2]
                         phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
                         phenology_name2 = os.path.basename(os.path.dirname(other1.p_path))
 
-                        if phenology_name1 == "phycocyanin":
-                                phenology_name1 = "phyco"
-                        elif phenology_name1 == "chla_mean":
-                                phenology_name1 = "chla v2.1"
-                        else:
-                                phenology_name1 = "chla v3.1"
+                        label_dict = {"phycocyanin": "phyco",
+                                              "chla_mean": "chla v2.1",
+                                              "chla": "chla v3.0"
+                                              }
+                        if purple_chla21:
 
-                        if phenology_name2 == "phycocyanin":
-                                phenology_name2 = "phyco"
-                        elif phenology_name2 == "chla_mean":
-                                phenology_name2 = "chla v2.1"
+                                color_dict = {"phycocyanin": "blue",
+                                              "chla_mean": "purple",
+                                              "chla": "green"
+                                              }
                         else:
-                                phenology_name2 = "chla v3.1"
-                        if peak: 
-                                textr =  f"{phenology_name1} vs {phenology_name2} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                color_dict = {"phycocyanin": "blue",
+                                              "chla_mean": "lightgreen",
+                                              "chla": "green"
+                                              }
+                        if peak:
+                                textr =  f"{label_dict[phenology_name1]} vs {label_dict[phenology_name2]} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
                         else:
-                                textr =  f"{phenology_name1} vs {phenology_name2} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}"
+                                textr =  f"{label_dict[phenology_name1]} vs {label_dict[phenology_name2]} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
                         
                         ax.set_title(textr)
                         ax.set_ylim(top = max(y_lims))
@@ -1553,13 +1578,37 @@ class PhenologyVisualization:
                         ax.grid(axis="x", which="major", linewidth=0.5)
                         ax.grid(axis="y", linewidth=0.5)
                         ax.set_ylabel("[ug/L]")
-                        ax.legend(loc="upper left", ncol= 2)
+                        # QA legend (markers only, no year lines)
+                        qa_markers = {0: "o", 1: "s", 2: "x"}
+                        qa_labels  = {0: "Good", 1: "Fair", 2: "Poor"}
+                        qa_handles = [mlines.Line2D([], [], color="black", marker=qa_markers[qa],
+                                        linestyle="None", markersize=6, label=qa_labels[qa])
+                                for qa in (0, 1, 2)
+                        ]
+                        # Add data gap legend entry
+                        qa_handles.append(Patch(facecolor="orange",
+                                edgecolor="orange",
+                                alpha=0.15,
+                                label="Data gap")
+                        )
+
+                        # Color legend for product versions
+                        type_handles = [
+                        mlines.Line2D([], [], color=color_dict[phenology_name1], marker="o",
+                                        linestyle="None", markersize=8, label=label_dict[phenology_name1]),
+                        mlines.Line2D([], [], color=color_dict[phenology_name2], marker="o",
+                                        linestyle="None", markersize=8, label=label_dict[phenology_name2]),]
+
+
+                        leg1 = ax.legend(handles=qa_handles, loc="upper left")
+                        ax.add_artist(leg1)
+                        ax.legend(handles= type_handles, loc = "upper right")
 
 
 
 
 
-        def single_plot_background(self, latitude, longitude, ax, fig, aggregation = False, start= 0, end= 9999):
+        def single_plot_background(self, latitude_idx, longitude_idx, ax, fig, aggregation = False, start= 0, end= 9999):
                 """Plot a pixel time series with QA-coloured scatter, spline, and phenological events.
 
                 Like single_plot, but colours each background scatter point by its QA flag
@@ -1568,9 +1617,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 ax : matplotlib.axes.Axes
                     Axes on which to draw the plot.
@@ -1589,199 +1638,84 @@ class PhenologyVisualization:
                 None
                 """
 
-                with netCDF4.Dataset(self.e_path) as nc:
-                        # change np.array to np.asarry to avoid getting DeprecationError
-                        lat = np.asarray(nc.variables["lat"])
-                        lon = np.asarray(nc.variables["lon"])
-                        t_all = unix_to_datenum(nc.variables["time"])
+                g  = self._load_extracted_globals()
+                pixel_data = self._load_pixel_data(latitude_idx, longitude_idx)
+                lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
+                smoothing = pixel_data["smoothing"]
 
+                plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=pixel_data)
 
-                with netCDF4.Dataset(self.p_path) as nc:
-                        smoothing = float(nc.variables["smoothing_parameter"][latitude, longitude])
-                        pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
-                        pks_y = remove_nan(nc.variables["pks_y"][latitude, longitude, :])
-                        mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
-                        pks_x_sub = pks_x[mask_pks]
-                        pks_y_sub = pks_y[mask_pks]
+                # No QA==0 filter here — all non-fill values kept for QA-coloured scatter
+                mask     = (pixel_data["values"] != -9999)
+                values_m = pixel_data["values"][mask]
+                time_m   = t_all[mask]
+                qa_mask  = pixel_data["qa"][mask]
 
-                        trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
-                        trgs_y = remove_nan(nc.variables["trgs_y"][latitude, longitude, :])
-                        mask_trgs = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
-                        trgs_x_sub = trgs_x[mask_trgs]
-                        trgs_y_sub = trgs_y[mask_trgs]
-
-                        midUP_x = unix_to_datetime(remove_nan(nc.variables["green_up_mid_x"][latitude, longitude, :]))
-                        midUP_y = remove_nan(nc.variables["green_up_mid_y"][latitude, longitude, :])
-                        mask_midUP = np.array([(d.year <= end) & (d.year >= start) for d in midUP_x])
-                        midUP_x_sub = midUP_x[mask_midUP]
-                        midUP_y_sub = midUP_y[mask_midUP]
-
-                        midDOWN_x = unix_to_datetime(remove_nan(nc.variables["green_down_mid_x"][latitude, longitude, :]))
-                        midDOWN_y = remove_nan(nc.variables["green_down_mid_y"][latitude, longitude, :])
-                        mask_midDOWN= np.array([(d.year <= end) & (d.year >= start) for d in midDOWN_x])
-                        midDOWN_x_sub = midDOWN_x[mask_midDOWN]
-                        midDOWN_y_sub = midDOWN_y[mask_midDOWN]
-
-                with netCDF4.Dataset(self.e_path) as nc:
-                        variable = getattr(nc, "variable")
-                        variable_qa  = getattr(nc, "qa")
-                        values = np.array(nc.variables[variable][:, latitude, longitude])
-                        values_qa = np.array(nc.variables[variable_qa][:, latitude, longitude])
-                        mask = (values != -9999)
-                        values_m = values[mask]
-                        time_m = t_all[mask]
-                        qa_mask = values_qa[mask]
-                        qa_unique = sorted(np.unique(qa_mask))
-
-                if len(values_m) > 1:
-
-                        limits = sorted(datenum_to_datetime(time_m))
-                        if start == 0:
-                                function_start = min(limits).year
-                        else:
-                                function_start = start
-                        if end == 9999:
-                                function_end= max(limits).year
-                        else:
-                                function_end = end
-                        neg_values_sub =[]
-                        smooth_x = np.arange(t_all.min(), t_all.max() + 1, 1)
-                        smooth_y = csaps(time_m, values_m, smooth_x, smooth=smoothing)
-
-                        y_pred =csaps(time_m, values_m, time_m, smooth=smoothing)
-                        y_true = values_m
-
-                        time_slice = np.array(datenum_to_datetime(time_m))
-
-                        mask_sub = np.array([(d.year <=function_end) & (d.year >= function_start) for d in time_slice])
-                        if mask_sub.sum()>2:
-                                rmse_sub = np.sqrt(mean_squared_error(y_true[mask_sub], y_pred[mask_sub]))
-                                r2_sub = r2_score(y_true[mask_sub], y_pred[mask_sub])
-
-                                rmse_tot = np.sqrt(mean_squared_error(y_true, y_pred))
-                                r2_tot = r2_score(y_true, y_pred)
-
-                                # data1 = {"time": time_m,"data": values_m}
-                                # average_df1 = pd.DataFrame(data1)
-
-                                # data2 = {"data": values_m}
-                                # average_df2 = pd.DataFrame(data2)
-
-                                # average_df2["SMA15"] = average_df2.rolling(window = 15).mean()
-
-                                # average_background = pd.merge(average_df1, average_df2, on='data', how='inner')
-
-                                neg_label_before = False
-
-                                qa_unique = sorted(np.unique(qa_mask))
-
-                                # one discrete color per unique QA value
-                                cmap = plt.cm.get_cmap("tab10", len(qa_unique))
-                                cmap_new = ListedColormap(cmap(np.arange(len(qa_unique))))
-
-                                # map actual QA values to category indices 0..N-1
-                                qa_to_idx = {qa: i for i, qa in enumerate(qa_unique)}
-                                qa_idx = np.array([qa_to_idx[q] for q in qa_mask])
-
-                                # boundaries around category indices
-                                bounds = np.arange(-0.5, len(qa_unique) + 0.5, 1)
-                                norm = BoundaryNorm(bounds, cmap_new.N)
-
-                                if aggregation:
-                                        if self.aggregation_df is None:
-                                                self.spatial_aggregation()
-
-                                        background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
-                                        background_time = background_sub["time"]
-                                        background_time = background_time.to_numpy()
-
-                                        background_values = background_sub["MA_value"]
-
-                                        sc = ax.scatter(datenum_to_datetime(background_time), background_values, c=qa_idx, cmap = cmap_new, norm = norm, alpha=1, s=10, label="Data")
-                                else:
-                                        sc = ax.scatter(datenum_to_datetime(time_m), values_m, c=qa_idx, cmap = cmap_new, norm = norm, alpha=1, s=10, label="Data")
-                                ax.plot(datenum_to_datetime(smooth_x), smooth_y, color="black", linewidth=1, label="Spline")
-                                ax.scatter(pks_x_sub, pks_y_sub, color="orange", s=50, marker="o", zorder=4, label="Peaks")
-                                if (pks_y_sub < 0).any():
-                                        mask =  pks_y_sub<0
-                                        pks_x_neg_before = pks_x_sub[mask]
-                                        pks_y_neg_before = pks_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(pks_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
-
-                                ax.scatter(trgs_x_sub, trgs_y_sub, color="blue", s=50, marker="o", zorder=4, label="Troughs")
-                                if (trgs_y_sub < 0).any():
-                                        mask =  trgs_y_sub<0
-                                        trgs_x_neg_before = trgs_x_sub[mask]
-                                        trgs_y_neg_before = trgs_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(trgs_x_neg_before, trgs_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(trgs_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Troughs(s) in time period {start}-{end}", Warning)
-                                ax.scatter(midUP_x_sub, midUP_y_sub, color="mediumseagreen", s=30, marker="^", zorder=4, label="Mid Up")
-                                if (midUP_y_sub < 0).any():
-                                        mask =  midUP_y_sub<0
-                                        midUP_x_neg_before = midUP_x_sub[mask]
-                                        midUP_y_neg_before = midUP_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(midUP_x_neg_before, midUP_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(midUP_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Mid Up(s) in time period {start}-{end}", Warning)
-                                ax.scatter(midDOWN_x_sub, midDOWN_y_sub, color="darkgreen", s=30, marker="v", zorder=4, label="Mid Down")
-                                if (midDOWN_y_sub < 0).any():
-                                        mask =  midDOWN_y_sub<0
-                                        midDOWN_x_neg_before = midDOWN_x_sub[mask]
-                                        midDOWN_y_neg_before = midDOWN_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(midDOWN_x_neg_before, midDOWN_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(midDOWN_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Mid Down(s) in time period {start}-{end}", Warning)
-
-                                ax.legend(loc="upper left", ncol= 2)
-                                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}\n Total RMSE, R$^2$: {round(rmse_tot,4)}, {round(r2_tot, 4)}"
-                                ax.set_title(textstr)
-                                ax.grid()
-                                ax.set_ylabel("[ug/L]")
-                                ax.set_xlim(pd.to_datetime('01-01-' + str(function_start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(function_end), format='%d-%m-%Y'))
-                                cbar = fig.colorbar(sc, ax=ax, boundaries=bounds)
-                                cbar.set_label("QA indicators")
-
-                                # ticks at category centers
-                                cbar.set_ticks(np.arange(len(qa_unique)))
-                                cbar.set_ticklabels([str(q) for q in qa_unique])
-
-
-                                pks_lim_sub = sorted(pks_y_sub)
-                                if max(pks_lim_sub)> 10:
-                                        ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-2]+0.5)
-                                else:
-                                        ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-1]+0.5)
-
-                                if neg_values_sub:
-                                        ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {round(rmse_sub,4)}\n R$^2$: {round(r2_sub,4)}", transform = ax.transAxes,   ha= "right", va= "top")
-                                else:
-                                        ax.text(0.99,0.99,f"RMSE:{round(rmse_sub,4)} \n R$^2$: {round(r2_sub,4)}", transform = ax.transAxes,   ha= "right", va= "top")
-                        else:
-                                warnings.warn("Not enough data to plot or compute metrics for chosen time interval")
-                else:
+                if len(values_m) == 0:
                         warnings.warn("No data to plot")
+                        return
+
+                smooth_x, smooth_y = calculate_spline(
+                        whole_timeframe=t_all, masked_values=values_m,
+                        masked_time=time_m, smoothing_parameter=smoothing
+                )
+                if smooth_x is None:
+                        warnings.warn("No data to plot")
+                        return
+
+                metrics_dict, plot_time_frame = calculate_metrics_to_plot(
+                        start=start, end=end, masked_values=values_m,
+                        masked_time=time_m, smoothing_parameter=smoothing
+                )
+                if metrics_dict is None:
+                        return
+
+                # QA-coloured background scatter (unique to this method)
+                qa_unique = sorted(np.unique(qa_mask))
+                cmap = plt.cm.get_cmap("tab10", len(qa_unique))
+                cmap_new = ListedColormap(cmap(np.arange(len(qa_unique))))
+                qa_to_idx = {qa: i for i, qa in enumerate(qa_unique)}
+                qa_idx = np.array([qa_to_idx[q] for q in qa_mask])
+                bounds = np.arange(-0.5, len(qa_unique) + 0.5, 1)
+                norm = BoundaryNorm(bounds, cmap_new.N)
+
+                if aggregation:
+                        if self.aggregation_df is None:
+                                self.spatial_aggregation()
+                        background_sub    = self.aggregation_df[(self.aggregation_df["i"] == latitude_idx) & (self.aggregation_df["j"] == longitude_idx)]
+                        background_time   = background_sub["time"].to_numpy()
+                        background_values = background_sub["MA_value"]
+                        sc = ax.scatter(datenum_to_datetime(background_time), background_values, c=qa_idx, cmap=cmap_new, norm=norm, alpha=1, s=10, label="Data")
+                else:
+                        sc = ax.scatter(datenum_to_datetime(time_m), values_m, c=qa_idx, cmap=cmap_new, norm=norm, alpha=1, s=10, label="Data")
+
+                neg_values_sub = plot_variables(
+                        ax=ax, plotting_data=plotting_data, spline_x=smooth_x, spline_y=smooth_y,
+                        time_frame=plot_time_frame
+                )
+
+                self.annotations_and_limits(
+                        ax=ax, plotting_data=plotting_data, metrics_dict=metrics_dict,
+                        time_frame=plot_time_frame, lat=lat, lon=lon,
+                        latitude_idx=latitude_idx, longitude_idx=longitude_idx,
+                        neg_values_sub=neg_values_sub
+                )
+
+                cbar = fig.colorbar(sc, ax=ax, boundaries=bounds)
+                cbar.set_label("QA indicators")
+                cbar.set_ticks(np.arange(len(qa_unique)))
+                cbar.set_ticklabels([str(q) for q in qa_unique])
 
 
 
-        def count_extrema(self, latitude, longitude, start= 0, end= 9999, peaks = True):
+        def count_extrema(self, latitude_idx, longitude_idx, start= 0, end= 9999, peaks = True):
                 """Return the number of detected peaks for a pixel within a year range.
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 start : int, optional
                     First year to include (inclusive). 0 = earliest in the series.
@@ -1793,37 +1727,27 @@ class PhenologyVisualization:
                 int
                     Number of peaks falling within the specified year range.
                 """
-                if peaks:
-                        with netCDF4.Dataset(self.p_path) as nc:
-                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
-                                mask_pks = np.array([(d.year <= end) & (d.year >= start) for d in pks_x])
-                                pks_x_sub = pks_x[mask_pks]
-
-                                return len(pks_x_sub)
-                else:
-                        with netCDF4.Dataset(self.p_path) as nc:
-                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
-                                mask_trgs = np.array([(d.year <= end) & (d.year >= start) for d in trgs_x])
-                                trgs_x_sub = trgs_x[mask_trgs]
-
-                                return len(trgs_x_sub) 
+                var = "pks" if peaks else "trgs"
+                pixel_data = self._load_pixel_data(latitude_idx, longitude_idx)
+                plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=pixel_data, variables=[var])
+                return len(plotting_data[var][0])
                         
 
 
 
-        def create_heatmap_output(self, latitude, longitude, start_year=2002, end_year=2024, fraction = False):
+        def create_heatmap_output(self, latitude_idx, longitude_idx, start_year=2002, end_year=2024, fraction = False):
                 """Return peak/trough counts or lake-wide fractions per year and quarter.
 
-                When fraction=False, counts are read from the single pixel at (latitude,
-                longitude). When fraction=True, all pixels in the lake are aggregated and
+                When fraction=False, counts are read from the single pixel at (latitude_idx,
+                longitude_idx). When fraction=True, all pixels in the lake are aggregated and
                 each quarter value is expressed as the fraction of that year's total events
                 occurring in that quarter (0.0 – 1.0); years with no events return 0.0.
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel. Only used when fraction=False.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel. Only used when fraction=False.
                 start_year : int, optional
                     First calendar year to include (inclusive). Default 2002.
@@ -1846,8 +1770,8 @@ class PhenologyVisualization:
                 if not fraction:
 
                         with netCDF4.Dataset(self.p_path) as nc:
-                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude, longitude, :]))
-                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude, longitude, :]))
+                                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude_idx, longitude_idx, :]))
+                                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude_idx, longitude_idx, :]))
                         
                                 for year in range(start_year, end_year + 1):
                                         year_counts = []
@@ -1891,14 +1815,14 @@ class PhenologyVisualization:
 
                 return result
         
-        def yearly_heatmap_pixel(self, latitude, longitude, color_scheme='pink-blue'):
+        def yearly_heatmap_pixel(self, latitude_idx, longitude_idx, color_scheme='pink-blue'):
                 """Plot a bivariate heatmap of peak and trough counts or fractions by year and quarter.
 
                 Each cell in the heatmap represents one calendar quarter of one year. The
                 cell colour encodes two variables simultaneously using a 4×4 bivariate
                 colour palette from color_sets_4x4.
 
-                When whole_lake=False, counts for the single pixel at (latitude, longitude)
+                When whole_lake=False, counts for the single pixel at (latitude_idx, longitude_idx)
                 are binned into four levels (0, 1, 2, 3+) and the cell is coloured from the
                 discrete 4×4 grid using bivariate_legend.
 
@@ -1910,9 +1834,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel. Only used when whole_lake=False.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel. Only used when whole_lake=False.
                 color_scheme : str, optional
                     Key into color_sets_4x4 selecting the bivariate palette.
@@ -1930,11 +1854,11 @@ class PhenologyVisualization:
                     The axes on which the heatmap is drawn.
                 """
              
-                heatmap_data = self.create_heatmap_output(latitude=latitude, longitude=longitude, fraction = False)
+                heatmap_data = self.create_heatmap_output(latitude_idx=latitude_idx, longitude_idx=longitude_idx, fraction = False)
                 fig, ax, _ = create_empty_heatmap()
                 g  = self._load_extracted_globals()
                 lat, lon = g["lat"], g["lon"]
-                textstr = f"Yearly Heatmap for Pixel\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}\n {os.path.basename(os.path.dirname(self.p_path))}, Lake ID:{os.path.basename(self.p_path)[:-3]}"
+                textstr = f"Yearly Heatmap for Pixel\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}\n {os.path.basename(os.path.dirname(self.p_path))}, Lake ID:{os.path.basename(self.p_path)[:-3]}"
                 ax.set_title(textstr)
 
                 color_set = color_sets_4x4[color_scheme]
@@ -1953,7 +1877,7 @@ class PhenologyVisualization:
         
         def yearly_heatmap_lake(self, color_scheme= "pink-blue"):
                 # lat and lon are not needed as the heatmap uses all pixels from the lake, thus they can be arbitrary
-                heatmap_data = self.create_heatmap_output(latitude=-1, longitude=-1, fraction=True)
+                heatmap_data = self.create_heatmap_output(latitude_idx=-1, longitude_idx=-1, fraction=True)
                 fig, ax, _ = create_empty_heatmap()
                 textstr = f"Yearly Heatmap for Lake ID: {os.path.basename(self.p_path)[:-3]}\n  {os.path.basename(os.path.dirname(self.p_path))}"
                 ax.set_title(textstr)
@@ -1974,7 +1898,7 @@ class PhenologyVisualization:
 
 
 
-        def pixel_r2(self, latitude, longitude, start, end):
+        def pixel_r2(self, latitude_idx, longitude_idx, start, end):
                 """Return the R² score for a single pixel within a year range.
 
                 Delegates to r2_scores, which may trigger full-lake parallel computation
@@ -1982,9 +1906,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 start : int
                     First year of the evaluation window (0 = full series start).
@@ -1997,9 +1921,9 @@ class PhenologyVisualization:
                     R² score for the pixel, or np.nan if insufficient data.
                 """
                 scores = self.r2_scores([(start, end)])
-                return scores[(latitude, longitude)]
+                return scores[(latitude_idx, longitude_idx)]
 
-        def pixel_rmse(self, latitude, longitude, start, end):
+        def pixel_rmse(self, latitude_idx, longitude_idx, start, end):
                 """Return the RMSE for a single pixel within a year range.
 
                 Delegates to RMSE_scores, which may trigger full-lake parallel computation
@@ -2007,9 +1931,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 start : int
                     First year of the evaluation window (0 = full series start).
@@ -2022,9 +1946,9 @@ class PhenologyVisualization:
                     RMSE value for the pixel, or np.nan if insufficient data.
                 """
                 scores = self.RMSE_scores([(start, end)])
-                return scores[(latitude, longitude)]
+                return scores[(latitude_idx, longitude_idx)]
 
-        def pixel_mad(self, latitude, longitude, start, end):
+        def pixel_mad(self, latitude_idx, longitude_idx, start, end):
                 """Return the Median Absolute Deviation for a single pixel within a year range.
 
                 Delegates to MAD_scores, which may trigger full-lake parallel computation
@@ -2032,9 +1956,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 start : int
                     First year of the evaluation window (0 = full series start).
@@ -2047,9 +1971,9 @@ class PhenologyVisualization:
                     MAD value for the pixel, or np.nan if insufficient data.
                 """
                 scores = self.MAD_scores([(start, end)])
-                return scores[(latitude, longitude)]
+                return scores[(latitude_idx, longitude_idx)]
 
-        def pixel_correlation(self, latitude, longitude, start, end):
+        def pixel_correlation(self, latitude_idx, longitude_idx, start, end):
                 """Return the Pearson correlation coefficient for a single pixel within a year range.
 
                 Delegates to correlation_scores, which may trigger full-lake parallel
@@ -2057,9 +1981,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 start : int
                     First year of the evaluation window (0 = full series start).
@@ -2072,9 +1996,9 @@ class PhenologyVisualization:
                     Pearson r for the pixel, or np.nan if insufficient data.
                 """
                 scores = self.correlation_scores([(start, end)])
-                return scores[(latitude, longitude)]
+                return scores[(latitude_idx, longitude_idx)]
 
-        def pixel_values(self, latitude, longitude, start, end):
+        def pixel_values(self, latitude_idx, longitude_idx, start, end):
                 """Return the valid observation count for a single pixel within a year range.
 
                 Delegates to values_per_pixel, which may trigger full-lake parallel
@@ -2082,9 +2006,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 start : int
                     First year of the evaluation window (0 = full series start).
@@ -2097,11 +2021,105 @@ class PhenologyVisualization:
                     Number of valid (QA==0, value!=-9999) observations in the window.
                 """
                 scores = self.values_per_pixel([(start, end)])
-                return scores[(latitude, longitude)]
+                return scores[(latitude_idx, longitude_idx)]
 
 
 
-        def single_plot(self, latitude, longitude, ax, aggregation = False, start= 0, end= 9999, annotation = None, all_pheno_features=False):
+        
+        
+        def plot_background_pts(self, ax, latitude_idx, longitude_idx, masked_values, masked_time, aggregation = False, alpha= 0.3):
+                if aggregation:
+                        if self.aggregation_df is None:
+                                self.spatial_aggregation()
+
+                        background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude_idx) & (self.aggregation_df["j"]==longitude_idx)]
+
+                        background_time = background_sub["time"]
+                        background_time = background_time.to_numpy()
+
+                        background_values = background_sub["MA_value"]
+
+                        ax.scatter(datenum_to_datetime(background_time), background_values, color="grey", alpha=alpha, s=10, label="Data")
+                else:
+                        ax.scatter(datenum_to_datetime(masked_time), masked_values, color="grey", alpha=alpha, s=10, label="Data")
+                
+
+        def plot_data_gaps(self, ax, pixel_data):
+                gap_starts = pixel_data["gap_starts"]
+                gap_ends   = pixel_data["gap_ends"]
+                for gs, ge in zip(gap_starts, gap_ends):
+                        ax.axvspan(gs, ge, color="orange", alpha=0.15, zorder=0)
+                if len(gap_starts) > 0:
+                        ax.axvspan(gap_starts[0], gap_ends[0], color="orange", alpha=0.15, zorder=0, label="Data gap")
+
+
+                
+        def annotations_and_limits(self, ax, plotting_data, metrics_dict, time_frame, lat, lon, latitude_idx, longitude_idx, neg_values_sub, annotation = None):
+                start, end = time_frame[0], time_frame[1]
+
+                ax.legend(loc="upper left", ncol= 2)
+                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}\n Total RMSE, R$^2$, MAD: {round(metrics_dict["rmse"][1],4)}, {round(metrics_dict["r2"][1], 4)}, {round(metrics_dict["mad"][1],4)}"
+                ax.set_title(textstr)
+                ax.xaxis.set_minor_locator(mdates.YearLocator())
+                ax.grid(axis="x", which="minor", linewidth=0.5)
+                ax.grid(axis="x", which="major", linewidth=0.5)
+                ax.grid(axis="y")
+                ax.set_ylabel("[ug/L]")
+                ax.set_xlim(pd.to_datetime('01-01-' + str(start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(end), format='%d-%m-%Y'))
+                trgs_y_sub = plotting_data["trgs"][1]
+
+                pks_lim_sub = sorted(plotting_data["pks"][1])
+                # if max(pks_lim_sub)> 10:
+                #         ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-2]+0.5)
+                # else:
+                #         ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-1]+0.5)
+
+
+
+                trgs_lim_sub = sorted(plotting_data["trgs"][1])
+
+                if len(pks_lim_sub) > 0 and len(trgs_lim_sub) > 0:
+
+                        ymax = pks_lim_sub[-1]
+
+                        if ymax > 10 and len(pks_lim_sub) > 1:
+                                ymax = pks_lim_sub[-2]
+
+                        ymin = trgs_lim_sub[0]
+
+                        ax.set_ylim(ymin - 0.5, ymax + 0.5)
+
+                else:
+                        warnings.warn(
+                                f"No peaks/troughs available for {start}-{end}; using automatic y-limits."
+                        )
+                if not annotation:
+                        if neg_values_sub:
+                                ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {round(metrics_dict["rmse"][0],3)}\n R$^2$: {round(metrics_dict["r2"][0],3)}\n MAD: {round(metrics_dict["mad"][0])}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
+                        else:
+                                ax.text(0.99,0.99,f"RMSE:{round(metrics_dict["rmse"][0],3)} \n R$^2$: {round(metrics_dict["r2"][0],3)}\n MAD: {round(metrics_dict["mad"][0], 3)}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
+                else:
+                
+                        lines = []
+                        if "R2" in annotation:
+                                lines.append(f"R$^2$: {round(metrics_dict["r2"][0], 3)}")
+                        if "RMSE" in annotation:
+                                lines.append(f"RMSE: {round(metrics_dict["rmse"][0], 3)}")
+                        if "MAD" in annotation:
+                                lines.append(f"MAD: {round(metrics_dict["mad"][0], 3)}")
+                        if "neg" in annotation and neg_values_sub:
+                                lines.append(f"# Neg.values: {sum(neg_values_sub)}")
+                        
+                        if lines:
+                                ax.text(0.99, 0.99, "\n".join(lines),
+                                        transform=ax.transAxes, ha="right", va="top", zorder = 10)
+                                
+        
+
+
+
+
+        def single_plot(self, latitude_idx, longitude_idx, ax, aggregation = False, start= 0, end= 9999, annotation = None):
                 """Plot raw observations, the smoothed spline, and all phenological events for a pixel.
 
                 Displays a scatter of valid (QA==0) observations or 3×3 aggregated values,
@@ -2112,9 +2130,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 ax : matplotlib.axes.Axes
                     Axes on which to draw the plot.
@@ -2133,229 +2151,35 @@ class PhenologyVisualization:
 
 
                 g  = self._load_extracted_globals()
-                px = self._load_pixel_data(latitude, longitude)
+                pixel_data = self._load_pixel_data(latitude_idx, longitude_idx)
                 lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
+                smoothing = pixel_data["smoothing"]
 
-                smoothing = px["smoothing"]
-
-                mask_pks     = np.array([(d.year <= end) & (d.year >= start) for d in px["pks_x"]])
-                pks_x_sub    = px["pks_x"][mask_pks]
-                pks_y_sub    = px["pks_y"][mask_pks]
-                pks_qa_sub   = px["pks_qa"][mask_pks]
-
-                mask_trgs    = np.array([(d.year <= end) & (d.year >= start) for d in px["trgs_x"]])
-                trgs_x_sub   = px["trgs_x"][mask_trgs]
-                trgs_y_sub   = px["trgs_y"][mask_trgs]
-                trgs_qa_sub  = px["trgs_qa"][mask_trgs]
-
-                mask_midUP   = np.array([(d.year <= end) & (d.year >= start) for d in px["midUP_x"]])
-                midUP_x_sub  = px["midUP_x"][mask_midUP]
-                midUP_y_sub  = px["midUP_y"][mask_midUP]
-
-                mask_midDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in px["midDOWN_x"]])
-                midDOWN_x_sub = px["midDOWN_x"][mask_midDOWN]
-                midDOWN_y_sub = px["midDOWN_y"][mask_midDOWN]
-
-                mask_onsetUP   = np.array([(d.year <= end) & (d.year >= start) for d in px["onsetUP_x"]])
-                onsetUP_x_sub  = px["onsetUP_x"][mask_onsetUP]
-                onsetUP_y_sub  = px["onsetUP_y"][mask_onsetUP]
-
-                mask_onsetDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in px["onsetDOWN_x"]])
-                onsetDOWN_x_sub = px["onsetDOWN_x"][mask_onsetDOWN]
-                onsetDOWN_y_sub = px["onsetDOWN_y"][mask_onsetDOWN]
-
-                mask_advUP   = np.array([(d.year <= end) & (d.year >= start) for d in px["advUP_x"]])
-                advUP_x_sub  = px["advUP_x"][mask_advUP]
-                advUP_y_sub  = px["advUP_y"][mask_advUP]
-
-                mask_advDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in px["advDOWN_x"]])
-                advDOWN_x_sub = px["advDOWN_x"][mask_advDOWN]
-                advDOWN_y_sub = px["advDOWN_y"][mask_advDOWN]
-
-                mask     = (px["values"] != -9999) & (px["qa"] == 0)
-                values_m = px["values"][mask]
+                plotting_data = grab_plotting_variables(start = start, end = end, pixel_data=pixel_data, variables=["pks", "trgs", "midUP", "midDOWN"])
+        
+                mask     = (pixel_data["values"] != -9999) & (pixel_data["qa"] == 0)
+                values_m = pixel_data["values"][mask]
                 time_m   = t_all[mask]
 
-                
-
-                if len(values_m) > 1:
-
-                        limits = sorted(datenum_to_datetime(time_m))
-                        if start == 0:
-                                function_start = min(limits).year
-                        else:
-                                function_start = start
-                        if end == 9999:
-                                function_end= max(limits).year
-                        else:
-                                function_end = end
-                        neg_values_sub =[]
-                        smooth_x = np.arange(t_all.min(), t_all.max() + 1, 1)
-                        smooth_y = csaps(time_m, values_m, smooth_x, smooth=smoothing)
-
-                        y_pred =csaps(time_m, values_m, time_m, smooth=smoothing)
-                        y_true = values_m
-
-                        time_slice = np.array(datenum_to_datetime(time_m))
-
-                        mask_sub = np.array([(d.year <=function_end) & (d.year >= function_start) for d in time_slice])
-                        if mask_sub.sum()>2:
-                                rmse_sub = np.sqrt(mean_squared_error(y_true[mask_sub], y_pred[mask_sub]))
-                                r2_sub = r2_score(y_true[mask_sub], y_pred[mask_sub])
-                                mad_sub = np.median(np.abs(y_true[mask_sub]-y_pred[mask_sub]))
-
-                                rmse_tot = np.sqrt(mean_squared_error(y_true, y_pred))
-                                r2_tot = r2_score(y_true, y_pred)
-                                mad_tot = np.median(np.abs(y_true-y_pred))
-
-
-
-                                neg_label_before = False
-
-                                if aggregation:
-                                        if self.aggregation_df is None:
-                                                self.spatial_aggregation()
-
-                                        background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude) & (self.aggregation_df["j"]==longitude)]
-
-                                        background_time = background_sub["time"]
-                                        background_time = background_time.to_numpy()
-
-                                        background_values = background_sub["MA_value"]
-
-                                        ax.scatter(datenum_to_datetime(background_time), background_values, color="grey", alpha=0.3, s=10, label="Data")
-                                else:
-                                        ax.scatter(datenum_to_datetime(time_m), values_m, color="grey", alpha=0.3, s=10, label="Data")
-                                gap_starts = px["gap_starts"]
-                                gap_ends   = px["gap_ends"]
-                                for gs, ge in zip(gap_starts, gap_ends):
-                                        ax.axvspan(gs, ge, color="orange", alpha=0.15, zorder=0)
-                                if len(gap_starts) > 0:
-                                        ax.axvspan(gap_starts[0], gap_ends[0], color="orange", alpha=0.15, zorder=0, label="Data gap")
-                                ax.plot(datenum_to_datetime(smooth_x), smooth_y, color="black", linewidth=1, label="Spline")
-                                qa_colors = {0: "blue", 1: "orange", 2: "red"}
-                                qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
-                                for qa in (0, 1, 2):
-                                        pm = pks_qa_sub == qa
-                                        tm = trgs_qa_sub == qa
-                                        if pm.any():
-                                                ax.scatter(pks_x_sub[pm], pks_y_sub[pm], color=qa_colors[qa], s=50,
-                                                           marker="o", edgecolors="black", linewidths=0.5,
-                                                           zorder=4, label=qa_labels[qa])
-                                        if tm.any():
-                                                ax.scatter(trgs_x_sub[tm], trgs_y_sub[tm], color=qa_colors[qa], s=50,
-                                                           marker="o", edgecolors="black", linewidths=0.5,
-                                                           zorder=4, label=qa_labels[qa] if not pm.any() else None)
-                                if (pks_y_sub < 0).any():
-                                        mask =  pks_y_sub<0
-                                        pks_x_neg_before = pks_x_sub[mask]
-                                        pks_y_neg_before = pks_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(pks_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
-
-                                if (trgs_y_sub < 0).any():
-                                        mask =  trgs_y_sub<0
-                                        trgs_x_neg_before = trgs_x_sub[mask]
-                                        trgs_y_neg_before = trgs_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(trgs_x_neg_before, trgs_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(trgs_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Troughs(s) in time period {start}-{end}", Warning)
-
-                                ax.scatter(midUP_x_sub, midUP_y_sub, color="mediumseagreen", s=30, marker="^", zorder=4, label="Mid Up")
-                                if (midUP_y_sub < 0).any():
-                                        mask =  midUP_y_sub<0
-                                        midUP_x_neg_before = midUP_x_sub[mask]
-                                        midUP_y_neg_before = midUP_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(midUP_x_neg_before, midUP_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(midUP_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Mid Up(s) in time period {start}-{end}", Warning)
-
-                                ax.scatter(midDOWN_x_sub, midDOWN_y_sub, color="darkgreen", s=30, marker="v", zorder=4, label="Mid Down")
-                                if (midDOWN_y_sub < 0).any():
-                                        mask =  midDOWN_y_sub<0
-                                        midDOWN_x_neg_before = midDOWN_x_sub[mask]
-                                        midDOWN_y_neg_before = midDOWN_y_sub[mask]
-                                        label = "Negative Value" if not neg_label_before else None
-                                        ax.scatter(midDOWN_x_neg_before, midDOWN_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                        neg_values_sub.append(len(midDOWN_x_neg_before))
-                                        neg_label_before = True
-                                        warnings.warn(f"Negative Mid Down(s) in time period {start}-{end}", Warning)
-                                if all_pheno_features:
-                                        ax.scatter(advUP_x_sub, advUP_y_sub, color="darkgreen", s=30, marker="^", zorder=4, label="Adv Up")
-                                        ax.scatter(advDOWN_x_sub, advDOWN_y_sub, color="darkgreen", s=30, marker="v", zorder=4, label="Adv Down")
-                                        ax.scatter(onsetUP_x_sub, onsetUP_y_sub, color="darkgreen", s=30, marker="^", zorder=4, label="Onset Up")
-                                        ax.scatter(onsetDOWN_x_sub, onsetDOWN_y_sub, color="darkgreen", s=30, marker="v", zorder=4, label="Onset Down")
-                                ax.legend(loc="upper left", ncol= 2)
-                                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[longitude]),4)}\n Total RMSE, R$^2$, MAD: {round(rmse_tot,4)}, {round(r2_tot, 4)}, {round(mad_tot,4)}"
-                                ax.set_title(textstr)
-                                ax.xaxis.set_minor_locator(mdates.YearLocator())
-                                ax.grid(axis="x", which="minor", linewidth=0.5)
-                                ax.grid(axis="x", which="major", linewidth=0.5)
-                                ax.grid(axis="y")
-                                ax.set_ylabel("[ug/L]")
-                                ax.set_xlim(pd.to_datetime('01-01-' + str(function_start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(function_end), format='%d-%m-%Y'))
-
-
-                                pks_lim_sub = sorted(pks_y_sub)
-                                # if max(pks_lim_sub)> 10:
-                                #         ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-2]+0.5)
-                                # else:
-                                #         ax.set_ylim(sorted(trgs_y_sub)[0]-0.5, pks_lim_sub[-1]+0.5)
-
-
-
-                                trgs_lim_sub = sorted(trgs_y_sub)
-
-                                if len(pks_lim_sub) > 0 and len(trgs_lim_sub) > 0:
-
-                                        ymax = pks_lim_sub[-1]
-
-                                        if ymax > 10 and len(pks_lim_sub) > 1:
-                                                ymax = pks_lim_sub[-2]
-
-                                        ymin = trgs_lim_sub[0]
-
-                                        ax.set_ylim(ymin - 0.5, ymax + 0.5)
-
-                                else:
-                                        warnings.warn(
-                                                f"No peaks/troughs available for {start}-{end}; using automatic y-limits."
-                                        )
-                                if not annotation:
-                                        if neg_values_sub:
-                                                ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {round(rmse_sub,3)}\n R$^2$: {round(r2_sub,3)}\n MAD: {round(mad_sub, 3)}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
-                                        else:
-                                                ax.text(0.99,0.99,f"RMSE:{round(rmse_sub,3)} \n R$^2$: {round(r2_sub,3)}\n MAD: {round(mad_sub, 3)}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
-                                else:
-                             
-                                        lines = []
-                                        if "R2" in annotation:
-                                                lines.append(f"R$^2$: {round(r2_sub, 3)}")
-                                        if "RMSE" in annotation:
-                                                lines.append(f"RMSE: {round(rmse_sub, 3)}")
-                                        if "MAD" in annotation:
-                                                lines.append(f"MAD: {round(mad_sub, 3)}")
-                                        if "neg" in annotation and neg_values_sub:
-                                                lines.append(f"# Neg.values: {sum(neg_values_sub)}")
-                                        
-                                        if lines:
-                                                ax.text(0.99, 0.99, "\n".join(lines),
-                                                        transform=ax.transAxes, ha="right", va="top", zorder = 10)
-                                        
-                        else:
-                                warnings.warn("Not enough data to plot or compute metrics for chosen time interval")
-                else:
+                if len(values_m) == 0:
                         warnings.warn("No data to plot")
+                        return
+
+                smooth_x, smooth_y = calculate_spline(whole_timeframe= t_all, masked_values=values_m, masked_time= time_m, smoothing_parameter=smoothing)
+
+                metrics_dict, plot_time_frame = calculate_metrics_to_plot(start = start, end = end, masked_values= values_m, masked_time=time_m, smoothing_parameter=smoothing)
+
+                if metrics_dict is None:
+                        return
+
+                self.plot_background_pts(ax = ax, latitude_idx= latitude_idx, longitude_idx = longitude_idx, masked_values=values_m, masked_time=time_m, aggregation=aggregation)
+                self.plot_data_gaps(ax = ax, pixel_data = pixel_data)
+                neg_values_sub =  plot_variables(ax = ax, plotting_data= plotting_data, spline_x= smooth_x, spline_y= smooth_y, time_frame= plot_time_frame, variables= ["pks", "trgs", "midUP", "midDOWN"])
+                self.annotations_and_limits(ax = ax, plotting_data= plotting_data, metrics_dict= metrics_dict, time_frame=plot_time_frame, lat= lat, lon = lon, latitude_idx=latitude_idx, longitude_idx=longitude_idx, neg_values_sub=neg_values_sub, annotation = None)
 
 
-        def split_plot(self, latitude, longitude, ax0, ax1, aggregation = False, start0= 0, end0= 9999, start1= 0, end1=9999):
+
+        def split_plot(self, latitude_idx, longitude_idx, ax0, ax1, aggregation = False, start0= 0, end0= 9999, start1= 0, end1=9999):
                 """Plot two year-windowed single_plots side by side for the same pixel.
 
                 Calls single_plot twice — once on ax0 with [start0, end0] and once on ax1
@@ -2364,9 +2188,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 ax0 : matplotlib.axes.Axes
                     Axes for the first time window.
@@ -2390,10 +2214,10 @@ class PhenologyVisualization:
                 if start0 and start1 == 0 and end0 and end1 == 9999:
                         warnings.warn("split_plot needs a least end0 and start1 parameter, otherwise use full_plot")
 
-                self.single_plot(latitude = latitude, longitude= longitude, ax=ax0, aggregation = aggregation, start= start0, end = end0)
-                self.single_plot(latitude = latitude, longitude= longitude, ax=ax1, aggregation = aggregation, start=start1, end=end1)
+                self.single_plot(latitude_idx = latitude_idx, longitude_idx= longitude_idx, ax=ax0, aggregation = aggregation, start= start0, end = end0)
+                self.single_plot(latitude_idx = latitude_idx, longitude_idx= longitude_idx, ax=ax1, aggregation = aggregation, start=start1, end=end1)
 
-        def full_plot(self, latitude, longitude, ax, aggregation = False):
+        def full_plot(self, latitude_idx, longitude_idx, ax, aggregation = False):
                 """Plot the complete valid time series for a pixel.
 
                 Auto-detects the first and last years with valid observations and
@@ -2401,9 +2225,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 ax : matplotlib.axes.Axes
                     Axes on which to draw the plot.
@@ -2417,8 +2241,8 @@ class PhenologyVisualization:
                 with netCDF4.Dataset(self.e_path) as nc:
                         t_all = unix_to_datenum(nc.variables["time"])
                         variable = getattr(nc, "variable")
-                        values = np.array(nc.variables[variable][:, latitude, longitude])
-                        mask = (values != -9999) & (np.array(nc.variables[getattr(nc, 'qa')][:, latitude, longitude]) == 0)
+                        values = np.array(nc.variables[variable][:, latitude_idx, longitude_idx])
+                        mask = (values != -9999) & (np.array(nc.variables[getattr(nc, 'qa')][:, latitude_idx, longitude_idx]) == 0)
                         values_m = values[mask]
                         time_m = t_all[mask]
 
@@ -2426,13 +2250,13 @@ class PhenologyVisualization:
                         limits = sorted(datenum_to_datetime(time_m))
                         full_plot_start = min(limits).year
                         full_plot_end = max(limits).year
-                        self.single_plot(latitude= latitude, longitude= longitude, ax = ax, aggregation = aggregation, start=full_plot_start, end= full_plot_end)
+                        self.single_plot(latitude_idx= latitude_idx, longitude_idx= longitude_idx, ax = ax, aggregation = aggregation, start=full_plot_start, end= full_plot_end)
 
                 else:
                         warnings.warn("No data to plot")
 
 
-        def single_years_plot(self, latitude, longitude, years, ncol, nrow, annotation, ylim=None):
+        def single_years_plot(self, latitude_idx, longitude_idx, years, ncol, nrow, annotation, ylim=None):
                 """Plot one panel per year in a grid, each showing phenology for a single pixel.
 
                 Creates a figure with ``nrow × ncol`` subplots. Each subplot calls
@@ -2441,9 +2265,9 @@ class PhenologyVisualization:
 
                 Parameters
                 ----------
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 years : list of int
                     Calendar years to display, one per panel.
@@ -2466,7 +2290,7 @@ class PhenologyVisualization:
 
                 fig, axs = plt.subplots(nrow, ncol, constrained_layout=True, squeeze=False, figsize=(ncol * 5, nrow * 4))
                 for year, ax in zip(years, axs.flatten()):
-                        self.single_plot(latitude, longitude, ax, start=year, end=year, annotation=annotation)
+                        self.single_plot(latitude_idx, longitude_idx, ax, start=year, end=year, annotation=annotation)
 
                         for col in ax.collections:
                                 if col.get_label() in _MARKER_SIZES:
@@ -2491,7 +2315,7 @@ class PhenologyVisualization:
                 for ax in axs.flatten()[len(years):]:
                         ax.set_visible(False)
 
-        def single_plot_insitu(self, latitude,longitude,ax,insitu_df,aggregation=False, start = 0, end = 9999, insitu_date_col="datetime", insitu_value_col="chlorophyll_a", insitu_station_col=None, station_id=None, max_depth = 5):
+        def single_plot_insitu(self, latitude_idx,longitude_idx,ax,insitu_df,aggregation=False, start = 0, end = 9999, insitu_date_col="datetime", insitu_value_col="chlorophyll_a", insitu_station_col=None, station_id=None, max_depth = 5):
                 """
                 Plot satellite observations + spline + phenology + in situ overlay.
                 """
@@ -2501,8 +2325,8 @@ class PhenologyVisualization:
                 # -------------------------------------------------
 
                 self.single_plot(
-                        latitude=latitude,
-                        longitude=longitude,
+                        latitude_idx=latitude_idx,
+                        longitude_idx=longitude_idx,
                         ax=ax,
                         aggregation=aggregation,
                         start=start,
@@ -2557,7 +2381,7 @@ class PhenologyVisualization:
 
 
 
-        def yearly_cubic_spline(self, ax, latitude, longitude, years= ["2002", "2003", "2004", "2005",
+        def yearly_cubic_spline(self, ax, latitude_idx, longitude_idx, years= ["2002", "2003", "2004", "2005",
              "2006", "2007", "2008", "2009", "2010",
              "2011", "2012", "2013", "2014", "2015",
              "2016", "2017", "2018", "2019","2020",
@@ -2565,7 +2389,7 @@ class PhenologyVisualization:
                 """Overlay csaps splines for multiple years on a common fractional-month x-axis.
 
                 Fits a single spline over the full valid time series for the pixel at
-                (latitude, longitude), then slices it year by year and plots each slice
+                (latitude_idx, longitude_idx), then slices it year by year and plots each slice
                 against fractional month (1–12) using a distinct colour from the
                 cc.glasbey_light palette. Detected peaks and troughs are overlaid as
                 scatter markers coloured by QA level.
@@ -2578,9 +2402,9 @@ class PhenologyVisualization:
                 ----------
                 ax : matplotlib.axes.Axes
                     Axes on which to draw the overlaid splines and markers.
-                latitude : int
+                latitude_idx : int
                     Row (lat) index of the pixel.
-                longitude : int
+                longitude_idx : int
                     Column (lon) index of the pixel.
                 years : list of str, optional
                     Calendar years to include. Each element must be a string (e.g. '2005').
@@ -2592,7 +2416,7 @@ class PhenologyVisualization:
                 None
                 """
                 g  = self._load_extracted_globals()
-                px = self._load_pixel_data(latitude, longitude)
+                px = self._load_pixel_data(latitude_idx, longitude_idx)
                 lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
 
                 smoothing = px["smoothing"]
@@ -2606,22 +2430,22 @@ class PhenologyVisualization:
                 mask_all     = (px["values"] != -9999) & (px["qa"] == 0)
                 values_m_all = px["values"][mask_all]
                 time_m_all   = t_all[mask_all]
-                smooth_x_all = np.arange(t_all.min(), t_all.max() + 1, 1)
-                smooth_y_all = csaps(time_m_all, values_m_all, smooth_x_all, smooth=smoothing)
+                smooth_x_all, smooth_y_all = calculate_spline(
+                        whole_timeframe=t_all, masked_values=values_m_all,
+                        masked_time=time_m_all, smoothing_parameter=smoothing
+                )
+                if smooth_x_all is None:
+                        warnings.warn("No data to plot")
+                        return
                 smooth_dates_all = np.array(datenum_to_datetime(smooth_x_all))
 
                 for year in years:
-                        start= year
-                        end = year
-                        mask_pks     = np.array([(d.year <= int(end)) & (d.year >= int(start)) for d in px["pks_x"]])
-                        pks_x_sub    = px["pks_x"][mask_pks]
-                        pks_y_sub    = px["pks_y"][mask_pks]
-                        pks_qa_sub   = px["pks_qa"][mask_pks]
-
-                        mask_trgs    = np.array([(d.year <= int(end)) & (d.year >= int(start)) for d in px["trgs_x"]])
-                        trgs_x_sub   = px["trgs_x"][mask_trgs]
-                        trgs_y_sub   = px["trgs_y"][mask_trgs]
-                        trgs_qa_sub  = px["trgs_qa"][mask_trgs]
+                        plotting_data = grab_plotting_variables(
+                                start=int(year), end=int(year),
+                                pixel_data=px, variables=["pks", "trgs"]
+                        )
+                        pks_x_sub, pks_y_sub, pks_qa_sub   = plotting_data["pks"]
+                        trgs_x_sub, trgs_y_sub, trgs_qa_sub = plotting_data["trgs"]
 
                         # Subset the pre-fitted spline to this year and convert to fractional month (1–12)
                         mask_year = np.array([d.year == int(year) for d in smooth_dates_all])
@@ -2662,7 +2486,7 @@ class PhenologyVisualization:
                         pks_sorted = sorted(all_pks_y)
                         ymax = pks_sorted[-2] if pks_sorted[-1] > 10 and len(pks_sorted) > 1 else pks_sorted[-1]
                         ax.set_ylim(sorted(all_trgs_y)[0] - 0.5, ymax + 0.5)
-                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude]), 4)}, {round(float(lon[latitude]), 4)}"
+                textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[latitude_idx]), 4)}"
                 ax.set_title(textstr)
                 ax.grid(axis="x", linewidth=0.5)
                 ax.grid(axis="y")

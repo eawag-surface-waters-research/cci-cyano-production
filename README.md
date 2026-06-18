@@ -229,30 +229,34 @@ Global attributes store the run parameters used to produce the file.
 
 Metric CSVs and spatial aggregation values are written relative to the phenology file's root (`out_folder`). Analysis plots are written to a separate lake analysis folder passed at runtime.
 
-```
-out_folder/
-├── extract/
-│   └── {variable}/
-│       └── {lake_id}.nc
-├── phenology/
-│   └── {variable}/
-│       ├── {lake_id}.nc
-│       └── checkpoints/
-│           └── {lake_id}/
-│               └── bs{batch_size}/
-│                   └── *.npy          # temporary; deleted after successful write
-└── calculated_values/
-    ├── metrics/
-    │   └── {metric_name}/             # r2 | MAD | RMSE | correlation | values_per_pixel
-    │       ├── full_ts.csv                          # time_split [0, 9999]
-    │       ├── ts_end_{year}.csv                    # time_split [0, year]
-    │       ├── ts_start_{year}.csv                  # time_split [year, 9999]
-    │       └── ts_start_{year}_end_{year}.csv       # time_split [start, end]
-    └── spatial_aggregation_values/
-        └── aggregation_background_values.csv
+> **Naming requirement:** `out_folder` itself must be a directory literally named `v{version}` (e.g. `v2.1`, `v3.1`), and it must sit alongside any other version folders under a shared parent directory. `PhenologyVisualization` derives `self.version` by reading the basename of `out_folder` from the `phenology_path` it is given (stripping the leading `v`), and `main.py`'s `comparison` stage locates other versions as siblings of `out_folder` (`os.path.join(os.path.dirname(out_folder), other_version)`). Renaming or nesting `out_folder` differently breaks both the version label shown in plots and the comparison stage.
 
-lake_analysis_folder/
-└── {lake_str}/
+```
+{parent}/                            # shared parent of all version folders
+├── v2.1/                            # = out_folder for a v2.1 run
+│   ├── extract/
+│   │   └── {variable}/
+│   │       └── {lake_id}.nc
+│   ├── phenology/
+│   │   └── {variable}/
+│   │       ├── {lake_id}.nc
+│   │       └── checkpoints/
+│   │           └── {lake_id}/
+│   │               └── bs{batch_size}/
+│   │                   └── *.npy          # temporary; deleted after successful write
+│   └── calculated_values/
+│       ├── metrics/
+│       │   └── {metric_name}/             # r2 | MAD | RMSE | correlation | values_per_pixel
+│       │       ├── full_ts.csv                          # time_split [0, 9999]
+│       │       ├── ts_end_{year}.csv                    # time_split [0, year]
+│       │       ├── ts_start_{year}.csv                  # time_split [year, 9999]
+│       │       └── ts_start_{year}_end_{year}.csv       # time_split [start, end]
+│       └── spatial_aggregation_values/
+│           └── aggregation_background_values.csv
+└── v3.1/                            # = out_folder for a v3.1 run; same layout as v2.1/
+
+lake_analysis_folder/                # = {parent}/../lake_analysis, derived as
+└── {lake_str}/                      #   dirname(dirname(out_folder))/lake_analysis
     └── plots/
         ├── metric_maps/
         │   ├── {variable}_v{version}_{metric}_full_ts.png      # single time_split [0, 9999]
@@ -277,3 +281,32 @@ lake_analysis_folder/
 The phenology stage saves intermediate results as `.npy` checkpoint files in `data/{version}/phenology/{variable}/checkpoints/{lake_id}/bs{batch_size}/`. If a run is interrupted, re-running the same command will skip completed batches and resume from where it left off. Checkpoints are deleted after the final NetCDF is successfully written.
 
 Both stages skip lakes whose output file already exists, so it is safe to rerun the command after adding new lakes to the `lakes` list.
+
+## Provenance
+
+Each run of `main.py` appends a record to `{out_folder}/provenance.json`, one entry per pipeline stage that actually executes (`extract`, `phenology`, `analysis`). Stages that are skipped (`"extract": false`, etc.) do not add an entry, so a run like an analysis-only rerun against existing extract/phenology data still leaves a record of when it ran and with what settings.
+
+Each entry contains:
+
+| Field | Description |
+|-------|-------------|
+| `stage` | `"extract"`, `"phenology"`, or `"analysis"` |
+| `timestamp` | UTC timestamp when the stage was launched |
+| `git_commit` | Short hash of the checked-out commit, or `null` if not in a git repo |
+| `args_file` | Name of the `args/*.json` file the run was launched from |
+| `args` | The full resolved parameters dict (after `parse_args` defaults are applied) |
+| `lakes` | IDs of the lakes processed in this stage |
+| `threads`, `parallel`, `batch_size` | Parallelisation settings (extract/phenology only) |
+
+The file is appended to, never overwritten, so re-running a stage (e.g. after adding lakes, or resuming an interrupted run) accumulates a full history rather than erasing prior entries:
+
+```json
+{
+  "out_folder": "v3.1",
+  "runs": [
+    { "stage": "extract",   "timestamp": "...", "git_commit": "d979727", "args_file": "v3_chla", "args": {...}, "lakes": [5, 15, 6], "threads": 50, "parallel": "pixels" },
+    { "stage": "phenology", "timestamp": "...", "git_commit": "d979727", "args_file": "v3_chla", "args": {...}, "lakes": [5, 15, 6], "threads": 50, "parallel": "pixels", "batch_size": 100 },
+    { "stage": "analysis",  "timestamp": "...", "git_commit": "facdadb", "args_file": "v3_chla_analysis", "args": {...}, "lakes": [12] }
+  ]
+}
+```

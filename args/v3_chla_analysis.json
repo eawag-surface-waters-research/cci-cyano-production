@@ -3,7 +3,7 @@
   "qa": "lwlr_quality_flags",
   "shapefile": "C:/Users/sparksno/Desktop/data_Phenology/shapefile/lakescci_v2.1.0_data-availability.shp",
   "images": "", 
-  "out_folder": "C:/Users/sparksno/Desktop/analysis_test/data/v3.1",
+  "out_folder": "C:/Users/sparksno/Desktop/analysis_test/data/v3.0",
   "lakes": [12],
   "extract": false,
   "phenology": false, 
