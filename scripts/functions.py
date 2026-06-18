@@ -296,6 +296,30 @@ def grab_plotting_variables(start, end, pixel_data, variables = ["pks", "trgs", 
                         mask_midDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midDOWN_x"]])
                         midDOWN_x_sub = pixel_data["midDOWN_x"][mask_midDOWN]
                         midDOWN_y_sub = pixel_data["midDOWN_y"][mask_midDOWN]
+                
+                if "onsetUP" in variables:
+                    dict_key = "onsetUP"
+                    mask_onsetUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["onsetUP_x"]])
+                    onsetUP_x_sub  = pixel_data["onsetUP_x"][mask_onsetUP]
+                    onsetUP_y_sub  = pixel_data["onsetUP_y"][mask_onsetUP]
+
+                if "onsetDOWN" in variables:
+                    dict_key = "onsetDOWN"
+                    mask_onsetDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["onsetDOWN_x"]])
+                    onsetDOWN_x_sub = pixel_data["onsetDOWN_x"][mask_onsetDOWN]
+                    onsetDOWN_y_sub = pixel_data["onsetDOWN_y"][mask_onsetDOWN]
+                
+                if "advUP" in variables:
+                    dict_key = "advUP"
+                    mask_advUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["advUP_x"]])
+                    advUP_x_sub  = pixel_data["advUP_x"][mask_advUP]
+                    advUP_y_sub  = pixel_data["advUP_y"][mask_advUP]
+
+                if "advDOWN" in variables:
+                    dict_key = "advDOWN"
+                    mask_advDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["advDOWN_x"]])
+                    advDOWN_x_sub = pixel_data["advDOWN_x"][mask_advDOWN]
+                    advDOWN_y_sub = pixel_data["advDOWN_y"][mask_advDOWN]
 
                 result = {}
                 if "pks" in variables:
@@ -306,6 +330,14 @@ def grab_plotting_variables(start, end, pixel_data, variables = ["pks", "trgs", 
                         result["midUP"] = [midUP_x_sub, midUP_y_sub]
                 if "midDOWN" in variables:
                         result["midDOWN"] = [midDOWN_x_sub, midDOWN_y_sub]
+                if "onsetUP" in variables:
+                        result["onsetUP"] = [onsetUP_x_sub, onsetUP_y_sub]
+                if "onsetDOWN" in variables:
+                        result["onsetDOWN"] = [onsetDOWN_x_sub, onsetDOWN_y_sub]
+                if "advUP" in variables:
+                        result["advUP"] = [advUP_x_sub, advUP_y_sub]
+                if "advDOWN" in variables:
+                        result["advDOWN"] = [advDOWN_x_sub, advDOWN_y_sub]
                 return result
 
 def calculate_spline(whole_timeframe, masked_values, masked_time, smoothing_parameter ):
