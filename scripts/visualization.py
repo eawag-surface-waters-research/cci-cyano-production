@@ -1353,7 +1353,7 @@ class PhenologyVisualization:
                                               }
 
                         if not background_pts and aggregation:
-                                raise ValueError("Either aggreagte background points or not plot them at all.")
+                                warnings.warn("There are no background points to aggregate")
 
                         if aggregation:
                                 if self.aggregation_df is None:
