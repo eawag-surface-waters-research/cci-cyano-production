@@ -545,7 +545,7 @@ def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_
             if start > end:
                 raise ValueError("Beginning of time split cannot be larger than the end")
             ax = axs if num_splits == 1 else np.atleast_1d(axs).flatten()[num]
-            eda_instance.single_plot(ax=ax, latitude=i, longitude=j, aggregation=aggregation, start=start, end=end)
+            eda_instance.single_plot(ax=ax, latitude_idx=i, longitude_idx=j, aggregation=aggregation, start=start, end=end)
             ax.set_ylim(bottom=-0.5)
             
 
@@ -572,7 +572,7 @@ def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_
             if start > end:
                 raise ValueError("Beginning of time split cannot be larger than the end")
             ax = axs if num_splits == 1 else np.atleast_1d(axs).flatten()[num]
-            eda_instance.extrema_plot(ax=ax, latitude=i, longitude=j, aggregation=aggregation, start=start, end=end, peak=True)
+            eda_instance.extrema_plot(ax=ax, latitude_idx=i, longitude_idx=j, aggregation=aggregation, start=start, end=end, peak=True)
             ax.set_ylim(bottom=-0.5)
          
 
