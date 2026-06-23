@@ -61,9 +61,11 @@ def parse_args(args):
     }
     return default_args | args
 
+
 def chunked(iterable, n):
     for i in range(0, len(iterable), n):
         yield iterable[i:i + n]
+
 
 def set_logging(save):
     if save:
@@ -80,6 +82,7 @@ def set_logging(save):
             format='%(asctime)s - %(levelname)s - %(message)s',
             level=logging.INFO
         )
+
 
 def verify_arg_file(value):
     arg_folder = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "../args"))
@@ -270,190 +273,185 @@ def grab_time_data(e_path, p_path, valid_coords, buffered_geom_prep,
     return map_data, extent
 
 
+def grab_plotting_variables(start, end, pixel_data, variables = None):  
+    if variables is None:
+        variables = ["pks", "trgs", "midUP", "midDOWN"]
+    if "pks" in variables:
+        mask_pks     = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["pks_x"]])
+        pks_x_sub    = pixel_data["pks_x"][mask_pks]
+        pks_y_sub    = pixel_data["pks_y"][mask_pks]
+        pks_qa_sub   = pixel_data["pks_qa"][mask_pks]    
+    if "trgs" in variables:
+        dict_key = "trgs"
+        mask_trgs    = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["trgs_x"]])
+        trgs_x_sub   = pixel_data["trgs_x"][mask_trgs]
+        trgs_y_sub   = pixel_data["trgs_y"][mask_trgs]
+        trgs_qa_sub  = pixel_data["trgs_qa"][mask_trgs]
+    if "midUP" in variables:
+        dict_key = "midUP"
+        mask_midUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midUP_x"]])
+        midUP_x_sub  = pixel_data["midUP_x"][mask_midUP]
+        midUP_y_sub  = pixel_data["midUP_y"][mask_midUP]
+    if "midDOWN" in variables:
+        dict_key = "midDOWN"
+        mask_midDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midDOWN_x"]])
+        midDOWN_x_sub = pixel_data["midDOWN_x"][mask_midDOWN]
+        midDOWN_y_sub = pixel_data["midDOWN_y"][mask_midDOWN]
+    if "onsetUP" in variables:
+        dict_key = "onsetUP"
+        mask_onsetUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["onsetUP_x"]])
+        onsetUP_x_sub  = pixel_data["onsetUP_x"][mask_onsetUP]
+        onsetUP_y_sub  = pixel_data["onsetUP_y"][mask_onsetUP]
+    if "onsetDOWN" in variables:
+        dict_key = "onsetDOWN"
+        mask_onsetDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["onsetDOWN_x"]])
+        onsetDOWN_x_sub = pixel_data["onsetDOWN_x"][mask_onsetDOWN]
+        onsetDOWN_y_sub = pixel_data["onsetDOWN_y"][mask_onsetDOWN]  
+    if "advUP" in variables:
+        dict_key = "advUP"
+        mask_advUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["advUP_x"]])
+        advUP_x_sub  = pixel_data["advUP_x"][mask_advUP]
+        advUP_y_sub  = pixel_data["advUP_y"][mask_advUP]
+    if "advDOWN" in variables:
+        dict_key = "advDOWN"
+        mask_advDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["advDOWN_x"]])
+        advDOWN_x_sub = pixel_data["advDOWN_x"][mask_advDOWN]
+        advDOWN_y_sub = pixel_data["advDOWN_y"][mask_advDOWN]
 
+    result = {}
+    if "pks" in variables:
+        result["pks"] = [pks_x_sub, pks_y_sub, pks_qa_sub]
+    if "trgs" in variables:
+        result["trgs"] = [trgs_x_sub, trgs_y_sub, trgs_qa_sub]
+    if "midUP" in variables:
+        result["midUP"] = [midUP_x_sub, midUP_y_sub]
+    if "midDOWN" in variables:
+        result["midDOWN"] = [midDOWN_x_sub, midDOWN_y_sub]
+    if "onsetUP" in variables:
+        result["onsetUP"] = [onsetUP_x_sub, onsetUP_y_sub]
+    if "onsetDOWN" in variables:
+        result["onsetDOWN"] = [onsetDOWN_x_sub, onsetDOWN_y_sub]
+    if "advUP" in variables:
+        result["advUP"] = [advUP_x_sub, advUP_y_sub]
+    if "advDOWN" in variables:
+        result["advDOWN"] = [advDOWN_x_sub, advDOWN_y_sub]
+    return result
 
-def grab_plotting_variables(start, end, pixel_data, variables = ["pks", "trgs", "midUP", "midDOWN"]):      
-                if "pks" in variables:
-                        mask_pks     = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["pks_x"]])
-                        pks_x_sub    = pixel_data["pks_x"][mask_pks]
-                        pks_y_sub    = pixel_data["pks_y"][mask_pks]
-                        pks_qa_sub   = pixel_data["pks_qa"][mask_pks]
-                     
-                
-                if "trgs" in variables:
-                        dict_key = "trgs"
-                        mask_trgs    = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["trgs_x"]])
-                        trgs_x_sub   = pixel_data["trgs_x"][mask_trgs]
-                        trgs_y_sub   = pixel_data["trgs_y"][mask_trgs]
-                        trgs_qa_sub  = pixel_data["trgs_qa"][mask_trgs]
-                if "midUP" in variables:
-                        dict_key = "midUP"
-                        mask_midUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midUP_x"]])
-                        midUP_x_sub  = pixel_data["midUP_x"][mask_midUP]
-                        midUP_y_sub  = pixel_data["midUP_y"][mask_midUP]
-                if "midDOWN" in variables:
-                        dict_key = "midDOWN"
-                        mask_midDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midDOWN_x"]])
-                        midDOWN_x_sub = pixel_data["midDOWN_x"][mask_midDOWN]
-                        midDOWN_y_sub = pixel_data["midDOWN_y"][mask_midDOWN]
-                
-                if "onsetUP" in variables:
-                    dict_key = "onsetUP"
-                    mask_onsetUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["onsetUP_x"]])
-                    onsetUP_x_sub  = pixel_data["onsetUP_x"][mask_onsetUP]
-                    onsetUP_y_sub  = pixel_data["onsetUP_y"][mask_onsetUP]
-
-                if "onsetDOWN" in variables:
-                    dict_key = "onsetDOWN"
-                    mask_onsetDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["onsetDOWN_x"]])
-                    onsetDOWN_x_sub = pixel_data["onsetDOWN_x"][mask_onsetDOWN]
-                    onsetDOWN_y_sub = pixel_data["onsetDOWN_y"][mask_onsetDOWN]
-                
-                if "advUP" in variables:
-                    dict_key = "advUP"
-                    mask_advUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["advUP_x"]])
-                    advUP_x_sub  = pixel_data["advUP_x"][mask_advUP]
-                    advUP_y_sub  = pixel_data["advUP_y"][mask_advUP]
-
-                if "advDOWN" in variables:
-                    dict_key = "advDOWN"
-                    mask_advDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["advDOWN_x"]])
-                    advDOWN_x_sub = pixel_data["advDOWN_x"][mask_advDOWN]
-                    advDOWN_y_sub = pixel_data["advDOWN_y"][mask_advDOWN]
-
-                result = {}
-                if "pks" in variables:
-                        result["pks"] = [pks_x_sub, pks_y_sub, pks_qa_sub]
-                if "trgs" in variables:
-                        result["trgs"] = [trgs_x_sub, trgs_y_sub, trgs_qa_sub]
-                if "midUP" in variables:
-                        result["midUP"] = [midUP_x_sub, midUP_y_sub]
-                if "midDOWN" in variables:
-                        result["midDOWN"] = [midDOWN_x_sub, midDOWN_y_sub]
-                if "onsetUP" in variables:
-                        result["onsetUP"] = [onsetUP_x_sub, onsetUP_y_sub]
-                if "onsetDOWN" in variables:
-                        result["onsetDOWN"] = [onsetDOWN_x_sub, onsetDOWN_y_sub]
-                if "advUP" in variables:
-                        result["advUP"] = [advUP_x_sub, advUP_y_sub]
-                if "advDOWN" in variables:
-                        result["advDOWN"] = [advDOWN_x_sub, advDOWN_y_sub]
-                return result
 
 def calculate_spline(whole_timeframe, masked_values, masked_time, smoothing_parameter ):
-                if len(masked_values) > 1:
-
-                        smooth_x = np.arange(whole_timeframe.min(), whole_timeframe.max() + 1, 1)
-                        smooth_y = csaps(masked_time, masked_values, smooth_x, smooth=smoothing_parameter)
-
-                        return smooth_x, smooth_y
-                else:
-                     warnings.warn("not enough data to plot")
+    if len(masked_values) > 1:
+        smooth_x = np.arange(whole_timeframe.min(), whole_timeframe.max() + 1, 1)
+        smooth_y = csaps(masked_time, masked_values, smooth_x, smooth=smoothing_parameter)
+        return smooth_x, smooth_y
+    else:
+        warnings.warn("not enough data to plot")
                 
 
 def calculate_metrics_to_plot(start, end, masked_values, masked_time, smoothing_parameter):
-                limits = sorted(datenum_to_datetime(masked_time))
-                if start == 0:
-                        function_start = min(limits).year
-                else:
-                        function_start = start
-                if end == 9999:
-                        function_end= max(limits).year
-                else:
-                        function_end = end
-                y_pred =csaps(masked_time, masked_values, masked_time, smooth=smoothing_parameter)
-                y_true = masked_values
+    limits = sorted(datenum_to_datetime(masked_time))
+    if start == 0:
+        function_start = min(limits).year
+    else:
+        function_start = start
+    if end == 9999:
+        function_end= max(limits).year
+    else:
+        function_end = end
+    y_pred =csaps(masked_time, masked_values, masked_time, smooth=smoothing_parameter)
+    y_true = masked_values
 
-                time_slice = np.array(datenum_to_datetime(masked_time))
+    time_slice = np.array(datenum_to_datetime(masked_time))
 
-                mask_sub = np.array([(d.year <=function_end) & (d.year >= function_start) for d in time_slice])
+    mask_sub = np.array([(d.year <=function_end) & (d.year >= function_start) for d in time_slice])
 
-                if mask_sub.sum()>2:
-                                rmse_sub = np.sqrt(mean_squared_error(y_true[mask_sub], y_pred[mask_sub]))
-                                r2_sub = r2_score(y_true[mask_sub], y_pred[mask_sub])
-                                mad_sub = np.median(np.abs(y_true[mask_sub]-y_pred[mask_sub]))
+    if mask_sub.sum()>2:
+        rmse_sub = np.sqrt(mean_squared_error(y_true[mask_sub], y_pred[mask_sub]))
+        r2_sub = r2_score(y_true[mask_sub], y_pred[mask_sub])
+        mad_sub = np.median(np.abs(y_true[mask_sub]-y_pred[mask_sub]))
 
-                                rmse_tot = np.sqrt(mean_squared_error(y_true, y_pred))
-                                r2_tot = r2_score(y_true, y_pred)
-                                mad_tot = np.median(np.abs(y_true-y_pred))
+        rmse_tot = np.sqrt(mean_squared_error(y_true, y_pred))
+        r2_tot = r2_score(y_true, y_pred)
+        mad_tot = np.median(np.abs(y_true-y_pred))
 
-                                return {"rmse": [rmse_sub, rmse_tot],
-                                        "r2": [r2_sub, r2_tot],
-                                        "mad":[mad_sub, mad_tot]}, [function_start, function_end]
-                else:
-                                warnings.warn("Not enough data to plot or compute metrics for chosen time interval")
-                                return None, [function_start, function_end]
+        return {"rmse": [rmse_sub, rmse_tot],
+                "r2": [r2_sub, r2_tot],
+                "mad":[mad_sub, mad_tot]}, [function_start, function_end]
+    else:
+        warnings.warn("Not enough data to plot or compute metrics for chosen time interval")
+        return None, [function_start, function_end]
 
 
 def plot_variables(ax, plotting_data, spline_x, spline_y, time_frame, variables = ["pks", "trgs", "midUP", "midDOWN"]):
-                neg_values_sub =[]
-                neg_label_before = False
-                start = time_frame[0]
-                end = time_frame[1]
+    neg_values_sub =[]
+    neg_label_before = False
+    start = time_frame[0]
+    end = time_frame[1]
+    
+    ax.plot(datenum_to_datetime(spline_x), spline_y, color="black", linewidth=1, label="Spline")
+    qa_colors = {0: "blue", 1: "orange", 2: "red"}
+    qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
+    for qa in (0, 1, 2):
+        pm = plotting_data["pks"][2] == qa if "pks" in variables else None
+        tm = plotting_data["trgs"][2] == qa if "trgs" in variables else None
+        if pm is not None and pm.any():
+            ax.scatter(plotting_data["pks"][0][pm], plotting_data["pks"][1][pm], color=qa_colors[qa], s=50,
+                            marker="o", edgecolors="black", linewidths=0.5,
+                            zorder=4, label=qa_labels[qa])
+        if tm is not None and tm.any():
+            ax.scatter(plotting_data["trgs"][0][tm], plotting_data["trgs"][1][tm], color=qa_colors[qa], s=50,
+                            marker="o", edgecolors="black", linewidths=0.5,
+                            zorder=4, label=qa_labels[qa] if (pm is not None and pm.any()) else None)
+    if "pks" in variables:
+        if (plotting_data["pks"][1] < 0).any():
+            mask =  plotting_data["pks"][1]<0
+            pks_x_neg_before = plotting_data["pks"][0][mask]
+            pks_y_neg_before = plotting_data["pks"][0][mask]
+            label = "Negative Value" if not neg_label_before else None
+            ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
+            neg_values_sub.append(len(pks_x_neg_before))
+            neg_label_before = True
+            warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
+    if "trgs" in variables:
+        if (plotting_data["trgs"][1] < 0).any():
+            mask =  plotting_data["trgs"][1]<0
+            trgs_x_neg_before = plotting_data["trgs"][0][mask]
+            trgs_y_neg_before = plotting_data["trgs"][1][mask]
+            label = "Negative Value" if not neg_label_before else None
+            ax.scatter(trgs_x_neg_before, trgs_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
+            neg_values_sub.append(len(trgs_x_neg_before))
+            neg_label_before = True
+            warnings.warn(f"Negative Troughs(s) in time period {start}-{end}", Warning)
 
-                
-                ax.plot(datenum_to_datetime(spline_x), spline_y, color="black", linewidth=1, label="Spline")
-                qa_colors = {0: "blue", 1: "orange", 2: "red"}
-                qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
-                for qa in (0, 1, 2):
-                        pm = plotting_data["pks"][2] == qa if "pks" in variables else None
-                        tm = plotting_data["trgs"][2] == qa if "trgs" in variables else None
-                        if pm is not None and pm.any():
-                                ax.scatter(plotting_data["pks"][0][pm], plotting_data["pks"][1][pm], color=qa_colors[qa], s=50,
-                                                marker="o", edgecolors="black", linewidths=0.5,
-                                                zorder=4, label=qa_labels[qa])
-                        if tm is not None and tm.any():
-                                ax.scatter(plotting_data["trgs"][0][tm], plotting_data["trgs"][1][tm], color=qa_colors[qa], s=50,
-                                                marker="o", edgecolors="black", linewidths=0.5,
-                                                zorder=4, label=qa_labels[qa] if (pm is not None and pm.any()) else None)
-                if "pks" in variables:
-                        if (plotting_data["pks"][1] < 0).any():
-                                mask =  plotting_data["pks"][1]<0
-                                pks_x_neg_before = plotting_data["pks"][0][mask]
-                                pks_y_neg_before = plotting_data["pks"][0][mask]
-                                label = "Negative Value" if not neg_label_before else None
-                                ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                neg_values_sub.append(len(pks_x_neg_before))
-                                neg_label_before = True
-                                warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
-                if "trgs" in variables:
-                        if (plotting_data["trgs"][1] < 0).any():
-                                mask =  plotting_data["trgs"][1]<0
-                                trgs_x_neg_before = plotting_data["trgs"][0][mask]
-                                trgs_y_neg_before = plotting_data["trgs"][1][mask]
-                                label = "Negative Value" if not neg_label_before else None
-                                ax.scatter(trgs_x_neg_before, trgs_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                neg_values_sub.append(len(trgs_x_neg_before))
-                                neg_label_before = True
-                                warnings.warn(f"Negative Troughs(s) in time period {start}-{end}", Warning)
+    if "midUP" in variables:
+        ax.scatter(plotting_data["midUP"][0], plotting_data["midUP"][1], color="mediumseagreen", s=30, marker="^", zorder=4, label="Mid Up")
+        if (plotting_data["midUP"][1] < 0).any():
+            mask =  plotting_data["midUP"][1]<0
+            midUP_x_neg_before = plotting_data["midUP"][0][mask]
+            midUP_y_neg_before = plotting_data["midUP"][1][mask]
+            label = "Negative Value" if not neg_label_before else None
+            ax.scatter(midUP_x_neg_before, midUP_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
+            neg_values_sub.append(len(midUP_x_neg_before))
+            neg_label_before = True
+            warnings.warn(f"Negative Mid Up(s) in time period {start}-{end}", Warning)
 
-                if "midUP" in variables:
-                        ax.scatter(plotting_data["midUP"][0], plotting_data["midUP"][1], color="mediumseagreen", s=30, marker="^", zorder=4, label="Mid Up")
-                        if (plotting_data["midUP"][1] < 0).any():
-                                mask =  plotting_data["midUP"][1]<0
-                                midUP_x_neg_before = plotting_data["midUP"][0][mask]
-                                midUP_y_neg_before = plotting_data["midUP"][1][mask]
-                                label = "Negative Value" if not neg_label_before else None
-                                ax.scatter(midUP_x_neg_before, midUP_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                neg_values_sub.append(len(midUP_x_neg_before))
-                                neg_label_before = True
-                                warnings.warn(f"Negative Mid Up(s) in time period {start}-{end}", Warning)
+    if "midDOWN" in variables:
+        ax.scatter(plotting_data["midDOWN"][0], plotting_data["midDOWN"][1], color="darkgreen", s=30, marker="v", zorder=4, label="Mid Down")
+        if (plotting_data["midDOWN"][1] < 0).any():
+            mask =  plotting_data["midDOWN"][1]<0
+            midDOWN_x_neg_before = plotting_data["midDOWN"][0][mask]
+            midDOWN_y_neg_before = plotting_data["midDOWN"][1][mask]
+            label = "Negative Value" if not neg_label_before else None
+            ax.scatter(midDOWN_x_neg_before, midDOWN_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
+            neg_values_sub.append(len(midDOWN_x_neg_before))
+            neg_label_before = True
+            warnings.warn(f"Negative Mid Down(s) in time period {start}-{end}", Warning)
+    return neg_values_sub
 
-                if "midDOWN" in variables:
-                        ax.scatter(plotting_data["midDOWN"][0], plotting_data["midDOWN"][1], color="darkgreen", s=30, marker="v", zorder=4, label="Mid Down")
-                        if (plotting_data["midDOWN"][1] < 0).any():
-                                mask =  plotting_data["midDOWN"][1]<0
-                                midDOWN_x_neg_before = plotting_data["midDOWN"][0][mask]
-                                midDOWN_y_neg_before = plotting_data["midDOWN"][1][mask]
-                                label = "Negative Value" if not neg_label_before else None
-                                ax.scatter(midDOWN_x_neg_before, midDOWN_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                                neg_values_sub.append(len(midDOWN_x_neg_before))
-                                neg_label_before = True
-                                warnings.warn(f"Negative Mid Down(s) in time period {start}-{end}", Warning)
-                return neg_values_sub
 
-def save_maps(eda_instance, lake_analysis_folder, lake_str,  time_splits, metric= ["R2", "MAD", "RMSE", "correlation", "values_per_pixel"]):
-    for m in metric:
+def save_maps(eda_instance, lake_analysis_folder, lake_str,  time_splits, metrics = None):
+    if metrics is None:
+        metrics = ["R2", "MAD", "RMSE", "correlation", "values_per_pixel"]
+    for m in metrics:
         text_strings = []
         num_splits = len(time_splits)
         out_path = os.path.join(lake_analysis_folder, lake_str, "plots", "metric_maps")
@@ -594,8 +592,9 @@ def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_
         plt.close(fig)
 
 
-
-def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_splits, summary_types=["n_peaks", "r2", "rmse", "mad", "correlation", "values", "qa"]):
+def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_splits, summary_types = None):
+    if summary_types is None:
+        summary_types = ["n_peaks", "r2", "rmse", "mad", "correlation", "values", "qa"]
 
     with netCDF4.Dataset(eda_instance.p_path) as nc:
         smoothing_arr = nc.variables["smoothing_parameter"][:]
@@ -662,8 +661,6 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
             file.write("\n")
 
 
-
-
 def save_comparison_plots(instances, pixels, lake_analysis_folder, lake_str,
                           time_splits, comparison_plot_types,
                           aggregation=True, background_pts=False, purple_chla21=False):
@@ -725,46 +722,38 @@ def save_comparison_plots(instances, pixels, lake_analysis_folder, lake_str,
 
 
 def prep_dimark_data(insitu_df,start=0, end=9999,  insitu_date_col="datetime", insitu_value_col="chlorophyll_a", insitu_station_col=None, station_id=None, max_depth = 5):
-        insitu = insitu_df.copy()
-        insitu[insitu_date_col] = pd.to_datetime(
-                insitu[insitu_date_col], format = "mixed", dayfirst = True)
+    insitu = insitu_df.copy()
+    insitu[insitu_date_col] = pd.to_datetime(
+            insitu[insitu_date_col], format = "mixed", dayfirst = True)
 
+    # optional station filtering
+    if (insitu_station_col is not None) and (station_id is not None):
+            insitu = insitu[
+            insitu[insitu_station_col] == station_id
+            ]
 
-        # optional station filtering
-        if (insitu_station_col is not None) and (station_id is not None):
-                insitu = insitu[
-                insitu[insitu_station_col] == station_id
-                ]
+    # time filtering
+    insitu = insitu[
+        (insitu[insitu_date_col].dt.year >= start) &
+        (insitu[insitu_date_col].dt.year <= end)
+    ]
 
-        # time filtering
-        insitu = insitu[
-                (insitu[insitu_date_col].dt.year >= start) &
-                (insitu[insitu_date_col].dt.year <= end)
-        ]
-
-        # remove invalid values
-        insitu = insitu[
-                np.isfinite(insitu[insitu_value_col])]
-        insitu[insitu_date_col] = pd.to_datetime(insitu["datetime"]).dt.date
-        insitu = insitu[insitu["depth"]< max_depth]
-        insitu_mean = (insitu.groupby("datetime", as_index=False)[insitu_value_col].mean())
-        return insitu_mean
-
-
-
+    # remove invalid values
+    insitu = insitu[np.isfinite(insitu[insitu_value_col])]
+    insitu[insitu_date_col] = pd.to_datetime(insitu["datetime"]).dt.date
+    insitu = insitu[insitu["depth"]< max_depth]
+    insitu_mean = (insitu.groupby("datetime", as_index=False)[insitu_value_col].mean())
+    return insitu_mean
 
 
 def bivariate_legend( ax, color_set):
 
     labels = ["0", "1", "2", "2+"]
-
     cell_size = 1
 
     for row in range(4):
         for col in range(4):
-
             idx = col * 4 + row
-
             ax.add_patch(
                 Rectangle(
                     (col, row),          # x,y
@@ -818,7 +807,6 @@ def interpolate_from_color_set(pks_fraction, trgs_fraction, color_set):
            c01 * (1 - t_pk) * t_trg + c11 * t_pk * t_trg)
 
 
-
 def bivariate_continuous_legend(ax, color_set, n=64):
     """Render a smooth 2D gradient legend for a continuous bivariate colormap.
 
@@ -841,11 +829,9 @@ def bivariate_continuous_legend(ax, color_set, n=64):
     ax.set_ylabel("Peaks fraction")
 
 
-
 def create_empty_heatmap(nrows=4, ncols=4):
 
     data = np.full((nrows, ncols), np.nan)
-
     fig, ax = plt.subplots(figsize=(5, 5))
 
     ax.set_xlim(0, 3)
@@ -859,20 +845,14 @@ def create_empty_heatmap(nrows=4, ncols=4):
 
     ax.set_xticks(np.arange(0.5, 4, 1))
     ax.set_yticks(np.arange(2001.5, 2024.5, 1))
-    months = ["Jan-Mar", "Apr-Jun", "Jul-Sep", "Oct-Dez"]
-    years = ["2002", "2003", "2004", "2005", 
-             "2006", "2007", "2008", "2009", "2010", 
-             "2011", "2012", "2013", "2014", "2015", 
-             "2016", "2017", "2018", "2019","2020", 
-             "2021", "2022", "2023", "2024"]
+    months = ["Jan-Mar", "Apr-Jun", "Jul-Sep", "Oct-Dec"]
+    years = [str(yr) for yr in range(2002,2025)]
     ax.set_xticklabels(months, horizontalalignment = "center")
     ax.set_yticklabels(years, horizontalalignment = "center")
 
     # Hide tick marks
     ax.tick_params(axis='x', length=0)
     ax.tick_params(axis='y', length=0, pad = 20)
-
-
 
     return fig, ax, data
 
@@ -882,8 +862,6 @@ def to_frac_month(dates):
         days_in_month = (pd.Timestamp(d.year, d.month % 12 + 1, 1) - pd.Timedelta(days=1)).day if d.month < 12 else 31
         result.append(d.month + (d.day - 1) / days_in_month)
     return np.array(result)
-
-
 
 
 def init_phenology_output(out, lat, lon, p=None):
@@ -1582,3 +1560,90 @@ def extract_phenology_metrics(x_pks, y_pks, x_trgs, y_trgs,
         'data_gap_end_days': gap_end_days,
         'smooth_qa_data': smooth_qa_data
     }
+
+
+def lakeID_to_name(metadata_df, id:int):
+    """
+    Look up the lake name corresponding to a given lake ID.
+
+    Parameters
+    ----------
+    metadata_df : pandas.DataFrame
+        DataFrame containing lake metadata, including at least
+        columns "id" and "name".
+    id : int
+        Numeric lake identifier to search for.
+
+    Returns
+    -------
+    str
+        Name of the lake corresponding to the given ID.
+
+    Raises
+    ------
+    IndexError
+        If the provided ID is not found in the DataFrame.
+
+    """
+    matches = metadata_df.loc[metadata_df["id"] == id, "name"]
+    if matches.empty:
+        raise ValueError(f"Lake ID {id} not found")
+    return matches.iloc[0]
+
+
+def shortname_to_name(metadata_df, short_name:str):
+    """Return the full lake name for a given short_name identifier.
+
+    Parameters
+    ----------
+    short_name : str
+        The short_name value to look up in the shapefile attribute table.
+
+    Returns
+    -------
+    str
+        Formatted string containing the lake name.
+    """
+    matches = metadata_df.loc[metadata_df["short_name"] == short_name, "name"]
+    if matches.empty:
+        raise ValueError(f"Lake ID {id} not found")
+    return matches.iloc[0]
+
+
+def name_to_lakeID(metadata_df, name:str):
+    """Return the lake ID for a given lake name.
+
+    Parameters
+    ----------
+    name : str
+        The lake name to look up in the shapefile attribute table.
+
+    Returns
+    -------
+    str
+        Formatted string containing the lake ID.
+    """
+    matches = metadata_df.loc[metadata_df["name"].str.casefold() == name.casefold(), "id"]
+    if matches.empty:
+        raise ValueError(f"Lake name {name} not found")
+    return matches.iloc[0]
+
+
+def name_to_shortname(metadata_df, name:str):
+    """Return the short_name for a given lake name.
+
+    Parameters
+    ----------
+    name : str
+        The lake name to look up in the shapefile attribute table.
+
+    Returns
+    -------
+    str
+        Formatted string containing the short_name.
+    """
+    matches = metadata_df.loc[metadata_df["name"].str.casefold() == name.casefold(), "short_name"]
+    if matches.empty:
+        raise ValueError(f"Lake name {name} not found")
+    return matches.iloc[0]
+

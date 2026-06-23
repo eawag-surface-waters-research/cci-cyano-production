@@ -18,7 +18,7 @@ from matplotlib.patches import Rectangle, Patch
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import pearsonr
 from csaps import csaps
-from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data, create_empty_heatmap, bivariate_legend, bivariate_continuous_legend, interpolate_from_color_set, to_frac_month, bivariate_continuous_legend, grab_plotting_variables, calculate_spline, calculate_metrics_to_plot, plot_variables
+from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data, create_empty_heatmap, bivariate_legend, bivariate_continuous_legend, interpolate_from_color_set, to_frac_month, bivariate_continuous_legend, grab_plotting_variables, calculate_spline, calculate_metrics_to_plot, plot_variables, lakeID_to_name
 import multiprocessing
 from functools import partial
 import shapely.ops as ops
@@ -143,6 +143,7 @@ class PhenologyVisualization:
         self.version = Path(self.p_path).parents[2].stem.removeprefix('v')
         self.variable = Path(self.p_path).parents[0].stem
         self.lakeID = Path(self.p_path).stem
+        self.lakename = lakeID_to_name(self.lakeID)
         self.info = (f"Version: {self.version} \n",
                     f"Variable: {self.variable} \n" ,
                     f"Lake ID: {self.lakeID}")
@@ -153,74 +154,6 @@ class PhenologyVisualization:
         self.geom_shrunk = None
         self._extracted_globals = None
         self._pixel_cache = {}
-
-
-    def shortname_to_name(self, short_name:str):
-        """Return the full lake name for a given short_name identifier.
-
-        Parameters
-        ----------
-        short_name : str
-            The short_name value to look up in the shapefile attribute table.
-
-        Returns
-        -------
-        str
-            Formatted string containing the lake name.
-        """
-        df = self.geom
-        return f"ID: {df.loc[df['short_name']==short_name, 'name'][1]}"
-
-
-    def ID_to_name(self, id:int):
-        """Return the lake name for a given numeric lake ID.
-
-        Parameters
-        ----------
-        id : int
-            The numeric lake ID to look up in the shapefile attribute table.
-
-        Returns
-        -------
-        str
-            The lake name string.
-        """
-        df = self.geom
-        return list(df.loc[df["id"]==id, "name"])[0]
-
-
-    def name_to_ID(self, name:str):
-        """Return the lake ID for a given lake name.
-
-        Parameters
-        ----------
-        name : str
-            The lake name to look up in the shapefile attribute table.
-
-        Returns
-        -------
-        str
-            Formatted string containing the lake ID.
-        """
-        df = self.geom
-        return f"ID: {list(df.loc[df['name']==name, 'id'])[0]}"
-
-
-    def name_to_shortname(self, name:str):
-        """Return the short_name for a given lake name.
-
-        Parameters
-        ----------
-        name : str
-            The lake name to look up in the shapefile attribute table.
-
-        Returns
-        -------
-        str
-            Formatted string containing the short_name.
-        """
-        df = self.geom
-        return f"short_name: {list(df.loc[df['name']==name, 'short_name'])[0]}"
 
 
     def index_to_lat_lon(self, lat_index, lon_index):
@@ -304,7 +237,6 @@ class PhenologyVisualization:
             and a datetime index named Time.
         """
         p = netCDF4.Dataset(self.p_path)
-        lakeID = os.path.basename(self.p_path)[:-3]
         exclude = ['lat','lon','smoothing_parameter','trgs_qa','data_gap_start','data_gap_end']
         l = list(set(list(p.variables))-set(exclude))
         variables_x = sorted([i for i in l if i[-1]== "x"])
@@ -322,7 +254,7 @@ class PhenologyVisualization:
                             "Variable": var_label,
                             "latitude": lat[latitude_idx],
                             "longitude": lon[longitude_idx], 
-                            "lake_ID": lakeID},
+                            "lake_ID": self.lakeID},
                             index = var_x)
             df.index.names = ["Time"]
             result[y[:-2]] = df
@@ -798,7 +730,7 @@ class PhenologyVisualization:
 
         ax.set_xlabel("Lon index")
         ax.set_ylabel("Lat index")
-        text_str = f"Pixel Location\n Lake ID:{os.path.basename(self.p_path)[:-3]}"
+        text_str = f"Pixel Location\n Lake ID:{self.lakeID}"
         ax.set_title(text_str)
         ax.legend()
 
@@ -834,7 +766,7 @@ class PhenologyVisualization:
 
         ax.set_xlabel("Lon index")
         ax.set_ylabel("Lat index")
-        ax.set_title(f"Pixel Location\n Lake ID: {os.path.basename(self.p_path)[:-3]}")
+        ax.set_title(f"Pixel Location\n Lake ID: {self.lakeID}")
 
         def on_click(event):
             """Label the clicked valid pixel with its lat/lon indices."""
@@ -904,7 +836,7 @@ class PhenologyVisualization:
         """
         if color_extent is None:
             color_extent = [0,1]
-        lake_id = int(os.path.basename(self.p_path)[:-3])
+        lake_id = int(self.lakeID)
         lake_row = self.geom[self.geom["id"] == lake_id]
         if lake_row.empty:
             raise ValueError(f"Lake ID {lake_id} not found in shapefile.")
@@ -952,7 +884,7 @@ class PhenologyVisualization:
         ValueError
             If the lake ID derived from p_path is not found in the shapefile.
         """
-        lake_id = int(os.path.basename(self.p_path)[:-3])
+        lake_id = int(self.lakeID)
 
         lake_row = self.geom[self.geom["id"] == lake_id]
         if lake_row.empty:
@@ -1024,7 +956,7 @@ class PhenologyVisualization:
         matplotlib.image.AxesImage
             The imshow image object.
         """
-        lake_id = int(os.path.basename(self.p_path)[:-3])
+        lake_id = int(self.lakeID)
 
         lake_row = self.geom[self.geom["id"] == lake_id]
         geom = lake_row.geometry.iloc[0]
@@ -1119,7 +1051,7 @@ class PhenologyVisualization:
             lons   = nc.variables["lon"][:]
 
         mask = (values != -9999) & (qa == 0)
-        lake_id = int(os.path.basename(self.p_path)[:-3])
+        lake_id = int(self.lakeID)
         lake_row = self.geom[self.geom["id"] == lake_id]
         geom = lake_row.geometry.iloc[0]
         buffered_geom = self.shrink_geometry_by_1km(geom)
@@ -1315,6 +1247,9 @@ class PhenologyVisualization:
         px = self._load_pixel_data(latitude_idx, longitude_idx)
         lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
         smoothing = px["smoothing"]
+        lat_val = float(lat[latitude_idx])
+        lon_val = float(lon[longitude_idx])
+
         var = "pks" if peak else "trgs"
         plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=px, variables=[var])
         x_sub, y_sub, qa_sub = plotting_data[var]
@@ -1335,7 +1270,7 @@ class PhenologyVisualization:
                 function_end = end
             neg_values_sub =[]
             neg_label_before = False
-            phenology_name = os.path.basename(os.path.dirname(self.p_path))
+            phenology_name = self.variable
             if purple_chla21:
                 label_dict = {"phycocyanin": "phyco",
                                 "chla_mean": "chla v2.1",
@@ -1398,9 +1333,9 @@ class PhenologyVisualization:
             if show_legend:
                 ax.legend(loc="upper left", ncol= 2)
             if peak:
-                textstr = f"Peak Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
+                textstr = f"Peak Comparison\n Lake ID:{self.lakeID}\n lat, lon: {lat_val:.4f}, {lon_val:.4f}"
             else:
-                textstr = f"Trough Comparison\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
+                textstr = f"Trough Comparison\n Lake ID:{self.lakeID}\n lat, lon: {lat_val:.4f}, {lon_val:.4f}"
             ax.set_title(textstr)
             ax.xaxis.set_minor_locator(mdates.YearLocator())
             ax.grid(axis="x", which="minor", linewidth=0.5)
@@ -1468,10 +1403,13 @@ class PhenologyVisualization:
         g = self._load_extracted_globals()
         lat = g["lat"]
         lon = g["lon"]
-        lakeID1 = os.path.basename(self.p_path)[:-3]
-        lakeID2 = os.path.basename(other1.p_path)[:-3]
+        lat_val = float(lat[latitude_idx])
+        lon_val = float(lon[longitude_idx])
+
+        lakeID1 = self.lakeID
+        lakeID2 = other1.lakeID
         if other2:
-            lakeID3 = os.path.basename(other2.p_path)[:-3]
+            lakeID3 = other2.lakeID
 
         if lakeID1 != lakeID2:
             raise Warning("Comparison must be made on the same lake!")
@@ -1482,9 +1420,9 @@ class PhenologyVisualization:
             ymax2 = other1.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
             ymax3 = other2.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax, peak = peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
             y_lims = [ymax1, ymax2, ymax3]
-            phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
-            phenology_name2 = os.path.basename(os.path.dirname(other1.p_path))
-            phenology_name3 = os.path.basename(os.path.dirname(other2.p_path))
+            phenology_name1 = self.variable
+            phenology_name2 = other1.variable
+            phenology_name3 = other2.variable
             
             label_dict = {"phycocyanin": "phyco",
                             "chla_mean": "chla v2.1",
@@ -1502,9 +1440,9 @@ class PhenologyVisualization:
                                 }
 
             if peak:
-                textr =  f"{label_dict[phenology_name1]}, {label_dict[phenology_name2]} vs {label_dict[phenology_name3]} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
+                textr =  f"{label_dict[phenology_name1]}, {label_dict[phenology_name2]} vs {label_dict[phenology_name3]} Peaks \n Lake ID:{self.lakeID}\n lat, lon: {lat_val:.4f}, {lon_val:.4f}"
             else:
-                textr =  f"{label_dict[phenology_name1]}, {label_dict[phenology_name2]} vs {label_dict[phenology_name3]} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
+                textr =  f"{label_dict[phenology_name1]}, {label_dict[phenology_name2]} vs {label_dict[phenology_name3]} Troughs \n Lake ID:{self.lakeID}\n lat, lon: {lat_val:.4f}, {lon_val:.4f}"
             ax.set_title(textr)
             ax.set_ylim(top = max(y_lims))
             ax.xaxis.set_minor_locator(mdates.YearLocator())
@@ -1542,8 +1480,8 @@ class PhenologyVisualization:
             ymax1 = self.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax, peak= peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
             ymax2 = other1.extrema_plot(latitude_idx=latitude_idx, longitude_idx=longitude_idx, ax = ax,  peak= peak, aggregation = aggregation, start = start, end = end, background_pts=background_pts, purple_chla21=purple_chla21, show_legend=show_legend)
             y_lims = [ymax1, ymax2]
-            phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
-            phenology_name2 = os.path.basename(os.path.dirname(other1.p_path))
+            phenology_name1 = self.variable
+            phenology_name2 = other1.variable
 
             label_dict = {"phycocyanin": "phyco",
                                     "chla_mean": "chla v2.1",
@@ -1561,9 +1499,9 @@ class PhenologyVisualization:
                                     "chla": "green"
                                     }
             if peak:
-                    textr =  f"{label_dict[phenology_name1]} vs {label_dict[phenology_name2]} Peaks \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
+                    textr =  f"{label_dict[phenology_name1]} vs {label_dict[phenology_name2]} Peaks \n Lake ID:{self.lakeID}\n lat, lon: {lat_val:.4f}, {lon_val:.4f}"
             else:
-                    textr =  f"{label_dict[phenology_name1]} vs {label_dict[phenology_name2]} Troughs \n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}"
+                    textr =  f"{label_dict[phenology_name1]} vs {label_dict[phenology_name2]} Troughs \n Lake ID:{self.lakeID}\n lat, lon: {lat_val:.4f}, {lon_val:.4f}"
             
             ax.set_title(textr)
             ax.set_ylim(top = max(y_lims))
@@ -1592,7 +1530,6 @@ class PhenologyVisualization:
                         linestyle="None", markersize=8, label=label_dict[phenology_name1]),
             mlines.Line2D([], [], color=color_dict[phenology_name2], marker="o",
                         linestyle="None", markersize=8, label=label_dict[phenology_name2]),]
-
 
             leg1 = ax.legend(handles=qa_handles, loc="upper left")
             ax.add_artist(leg1)
@@ -1841,7 +1778,9 @@ class PhenologyVisualization:
         fig, ax, _ = create_empty_heatmap()
         g  = self._load_extracted_globals()
         lat, lon = g["lat"], g["lon"]
-        textstr = f"Yearly Heatmap for Pixel\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}\n {os.path.basename(os.path.dirname(self.p_path))}, Lake ID:{os.path.basename(self.p_path)[:-3]}"
+        lat_val = float(lat[latitude_idx])
+        lon_val = float(lon[longitude_idx])
+        textstr = f"Yearly Heatmap for Pixel\n lat, lon: {lat_val:.4f}, {lon_val:.4f}\n {self.variable}, Lake ID:{self.lakeID}"
         ax.set_title(textstr)
 
         color_set = color_sets_4x4[color_scheme]
@@ -1863,7 +1802,7 @@ class PhenologyVisualization:
         # lat and lon are not needed as the heatmap uses all pixels from the lake, thus they can be arbitrary
         heatmap_data = self.create_heatmap_output(latitude_idx=-1, longitude_idx=-1, fraction=True)
         fig, ax, _ = create_empty_heatmap()
-        textstr = f"Yearly Heatmap for Lake ID: {os.path.basename(self.p_path)[:-3]}\n  {os.path.basename(os.path.dirname(self.p_path))}"
+        textstr = f"Yearly Heatmap for Lake ID: {self.lakeID}\n  {self.variable}"
         ax.set_title(textstr)
 
         color_set = color_sets_4x4[color_scheme]
@@ -2035,11 +1974,11 @@ class PhenologyVisualization:
             ax.axvspan(gap_starts[0], gap_ends[0], color="orange", alpha=0.15, zorder=0, label="Data gap")
 
             
-    def annotations_and_limits(self, ax, plotting_data, metrics_dict, time_frame, lat, lon, latitude_idx, longitude_idx, neg_values_sub, annotation = None):
+    def annotations_and_limits(self, ax, plotting_data, metrics_dict, time_frame, lat_val, lon_val, neg_values_sub, annotation = None):
         start, end = time_frame[0], time_frame[1]
 
         ax.legend(loc="upper left", ncol= 2)
-        textstr = f"{os.path.basename(os.path.dirname(self.p_path))}\n Lake ID:{os.path.basename(self.p_path)[:-3]}\n lat, lon: {round(float(lat[latitude_idx]), 4)}, {round(float(lon[longitude_idx]),4)}\n Total RMSE, R$^2$, MAD: {round(metrics_dict['rmse'][1],4)}, {round(metrics_dict['r2'][1], 4)}, {round(metrics_dict['mad'][1],4)}"
+        textstr = f"{self.variable}\n Lake ID:{self.lakeID}\n lat, lon: {lat_val:.4f}, {lon_val:.4f}\n Total RMSE, R$^2$, MAD: {metrics_dict['rmse'][1]:.4f}, {metrics_dict['r2'][1]:.4f}, {metrics_dict['mad'][1]:.4f}"
         ax.set_title(textstr)
         ax.xaxis.set_minor_locator(mdates.YearLocator())
         ax.grid(axis="x", which="minor", linewidth=0.5)
@@ -2071,9 +2010,9 @@ class PhenologyVisualization:
             )
         if not annotation:
             if neg_values_sub:
-                ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {round(metrics_dict['rmse'][0],3)}\n R$^2$: {round(metrics_dict['r2'][0],3)}\n MAD: {round(metrics_dict['mad'][0])}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
+                ax.text(0.99,0.99,f"# Neg.values: {sum(neg_values_sub)} \n RMSE: {metrics_dict['rmse'][0]:.3f}\n R$^2$: {metrics_dict['r2'][0]:.3f}\n MAD: {metrics_dict['mad'][0]:.0f}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
             else:
-                ax.text(0.99,0.99,f"RMSE:{round(metrics_dict['rmse'][0],3)} \n R$^2$: {round(metrics_dict['r2'][0],3)}\n MAD: {round(metrics_dict['mad'][0], 3)}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
+                ax.text(0.99,0.99,f"RMSE:{metrics_dict['rmse'][0]:.3f} \n R$^2$: {metrics_dict['r2'][0]:.3f}\n MAD: {metrics_dict['mad'][0]:.3f}", transform = ax.transAxes,   ha= "right", va= "top", zorder = 10)
         else:
             lines = []
             if "R2" in annotation:
@@ -2121,6 +2060,8 @@ class PhenologyVisualization:
         g  = self._load_extracted_globals()
         pixel_data = self._load_pixel_data(latitude_idx, longitude_idx)
         lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
+        lat_val = float(lat[latitude_idx])
+        lon_val = float(lon[longitude_idx])
         smoothing = pixel_data["smoothing"]
 
         plotting_data = grab_plotting_variables(start = start, end = end, pixel_data=pixel_data, variables=["pks", "trgs", "midUP", "midDOWN"])
@@ -2143,7 +2084,7 @@ class PhenologyVisualization:
         self.plot_background_pts(ax = ax, latitude_idx= latitude_idx, longitude_idx = longitude_idx, masked_values=values_m, masked_time=time_m, aggregation=aggregation)
         self.plot_data_gaps(ax = ax, pixel_data = pixel_data)
         neg_values_sub =  plot_variables(ax = ax, plotting_data= plotting_data, spline_x= smooth_x, spline_y= smooth_y, time_frame= plot_time_frame, variables= ["pks", "trgs", "midUP", "midDOWN"])
-        self.annotations_and_limits(ax = ax, plotting_data= plotting_data, metrics_dict= metrics_dict, time_frame=plot_time_frame, lat= lat, lon = lon, latitude_idx=latitude_idx, longitude_idx=longitude_idx, neg_values_sub=neg_values_sub, annotation = None)
+        self.annotations_and_limits(ax = ax, plotting_data= plotting_data, metrics_dict= metrics_dict, time_frame=plot_time_frame, lat_val = lat_val, lon_val = lon_val, neg_values_sub=neg_values_sub, annotation = None)
 
 
     def split_plot(self, latitude_idx, longitude_idx, ax0, ax1, aggregation = False, start0= 0, end0= 9999, start1= 0, end1=9999):
@@ -2381,13 +2322,13 @@ class PhenologyVisualization:
         t_self  = g_self["t_all"]
         t_other = g_other["t_all"]
 
-        lakeID1 = os.path.basename(self.p_path)[:-3]
-        lakeID2 = os.path.basename(other.p_path)[:-3]
+        lakeID1 = self.lakeID
+        lakeID2 = other.lakeID
         if lakeID1 != lakeID2:
                 raise Warning("Comparison must be made on the same lake!")
 
-        phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
-        phenology_name2 = os.path.basename(os.path.dirname(other.p_path))
+        phenology_name1 = self.variable
+        phenology_name2 = other.variable
 
         pixel_self  = self._load_pixel_data(latitude_idx, longitude_idx)
         pixel_other = other._load_pixel_data(latitude_idx, longitude_idx)
@@ -2451,13 +2392,13 @@ class PhenologyVisualization:
         t_self  = g_self["t_all"]
         t_other = g_other["t_all"]
 
-        lakeID1 = os.path.basename(self.p_path)[:-3]
-        lakeID2 = os.path.basename(other.p_path)[:-3]
+        lakeID1 = self.lakeID
+        lakeID2 = other.lakeID
         if lakeID1 != lakeID2:
                 raise Warning("Comparison must be made on the same lake!")
 
-        phenology_name1 = os.path.basename(os.path.dirname(self.p_path))
-        phenology_name2 = os.path.basename(os.path.dirname(other.p_path))
+        phenology_name1 = self.variable
+        phenology_name2 = other.variable
 
         pixel_self  = self._load_pixel_data(latitude_idx, longitude_idx)
         pixel_other = other._load_pixel_data(latitude_idx, longitude_idx)
