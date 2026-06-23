@@ -97,7 +97,7 @@ color_sets_4x4 = {
     '#c1dde4', '#d2b7d5', '#c08cb9', '#985356',
     '#8fd0da', '#b69dcf', '#9d77b4', '#7f5a9e',
     '#64acbe', '#8c7ec0', '#6c5cad', '#4b3f98'
-],
+    ],
     'teal-red1': [
         '#e7e7e7', '#cfd9dd', '#9abec9', '#64abbd',
         '#ddc4c4', '#c1b4b8', '#949ca3', '#5d7783',
@@ -116,6 +116,39 @@ color_sets_4x4 = {
 class PhenologyVisualization:
     shapefile_path = None
     QA_LEVELS = (0, 1, 2)
+    
+    QA_CONFIG = {
+        0: {
+            "label": "Good",
+            "style":{"marker": "o", "color": "green"}
+        },
+        1: {
+            "label": "Fair",
+            "style":{"marker": "o", "color": "orange"}
+        },
+        2: {
+            "label": "Poor",
+            "style":{"marker": "o", "color": "red"}
+        },
+    }
+
+    VAR_CONFIG = {
+        "phycocyanin": {
+            "label": "phyco",
+            "style": {"color": "blue"},
+        },
+        "chla_mean": {
+            "label": "chla v2.1",
+            "style": {"color": "lightgreen"},
+            "style_alt": {"color_alt": "purple"},
+        },
+        "chla": {
+            "label": "chla v3.0",
+            "style": {"color": "green"},
+        },
+    }
+
+    METRIC_CONFIG = {}
 
     def __init__(self, extract_path, phenology_path):
         """Initialise a PhenologyVisualization instance for a single lake and variable.
@@ -143,7 +176,7 @@ class PhenologyVisualization:
         self.version = Path(self.p_path).parents[2].stem.removeprefix('v')
         self.variable = Path(self.p_path).parents[0].stem
         self.lakeID = Path(self.p_path).stem
-        self.lakename = lakeID_to_name(self.lakeID)
+        # self.lakename = lakeID_to_name(self.geom,self.lakeID)
         self.info = (f"Version: {self.version} \n",
                     f"Variable: {self.variable} \n" ,
                     f"Lake ID: {self.lakeID}")
@@ -263,6 +296,33 @@ class PhenologyVisualization:
         return combined_df
 
 
+    def get_plot_config(self, config_name, key, **kwargs):
+        """
+        Generic accessor for QA, variable, and metric configs.
+        """
+
+        config_map = {
+            "qa": self.QA_CONFIG,
+            "var": self.VAR_CONFIG,
+            "metric": self.METRIC_CONFIG,
+        }
+
+        cfg = config_map[config_name][key]
+
+        # Base style
+        style = cfg.get("style", {}).copy()
+
+        # Optional override (e.g. purple_chla21)
+        if kwargs.get("use_alt") and "style_alt" in cfg:
+            style.update(cfg["style_alt"])
+
+        return {
+            "label": cfg.get("label"),
+            "style": style,
+            "meta": cfg.get("meta", {}),
+        }
+    
+
     def shrink_geometry_by_1km(self, geom):
         """Return a lake geometry eroded inward by 1 km.
 
@@ -302,7 +362,7 @@ class PhenologyVisualization:
 
     
     @staticmethod
-    def compute_metric_score(coord, start=0, end=9999, metric_to_compute= None):
+    def compute_metric_score(coord, start=0, end=9999, metrics_to_compute= None):
         """Compute one spline-fit metric or observation count for a single pixel.
 
         Designed as a multiprocessing worker; reads all data from module-level
@@ -318,7 +378,7 @@ class PhenologyVisualization:
             First year of the evaluation window (0 = earliest available year).
         end : int
             Last year of the evaluation window (9999 = latest available year).
-        metric_to_compute : list of str
+        metrics_to_compute : list of str
             Single-element list naming the metric. One of:
             ['values_per_pixel'], ['r2'], ['MAD'], ['RMSE'], ['correlation'].
 
@@ -331,7 +391,7 @@ class PhenologyVisualization:
         if metrics_to_compute is None:
             metrics_to_compute = ["values_per_pixel", "r2", "MAD", "RMSE", "correlation"]
 
-        if metric_to_compute==["values_per_pixel"]:
+        if metrics_to_compute==["values_per_pixel"]:
             i,j = coord
             values_all = _GLOBALS["values_all"]
             qa_all = _GLOBALS["qa_all"]
@@ -387,13 +447,13 @@ class PhenologyVisualization:
                 combined_mask = valid & mask_sub
 
                 if combined_mask.sum() > 1:
-                    if metric_to_compute == ["r2"]:
+                    if metrics_to_compute == ["r2"]:
                         metric = r2_score(y_true[combined_mask], y_pred[combined_mask])
-                    elif metric_to_compute == ["MAD"]:
+                    elif metrics_to_compute == ["MAD"]:
                         metric = np.median(np.abs(y_true[combined_mask]-y_pred[combined_mask]))
-                    elif metric_to_compute == ["RMSE"]:
+                    elif metrics_to_compute == ["RMSE"]:
                         metric = np.sqrt(mean_squared_error(y_true[combined_mask], y_pred[combined_mask]))
-                    elif metric_to_compute == ["correlation"]:
+                    elif metrics_to_compute == ["correlation"]:
                         metric, _ = pearsonr(y_true[combined_mask], y_pred[combined_mask])
                     else:
                         raise ValueError("please enter a valid metric")
@@ -430,7 +490,7 @@ class PhenologyVisualization:
         file_path : str
             Full path to the CSV file.
         """
-        base = os.path.join(self.out_folder, "calculated_values", "metrics", metric_name, f"v{self.version}", self.variable)
+        base = os.path.join(self.out_folder,self.lakeID, "calculated_values", "metrics", metric_name, f"v{self.version}", self.variable)
         if start == 0 and end == 9999:
             fname = "full_ts.csv"
         elif start == 0:
@@ -475,7 +535,7 @@ class PhenologyVisualization:
             df = pd.read_csv(file_path)
             return dict(zip(zip(df["i"], df["j"]), df[col_name]))
         warnings.warn(f"{metric_name} need to be calculated. Depending on the lake size this may take a while.")
-        workers = partial(compute_fn, start=start, end=end, metric_to_compute = [metric_name])
+        workers = partial(compute_fn, start=start, end=end, metrics_to_compute = [metric_name])
         with multiprocessing.Pool(initializer=_init_worker, initargs=(self.p_path, self.e_path), processes=3) as pool:
             result = pool.map(workers, self.valid_coords)
         data = dict(result)
@@ -792,7 +852,7 @@ class PhenologyVisualization:
             color="black",
             fontsize=10,
             ha="center", va="center"
-        )
+            )
 
             ax.plot(lon_idx, lat_idx, "ro", markersize=6)
             ax.figure.canvas.draw_idle()
@@ -1258,103 +1318,105 @@ class PhenologyVisualization:
         values_m = px["values"][mask]
         time_m   = t_all[mask]
 
-        if len(values_m) > 1:
-            limits = sorted(datenum_to_datetime(time_m))
-            if start == 0:
-                function_start = min(limits).year
-            else:
-                function_start =start
-            if end == 9999:
-                function_end= max(limits).year
-            else:
-                function_end = end
-            neg_values_sub =[]
-            neg_label_before = False
-            phenology_name = self.variable
-            if purple_chla21:
-                label_dict = {"phycocyanin": "phyco",
-                                "chla_mean": "chla v2.1",
-                                "chla": "chla v3.0"
-                                }
-                color_dict = {"phycocyanin": "blue",
-                                "chla_mean": "purple",
-                                "chla": "green"
-                                }
-            else:
-                label_dict = {"phycocyanin": "phyco",
-                                "chla_mean": "chla v2.1",
-                                "chla": "chla v3.0"
-                                }
-                color_dict = {"phycocyanin": "blue",
-                                "chla_mean": "lightgreen",
-                                "chla": "green"
-                                }
-
-            if not background_pts and aggregation:
-                raise ValueError("Either aggreagte background points or di not plot them at all.")
-
-            if aggregation:
-                if self.aggregation_df is None:
-                    self.spatial_aggregation()
-
-                background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude_idx) & (self.aggregation_df["j"]==longitude_idx)]
-                background_time = background_sub["time"]
-                background_time = background_time.to_numpy()
-
-                background_values = background_sub["MA_value"]
-
-                ax.scatter(datenum_to_datetime(background_time), background_values, color=color_dict[phenology_name], alpha=0.1, s=10, label=f"{label_dict[phenology_name]} Data")
-            elif background_pts and not aggregation:
-                ax.scatter(datenum_to_datetime(time_m), values_m, color=color_dict[phenology_name], alpha=0.1, s=10, label=f"{label_dict[phenology_name]} Data")
-            else:
-                pass
-
-            self.plot_data_gaps(ax=ax, pixel_data=px)
-
-            ax.stem(x_sub, y_sub, linefmt=color_dict[phenology_name], markerfmt=" ", basefmt = " ")
-            qa_markers = {0: "o", 1: "s", 2: "x"}
-            qa_labels  = {0: "Good", 1: "Fair", 2: "Poor"}
-            for q in self.QA_LEVELS:
-                qm = qa_sub == q
-                if qm.any():
-                    ax.scatter(x_sub[qm], y_sub[qm], color=color_dict[phenology_name],
-                                marker=qa_markers[q], s=50, edgecolors="black", linewidths=0.5,
-                                zorder=4, label=qa_labels[q])
-            if (y_sub < 0).any():
-                mask =  y_sub<0
-                pks_x_neg_before = x_sub[mask]
-                pks_y_neg_before = y_sub[mask]
-                label = "Negative Value" if not neg_label_before else None
-                ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-                neg_values_sub.append(len(pks_x_neg_before))
-                neg_label_before = True
-                warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
-
-            if show_legend:
-                ax.legend(loc="upper left", ncol= 2)
-            if peak:
-                textstr = f"Peak Comparison\n Lake ID:{self.lakeID}\n lat, lon: {lat_val:.4f}, {lon_val:.4f}"
-            else:
-                textstr = f"Trough Comparison\n Lake ID:{self.lakeID}\n lat, lon: {lat_val:.4f}, {lon_val:.4f}"
-            ax.set_title(textstr)
-            ax.xaxis.set_minor_locator(mdates.YearLocator())
-            ax.grid(axis="x", which="minor", linewidth=0.5)
-            ax.grid(axis="x", which="major", linewidth=0.5)
-            ax.grid(axis="y", linewidth=0.5)
-            ax.set_ylabel("[ug/L]")
-
-            ax.set_xlim(pd.to_datetime('01-01-' + str(function_start), format='%d-%m-%Y') , pd.to_datetime('31-12-' + str(function_end), format='%d-%m-%Y'))
-            pks_lim_sub = sorted(y_sub)
-            if max(pks_lim_sub)> 10:
-                ymax = pks_lim_sub[-2]+0.5
-                ax.set_ylim(-0.5, ymax)
-            else:
-                ymax = pks_lim_sub[-1]+0.5
-                ax.set_ylim(-0.5, ymax)
-            return ymax
-        else:
+        
+        if len(values_m) <= 1:
             warnings.warn("No data to plot (check valid indices)")
             return None
+
+        limits = sorted(datenum_to_datetime(time_m))
+        function_start = min(limits).year if start == 0 else start
+        function_end= max(limits).year if end ==9999 else end
+
+        phenology_name = self.variable
+        
+        var_cfg = self.get_plot_config(
+            "var",
+            phenology_name,
+            use_alt=purple_chla21
+        )
+        
+        var_label = var_cfg["label"]
+        var_style = var_cfg["style"]
+        background_style = {"alpha": 0.1, "s": 10}
+    
+        if background_pts:
+            self.plot_background_pts(
+                ax=ax,
+                latitude_idx = latitude_idx,
+                longitude_idx = longitude_idx,
+                masked_values = values_m,
+                masked_time = time_m,
+                aggregation= aggregation,
+                **{**var_style, **background_style}
+            )
+        elif not background_pts and aggregation:
+            warnings.warn(f"Aggregation ignored for lake ID {self.lakeID} since backrgound_pts turned off.")
+
+        self.plot_data_gaps(ax=ax, pixel_data=px)
+
+        ax.stem(x_sub, y_sub, markerfmt=" ", basefmt = " ",linefmt = var_style['color'])
+        
+        seen_labels = set()
+        for q in self.QA_LEVELS:
+            qm = qa_sub == q
+            if not qm.any():
+                continue
+
+            qa_cfg = self.get_plot_config("qa", q)
+            qa_style = qa_cfg["style"]
+
+            qa_label = qa_cfg["label"]
+            if qa_label in seen_labels:
+                qa_label = None
+            else:
+                seen_labels.add(qa_label)
+
+            combined_style = {
+                **var_style,            # color
+                **qa_style,             # marker
+                "s": 50,
+                "edgecolors": var_style['color'],
+                "linewidths": 2,
+                "zorder": 4,
+            }
+
+            ax.scatter(
+                x_sub[qm],
+                y_sub[qm],
+                label=qa_label,
+                **combined_style,
+            )
+
+        if (y_sub < 0).any():
+            mask =  y_sub<0
+            ax.scatter(x_sub[mask], y_sub[mask], color="red", s=50, marker="x", zorder=6, label="Negative value")
+            warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
+
+        if show_legend:
+            ax.legend(loc="upper left", ncol= 2)
+        
+        plot_var = "Peak" if peak else "Trough"
+        textstr = f"{plot_var} Comparison\n Lake ID:{self.lakeID}\n lat, lon: {lat_val:.4f}, {lon_val:.4f}"
+
+        ax.set_title(textstr)
+        ax.xaxis.set_minor_locator(mdates.YearLocator())
+        ax.grid(axis="x", which="minor", linewidth=0.5)
+        ax.grid(axis="x", which="major", linewidth=0.5)
+        ax.grid(axis="y", linewidth=0.5)
+        ax.set_ylabel("[ug/L]")
+
+        ax.set_xlim(
+            pd.to_datetime('01-01-' + str(function_start), format='%d-%m-%Y'),
+            pd.to_datetime('31-12-' + str(function_end), format='%d-%m-%Y')
+        )
+        pks_lim_sub = sorted(y_sub)
+        if max(pks_lim_sub)> 10:
+            ymax = pks_lim_sub[-2]+0.5
+            ax.set_ylim(-0.5, ymax)
+        else:
+            ymax = pks_lim_sub[-1]+0.5
+            ax.set_ylim(-0.5, ymax)
+        return ymax
                     
 
     def extrema_comparison(self, other1,  latitude_idx, longitude_idx, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = True, other2= None, purple_chla21= False, show_legend= False):
@@ -1604,17 +1666,20 @@ class PhenologyVisualization:
         qa_to_idx = {qa: i for i, qa in enumerate(qa_unique)}
         qa_idx = np.array([qa_to_idx[q] for q in qa_mask])
         bounds = np.arange(-0.5, len(qa_unique) + 0.5, 1)
+
         norm = BoundaryNorm(bounds, cmap_new.N)
 
-        if aggregation:
-            if self.aggregation_df is None:
-                    self.spatial_aggregation()
-            background_sub    = self.aggregation_df[(self.aggregation_df["i"] == latitude_idx) & (self.aggregation_df["j"] == longitude_idx)]
-            background_time   = background_sub["time"].to_numpy()
-            background_values = background_sub["MA_value"]
-            sc = ax.scatter(datenum_to_datetime(background_time), background_values, c=qa_idx, cmap=cmap_new, norm=norm, alpha=1, s=10, label="Data")
-        else:
-            sc = ax.scatter(datenum_to_datetime(time_m), values_m, c=qa_idx, cmap=cmap_new, norm=norm, alpha=1, s=10, label="Data")
+        sc = self.plot_background_pts(ax, latitude_idx, longitude_idx, values_m, time_m, aggregation = aggregation)
+
+        # if aggregation:
+        #     if self.aggregation_df is None:
+        #             self.spatial_aggregation()
+        #     background_sub    = self.aggregation_df[(self.aggregation_df["i"] == latitude_idx) & (self.aggregation_df["j"] == longitude_idx)]
+        #     background_time   = background_sub["time"].to_numpy()
+        #     background_values = background_sub["MA_value"]
+        #     sc = ax.scatter(datenum_to_datetime(background_time), background_values, c=qa_idx, cmap=cmap_new, norm=norm, alpha=1, s=10, label="Data")
+        # else:
+        #     sc = ax.scatter(datenum_to_datetime(time_m), values_m, c=qa_idx, cmap=cmap_new, norm=norm, alpha=1, s=10, label="Data")
 
         neg_values_sub = plot_variables(
             ax=ax, plotting_data=plotting_data, spline_x=smooth_x, spline_y=smooth_y,
@@ -1948,22 +2013,27 @@ class PhenologyVisualization:
         return scores[(latitude_idx, longitude_idx)]
     
     
-    def plot_background_pts(self, ax, latitude_idx, longitude_idx, masked_values, masked_time, aggregation = False, alpha= 0.3):
+    def plot_background_pts(self, ax, latitude_idx, longitude_idx, masked_values, masked_time, aggregation = False, **style_kwargs):
+        base_style = {"alpha":0.3, "color":"grey","s":10}
+        style = {**base_style,**style_kwargs}
+
         if aggregation:
             if self.aggregation_df is None:
                 self.spatial_aggregation()
 
             background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude_idx) & (self.aggregation_df["j"]==longitude_idx)]
-
-            background_time = background_sub["time"]
-            background_time = background_time.to_numpy()
-
+            background_time = background_sub["time"].to_numpy()
             background_values = background_sub["MA_value"]
 
-            ax.scatter(datenum_to_datetime(background_time), background_values, color="grey", alpha=alpha, s=10, label="Data")
+            x = datenum_to_datetime(background_time)
+            y = background_values
         else:
-            ax.scatter(datenum_to_datetime(masked_time), masked_values, color="grey", alpha=alpha, s=10, label="Data")
-            
+            x = datenum_to_datetime(masked_time)
+            y = masked_values
+
+        sc = ax.scatter(x, y, label="Data", **style)
+        return sc
+
 
     def plot_data_gaps(self, ax, pixel_data):
         gap_starts = pixel_data["gap_starts"]
