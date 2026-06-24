@@ -319,7 +319,8 @@ class PhenologyVisualization:
 
         # Optional override (e.g. purple_chla21)
         if kwargs.get("use_alt") and "style_alt" in cfg:
-            style.update(cfg["style_alt"])
+            alt = {("color" if k == "color_alt" else k): v for k, v in cfg["style_alt"].items()}
+            style.update(alt)
 
         return {
             "label": cfg.get("label"),
