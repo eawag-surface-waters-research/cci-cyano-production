@@ -7,6 +7,7 @@ import logging
 import geopandas as gpd
 from concurrent.futures import ProcessPoolExecutor
 import os
+from datetime import datetime, timezone
 
 from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, write_provenance
 from extract import extract
@@ -16,6 +17,7 @@ from visualization import PhenologyVisualization
 def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=None):
     set_logging(log)
     args = parse_args(args)
+    run_id = datetime.now(timezone.utc).isoformat().replace(":", "-")
 
     logging.info("Reading lake shapefile from: {}".format(args["shapefile"]))
     gdf = gpd.read_file(args["shapefile"])
@@ -37,8 +39,9 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
         else:
             with ProcessPoolExecutor(max_workers=threads) as executor:
                 executor.map(extract, lakes, itertools.repeat(args), itertools.repeat(files))
-        write_provenance(args["out_folder"], "extract", args, args_file=args_file,
-                         extra={"lakes": [int(lake["id"]) for lake in lakes], "threads": threads, "parallel": parallel})
+        if args["provenance"]:
+            write_provenance(args["out_folder"], "extract", args, args_file=args_file,
+                             extra={"lakes": [int(lake["id"]) for lake in lakes], "threads": threads, "parallel": parallel}, run_id=run_id)
     else:
         logging.info("Skipping extraction step.")
 
@@ -51,16 +54,18 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
             with ProcessPoolExecutor(max_workers=threads) as executor:
                 executor.map(phenology, lakes, itertools.repeat(args),
                              itertools.repeat(1), itertools.repeat(batch_size))
-        write_provenance(args["out_folder"], "phenology", args, args_file=args_file,
-                         extra={"lakes": [int(lake["id"]) for lake in lakes], "threads": threads,
-                                "parallel": parallel, "batch_size": batch_size})
+        if args["provenance"]:
+            write_provenance(args["out_folder"], "phenology", args, args_file=args_file,
+                             extra={"lakes": [int(lake["id"]) for lake in lakes], "threads": threads,
+                                    "parallel": parallel, "batch_size": batch_size}, run_id=run_id)
 
     if args["analysis"]:
         logging.info("Starting Analysis")
         PhenologyVisualization.set_shapefile_path(args["shapefile"])
         lake_analysis_folder = os.path.join(os.path.dirname(os.path.dirname(args["out_folder"])), "lake_analysis")
-        write_provenance(args["out_folder"], "analysis", args, args_file=args_file,
-                         extra={"lakes": [int(lake["id"]) for lake in lakes]})
+        if args["provenance"]:
+            write_provenance(args["out_folder"], "analysis", args, args_file=args_file,
+                             extra={"lakes": [int(lake["id"]) for lake in lakes]}, run_id=run_id)
         for lake in lakes:
             e_path = os.path.join(args["out_folder"], "extract", args["variable"], f"{lake['id']}.nc")
             p_path = os.path.join(args["out_folder"], "phenology", args["variable"], f"{lake['id']}.nc")
