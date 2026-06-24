@@ -170,13 +170,13 @@ class PhenologyVisualization:
         if self.shapefile_path is None:
             raise Warning("Please define your path to the lake CCI shapefile. This can be done at a class level using PhenologyVisualization.set_shapefile_path(your_path)")
         else:
-            self.geom = geopandas.read_file(self.shapefile_path)
+            self.gdf = geopandas.read_file(self.shapefile_path)
         self.p_path = phenology_path
         self.e_path = extract_path
         self.version = Path(self.p_path).parents[2].stem.removeprefix('v')
         self.variable = Path(self.p_path).parents[0].stem
         self.lakeID = Path(self.p_path).stem
-        # self.lakename = lakeID_to_name(self.geom,self.lakeID)
+        # self.lakename = lakeID_to_name(self.gdf,self.lakeID)
         self.info = (f"Version: {self.version} \n",
                     f"Variable: {self.variable} \n" ,
                     f"Lake ID: {self.lakeID}")
@@ -187,6 +187,7 @@ class PhenologyVisualization:
         self.geom_shrunk = None
         self._extracted_globals = None
         self._pixel_cache = {}
+        self.prep_geometry_from_shapefile()
 
 
     def index_to_lat_lon(self, lat_index, lon_index):
@@ -323,7 +324,7 @@ class PhenologyVisualization:
         }
     
 
-    def shrink_geometry_by_1km(self, geom):
+    def shrink_geometry(self, geom=None,distance_m= 1000):
         """Return a lake geometry eroded inward by 1 km.
 
         Projects the geometry to a local Azimuthal Equidistant CRS centred on the
@@ -340,6 +341,8 @@ class PhenologyVisualization:
         shapely.geometry.base.BaseGeometry
             Inward-buffered WGS84 geometry.
         """
+        if geom is None:
+            geom = self.geometry
         # centroid in lon/lat
         lon0, lat0 = geom.centroid.x, geom.centroid.y
 
@@ -354,13 +357,35 @@ class PhenologyVisualization:
         to_wgs84 = Transformer.from_crs(local_crs, wgs84, always_xy=True).transform
 
         geom_local = ops.transform(to_local, geom)
-        geom_shrunk_local = geom_local.buffer(-1000)   # minus 1000 m = inward 1 km
+        geom_shrunk_local = geom_local.buffer(-distance_m)   # minus 1000 m = inward 1 km
         geom_shrunk = ops.transform(to_wgs84, geom_shrunk_local)
 
-        self.geom_shrunk = geom_shrunk
+        if geom_shrunk_local.is_empty:
+            raise ValueError("Geometry disappeared after shrinking (buffer too large).")
+
+        # self.geom_shrunk = geom_shrunk
         return geom_shrunk
 
+
+    def extract_geometry_from_shapefile(self):
+        lake_id = int(self.lakeID)
+        lake_row = self.gdf[self.gdf["id"] == lake_id]
+        if lake_row.empty:
+            raise ValueError(f"Lake ID {lake_id} not found in shapefile.")
+        
+        # self.geometry = lake_row.geometry.iloc[0]
+        return lake_row.geometry.iloc[0]
     
+
+    def prep_geometry_from_shapefile(self):
+        geom = self.extract_geometry_from_shapefile()
+        geom_shrunk = self.shrink_geometry(geom)
+
+        self.geometry = geom
+        self.geom_shrunk = geom_shrunk
+        self.prepped_geom = prep(geom_shrunk)
+    
+
     @staticmethod
     def compute_metric_score(coord, start=0, end=9999, metrics_to_compute= None):
         """Compute one spline-fit metric or observation count for a single pixel.
@@ -897,12 +922,12 @@ class PhenologyVisualization:
         if color_extent is None:
             color_extent = [0,1]
         lake_id = int(self.lakeID)
-        lake_row = self.geom[self.geom["id"] == lake_id]
+        lake_row = self.gdf[self.gdf["id"] == lake_id]
         if lake_row.empty:
             raise ValueError(f"Lake ID {lake_id} not found in shapefile.")
         
         geom = lake_row.geometry.iloc[0]
-        buffered_geom = self.shrink_geometry_by_1km(geom)
+        buffered_geom = self.shrink_geometry(geom)
         buffered_geom_prepared = prep(buffered_geom)
 
         map_data, extent = grab_metrics(self.e_path, metric_scores, buffered_geom_prepared)
@@ -946,11 +971,11 @@ class PhenologyVisualization:
         """
         lake_id = int(self.lakeID)
 
-        lake_row = self.geom[self.geom["id"] == lake_id]
+        lake_row = self.gdf[self.gdf["id"] == lake_id]
         if lake_row.empty:
                 raise ValueError(f"Lake ID {lake_id} not found in shapefile.")
         geom = lake_row.geometry.iloc[0]
-        buffered_geom = self.shrink_geometry_by_1km(geom)
+        buffered_geom = self.shrink_geometry(geom)
         buffered_geom_prepared = prep(buffered_geom)
 
         map_data, extent = grab_metrics(self.e_path, metric_scores, buffered_geom_prepared)
@@ -989,6 +1014,9 @@ class PhenologyVisualization:
         return cid
     
 
+    # def grab_DOY_data(self):
+    #     return map_data, extent
+
     def time_map(self, fig, ax, year, peaks=True, max = True, colorbar=True):
         """Map the day-of-year of a phenological event across all pixels for one year.
 
@@ -1018,10 +1046,10 @@ class PhenologyVisualization:
         """
         lake_id = int(self.lakeID)
 
-        lake_row = self.geom[self.geom["id"] == lake_id]
-        geom = lake_row.geometry.iloc[0]
-        buffered_geom = self.shrink_geometry_by_1km(geom)
-        buffered_geom_prepared = prep(buffered_geom)
+        # lake_row = self.gdf[self.gdf["id"] == lake_id]
+        geom = self.geometry #lake_row.geometry.iloc[0]
+        # buffered_geom = self.shrink_geometry(geom)
+        buffered_geom_prepared = self.prepped_geom
 
         var_x = "pks_x" if peaks else "green_up_mid_x"
         var_y = "pks_y" if peaks else "green_up_mid_y"
@@ -1112,9 +1140,9 @@ class PhenologyVisualization:
 
         mask = (values != -9999) & (qa == 0)
         lake_id = int(self.lakeID)
-        lake_row = self.geom[self.geom["id"] == lake_id]
+        lake_row = self.gdf[self.gdf["id"] == lake_id]
         geom = lake_row.geometry.iloc[0]
-        buffered_geom = self.shrink_geometry_by_1km(geom)
+        buffered_geom = self.shrink_geometry(geom)
         buffered_geom_prepared = prep(buffered_geom)
 
         map_data = np.full(values.shape, np.nan)
