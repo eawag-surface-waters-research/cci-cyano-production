@@ -234,7 +234,7 @@ def set_labels(ax, fig, im, title, colorbar_label, colorbar_ticks=None):
     ax.legend()
 
 def grab_time_data(e_path, p_path, valid_coords, buffered_geom_prep,
-                   var_x, var_y, year, use_max):
+                   var_x, var_y, year, use_max, DOY_start = 160, DOY_end = 250):
     with netCDF4.Dataset(e_path) as nc:
         summary = np.array(nc.variables["summary"][:, :])
         lats = nc.variables["lat"][:]
@@ -258,7 +258,7 @@ def grab_time_data(e_path, p_path, valid_coords, buffered_geom_prep,
             continue
         year_arr = np.array([d.year for d in x_arr])
         doys = np.array([d.timetuple().tm_yday for d in x_arr])
-        mask = (year_arr == year) & (doys >= 160) & (doys <= 250)
+        mask = (year_arr == year) & (doys >= DOY_start) & (doys <= DOY_end)
         x_sub, y_sub = x_arr[mask], y_arr[mask]
         if len(x_sub) == 0:
             continue
@@ -274,68 +274,94 @@ def grab_time_data(e_path, p_path, valid_coords, buffered_geom_prep,
 
 
 def grab_plotting_variables(start, end, pixel_data, variables = None):  
+    """
+    valid variables = ['pks', 'trgs',
+                'midUP', 'midDOWN', 
+                'onsetUP', 'onsetDOWN',
+                'advUP', 'advDOWN']
+    """
     if variables is None:
         variables = ["pks", "trgs", "midUP", "midDOWN"]
-    if "pks" in variables:
-        mask_pks     = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["pks_x"]])
-        pks_x_sub    = pixel_data["pks_x"][mask_pks]
-        pks_y_sub    = pixel_data["pks_y"][mask_pks]
-        pks_qa_sub   = pixel_data["pks_qa"][mask_pks]    
-    if "trgs" in variables:
-        dict_key = "trgs"
-        mask_trgs    = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["trgs_x"]])
-        trgs_x_sub   = pixel_data["trgs_x"][mask_trgs]
-        trgs_y_sub   = pixel_data["trgs_y"][mask_trgs]
-        trgs_qa_sub  = pixel_data["trgs_qa"][mask_trgs]
-    if "midUP" in variables:
-        dict_key = "midUP"
-        mask_midUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midUP_x"]])
-        midUP_x_sub  = pixel_data["midUP_x"][mask_midUP]
-        midUP_y_sub  = pixel_data["midUP_y"][mask_midUP]
-    if "midDOWN" in variables:
-        dict_key = "midDOWN"
-        mask_midDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midDOWN_x"]])
-        midDOWN_x_sub = pixel_data["midDOWN_x"][mask_midDOWN]
-        midDOWN_y_sub = pixel_data["midDOWN_y"][mask_midDOWN]
-    if "onsetUP" in variables:
-        dict_key = "onsetUP"
-        mask_onsetUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["onsetUP_x"]])
-        onsetUP_x_sub  = pixel_data["onsetUP_x"][mask_onsetUP]
-        onsetUP_y_sub  = pixel_data["onsetUP_y"][mask_onsetUP]
-    if "onsetDOWN" in variables:
-        dict_key = "onsetDOWN"
-        mask_onsetDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["onsetDOWN_x"]])
-        onsetDOWN_x_sub = pixel_data["onsetDOWN_x"][mask_onsetDOWN]
-        onsetDOWN_y_sub = pixel_data["onsetDOWN_y"][mask_onsetDOWN]  
-    if "advUP" in variables:
-        dict_key = "advUP"
-        mask_advUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["advUP_x"]])
-        advUP_x_sub  = pixel_data["advUP_x"][mask_advUP]
-        advUP_y_sub  = pixel_data["advUP_y"][mask_advUP]
-    if "advDOWN" in variables:
-        dict_key = "advDOWN"
-        mask_advDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["advDOWN_x"]])
-        advDOWN_x_sub = pixel_data["advDOWN_x"][mask_advDOWN]
-        advDOWN_y_sub = pixel_data["advDOWN_y"][mask_advDOWN]
-
     result = {}
-    if "pks" in variables:
-        result["pks"] = [pks_x_sub, pks_y_sub, pks_qa_sub]
-    if "trgs" in variables:
-        result["trgs"] = [trgs_x_sub, trgs_y_sub, trgs_qa_sub]
-    if "midUP" in variables:
-        result["midUP"] = [midUP_x_sub, midUP_y_sub]
-    if "midDOWN" in variables:
-        result["midDOWN"] = [midDOWN_x_sub, midDOWN_y_sub]
-    if "onsetUP" in variables:
-        result["onsetUP"] = [onsetUP_x_sub, onsetUP_y_sub]
-    if "onsetDOWN" in variables:
-        result["onsetDOWN"] = [onsetDOWN_x_sub, onsetDOWN_y_sub]
-    if "advUP" in variables:
-        result["advUP"] = [advUP_x_sub, advUP_y_sub]
-    if "advDOWN" in variables:
-        result["advDOWN"] = [advDOWN_x_sub, advDOWN_y_sub]
-    return result
+    for var in variables:
+        var_x = f"{var}_x"
+        var_y = f"{var}_y"
+        
+        if var_x not in pixel_data or var_y not in pixel_data:
+            continue
+
+        date_mask = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data[var_x]])
+        var_x_sub    = pixel_data[var_x][date_mask]
+        var_y_sub    = pixel_data[var_y][date_mask]
+        if var in ["pks","trgs"]:
+            var_qa = str(var) + "_qa"
+            if var_qa not in pixel_data:
+                continue
+            var_qa_sub  = pixel_data[var_qa][date_mask]
+
+            result[var] = [var_x_sub, var_y_sub, var_qa_sub]
+        else:
+            result[var] = [var_x_sub, var_y_sub]
+    
+    # if "pks" in variables:
+    #     mask_pks     = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["pks_x"]])
+    #     pks_x_sub    = pixel_data["pks_x"][mask_pks]
+    #     pks_y_sub    = pixel_data["pks_y"][mask_pks]
+    #     pks_qa_sub   = pixel_data["pks_qa"][mask_pks]    
+    # if "trgs" in variables:
+    #     dict_key = "trgs"
+    #     mask_trgs    = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["trgs_x"]])
+    #     trgs_x_sub   = pixel_data["trgs_x"][mask_trgs]
+    #     trgs_y_sub   = pixel_data["trgs_y"][mask_trgs]
+    #     trgs_qa_sub  = pixel_data["trgs_qa"][mask_trgs]
+    # if "midUP" in variables:
+    #     dict_key = "midUP"
+    #     mask_midUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midUP_x"]])
+    #     midUP_x_sub  = pixel_data["midUP_x"][mask_midUP]
+    #     midUP_y_sub  = pixel_data["midUP_y"][mask_midUP]
+    # if "midDOWN" in variables:
+    #     dict_key = "midDOWN"
+    #     mask_midDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midDOWN_x"]])
+    #     midDOWN_x_sub = pixel_data["midDOWN_x"][mask_midDOWN]
+    #     midDOWN_y_sub = pixel_data["midDOWN_y"][mask_midDOWN]
+    # if "onsetUP" in variables:
+    #     dict_key = "onsetUP"
+    #     mask_onsetUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["onsetUP_x"]])
+    #     onsetUP_x_sub  = pixel_data["onsetUP_x"][mask_onsetUP]
+    #     onsetUP_y_sub  = pixel_data["onsetUP_y"][mask_onsetUP]
+    # if "onsetDOWN" in variables:
+    #     dict_key = "onsetDOWN"
+    #     mask_onsetDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["onsetDOWN_x"]])
+    #     onsetDOWN_x_sub = pixel_data["onsetDOWN_x"][mask_onsetDOWN]
+    #     onsetDOWN_y_sub = pixel_data["onsetDOWN_y"][mask_onsetDOWN]  
+    # if "advUP" in variables:
+    #     dict_key = "advUP"
+    #     mask_advUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["advUP_x"]])
+    #     advUP_x_sub  = pixel_data["advUP_x"][mask_advUP]
+    #     advUP_y_sub  = pixel_data["advUP_y"][mask_advUP]
+    # if "advDOWN" in variables:
+    #     dict_key = "advDOWN"
+    #     mask_advDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["advDOWN_x"]])
+    #     advDOWN_x_sub = pixel_data["advDOWN_x"][mask_advDOWN]
+    #     advDOWN_y_sub = pixel_data["advDOWN_y"][mask_advDOWN]
+
+    # if "pks" in variables:
+    #     result["pks"] = [pks_x_sub, pks_y_sub, pks_qa_sub]
+    # if "trgs" in variables:
+    #     result["trgs"] = [trgs_x_sub, trgs_y_sub, trgs_qa_sub]
+    # if "midUP" in variables:
+    #     result["midUP"] = [midUP_x_sub, midUP_y_sub]
+    # if "midDOWN" in variables:
+    #     result["midDOWN"] = [midDOWN_x_sub, midDOWN_y_sub]
+    # if "onsetUP" in variables:
+    #     result["onsetUP"] = [onsetUP_x_sub, onsetUP_y_sub]
+    # if "onsetDOWN" in variables:
+    #     result["onsetDOWN"] = [onsetDOWN_x_sub, onsetDOWN_y_sub]
+    # if "advUP" in variables:
+    #     result["advUP"] = [advUP_x_sub, advUP_y_sub]
+    # if "advDOWN" in variables:
+    #     result["advDOWN"] = [advDOWN_x_sub, advDOWN_y_sub]
+    # return result
 
 
 def calculate_spline(whole_timeframe, masked_values, masked_time, smoothing_parameter ):
@@ -381,7 +407,11 @@ def calculate_metrics_to_plot(start, end, masked_values, masked_time, smoothing_
         return None, [function_start, function_end]
 
 
-def plot_variables(ax, plotting_data, spline_x, spline_y, time_frame, variables = ["pks", "trgs", "midUP", "midDOWN"]):
+def plot_variables(ax, plotting_data, spline_x, spline_y, time_frame, variables = None):
+
+    if variables is None:
+        variables = ["pks", "trgs", "midUP", "midDOWN"]
+        
     neg_values_sub =[]
     neg_label_before = False
     start = time_frame[0]
