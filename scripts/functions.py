@@ -405,7 +405,7 @@ def plot_variables(ax, plotting_data, spline_x, spline_y, time_frame, variables 
                         if tm is not None and tm.any():
                                 ax.scatter(plotting_data["trgs"][0][tm], plotting_data["trgs"][1][tm], color=qa_colors[qa], s=50,
                                                 marker="o", edgecolors="black", linewidths=0.5,
-                                                zorder=4, label=qa_labels[qa] if (pm is not None and pm.any()) else None)
+                                                zorder=4, label=qa_labels[qa] if (pm is None or not pm.any()) else None)
                 if "pks" in variables:
                         if (plotting_data["pks"][1] < 0).any():
                                 mask =  plotting_data["pks"][1]<0
