@@ -2119,7 +2119,7 @@ class PhenologyVisualization:
                     transform=ax.transAxes, ha="right", va="top", zorder = 10)
 
 
-    def single_plot(self, latitude_idx, longitude_idx, ax, aggregation = False, start= 0, end= 9999, annotation = None):
+    def single_plot(self, latitude_idx, longitude_idx, ax, aggregation = False, start= 0, end= 9999, annotation = None,variables = None):
         """Plot raw observations, the smoothed spline, and all phenological events for a pixel.
 
         Displays a scatter of valid (QA==0) observations or 3×3 aggregated values,
@@ -2155,7 +2155,7 @@ class PhenologyVisualization:
         lon_val = float(lon[longitude_idx])
         smoothing = pixel_data["smoothing"]
 
-        plotting_data = grab_plotting_variables(start = start, end = end, pixel_data=pixel_data, variables=["pks", "trgs", "midUP", "midDOWN"])
+        plotting_data = grab_plotting_variables(start = start, end = end, pixel_data=pixel_data, variables=variables)
 
         mask     = (pixel_data["values"] != -9999) & (pixel_data["qa"] == 0)
         values_m = pixel_data["values"][mask]
@@ -2174,8 +2174,8 @@ class PhenologyVisualization:
 
         self.plot_background_pts(ax = ax, latitude_idx= latitude_idx, longitude_idx = longitude_idx, masked_values=values_m, masked_time=time_m, aggregation=aggregation)
         self.plot_data_gaps(ax = ax, pixel_data = pixel_data)
-        neg_values_sub =  plot_variables(ax = ax, plotting_data= plotting_data, spline_x= smooth_x, spline_y= smooth_y, time_frame= plot_time_frame, variables= ["pks", "trgs", "midUP", "midDOWN"])
-        self.annotations_and_limits(ax = ax, plotting_data= plotting_data, metrics_dict= metrics_dict, time_frame=plot_time_frame, lat_val = lat_val, lon_val = lon_val, neg_values_sub=neg_values_sub, annotation = None)
+        neg_values_sub =  plot_variables(ax = ax, plotting_data= plotting_data, spline_x= smooth_x, spline_y= smooth_y, time_frame= plot_time_frame, variables= variables)
+        self.annotations_and_limits(ax = ax, plotting_data= plotting_data, metrics_dict= metrics_dict, time_frame=plot_time_frame, lat_val = lat_val, lon_val = lon_val, neg_values_sub=neg_values_sub, annotation = annotation)
 
 
     def split_plot(self, latitude_idx, longitude_idx, ax0, ax1, aggregation = False, start0= 0, end0= 9999, start1= 0, end1=9999):
