@@ -49,6 +49,7 @@ def parse_args(args):
         # "end":9999,
         # "split_start": 2016,
         # "split_end": 2012,
+        "provenance": False,
         "aggregation": True,
         "qa_filter": True, # Only accept qa_flag = 0
         "spline_min_phase_length": 14,
@@ -100,7 +101,7 @@ def get_git_commit():
         return None
 
 
-def write_provenance(out_folder, stage, args, args_file=None, extra=None):
+def write_provenance(out_folder, stage, args, args_file=None, extra=None, run_id=None):
     """Append a provenance record for one pipeline stage to out_folder/provenance.json.
 
     out_folder is the version-named run directory (e.g. .../v3.0) that the
@@ -121,8 +122,11 @@ def write_provenance(out_folder, stage, args, args_file=None, extra=None):
     extra : dict, optional
         Additional stage-specific fields (e.g. lakes processed, thread count).
     """
-    os.makedirs(out_folder, exist_ok=True)
-    path = os.path.join(out_folder, "provenance.json")
+    provenance_dir = os.path.join(out_folder, "provenance_logs")
+    os.makedirs(provenance_dir, exist_ok=True)
+    if run_id is None:
+        run_id = datetime.now(timezone.utc).isoformat().replace(":", "-")
+    path = os.path.join(provenance_dir, f"provenance_{run_id}.json")
 
     if os.path.isfile(path):
         with open(path) as f:
