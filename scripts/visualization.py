@@ -1794,14 +1794,7 @@ class PhenologyVisualization:
                     for (q_start, q_end) in quarters:
                         n_pks = sum(
                             1 for d in pks_x
-                            if d.year == year and q_start <= d.month <= q_end
-                        )
-                        n_trgs = sum(
-                            1 for d in trgs_x
-                            if d.year == year and q_start <= d.month <= q_end
-                        )
-                        year_counts.append((n_pks, n_trgs))
-                    result[year] = year_counts
+                            if d.year == year and q_start <= d.month <= q_end)
         else:
             with netCDF4.Dataset(self.p_path) as nc:
                 pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][:, :, :]))
