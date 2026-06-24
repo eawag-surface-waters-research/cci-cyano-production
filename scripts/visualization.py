@@ -919,8 +919,8 @@ class PhenologyVisualization:
         ValueError
             If the lake ID derived from p_path is not found in the shapefile.
         """
-        if color_extent is None:
-            color_extent = [0,1]
+        if colorbar_extent is None:
+            colorbar_extent = [0,1]
         lake_id = int(self.lakeID)
         lake_row = self.gdf[self.gdf["id"] == lake_id]
         if lake_row.empty:
