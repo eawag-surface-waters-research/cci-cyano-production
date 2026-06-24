@@ -412,15 +412,29 @@ def calculate_metrics_to_plot(start, end, masked_values, masked_time, smoothing_
         return None, [function_start, function_end]
 
 
+def mark_negative_values_timeseries_plot(ax,plotting_data,time_frame):
+    start , end = time_frame
+    vars = list(plotting_data.keys())
+    neg_dates = {}
+    neg_label = False
+    for var in vars:
+        if (plotting_data[var][1] < 0).any():
+            mask =  plotting_data[var][1]<0
+            var_x_neg = plotting_data[var][0][mask]
+            var_y_neg = plotting_data[var][1][mask]
+            label = "Negative Value" if not neg_label else None
+            ax.scatter(var_x_neg, var_y_neg, color="red", s=50, marker="x", zorder=6, label=label)
+            neg_label = True
+            neg_count = len(var_x_neg)
+            neg_dates[var] = neg_count
+            warnings.warn(f"{neg_count} negative {var} in time period {start}-{end}", Warning)
+    return list(neg_dates.values()) # convert to list for backwards compatibility
+
+
 def plot_variables(ax, plotting_data, spline_x, spline_y, time_frame, variables = None):
 
     if variables is None:
         variables = ["pks", "trgs", "midUP", "midDOWN"]
-        
-    neg_values_sub =[]
-    neg_label_before = False
-    start = time_frame[0]
-    end = time_frame[1]
     
     ax.plot(datenum_to_datetime(spline_x), spline_y, color="black", linewidth=1, label="Spline")
     qa_colors = {0: "blue", 1: "orange", 2: "red"}
@@ -436,50 +450,15 @@ def plot_variables(ax, plotting_data, spline_x, spline_y, time_frame, variables 
             ax.scatter(plotting_data["trgs"][0][tm], plotting_data["trgs"][1][tm], color=qa_colors[qa], s=50,
                             marker="o", edgecolors="black", linewidths=0.5,
                             zorder=4, label=qa_labels[qa] if (pm is not None and pm.any()) else None)
-    if "pks" in variables:
-        if (plotting_data["pks"][1] < 0).any():
-            mask =  plotting_data["pks"][1]<0
-            pks_x_neg_before = plotting_data["pks"][0][mask]
-            pks_y_neg_before = plotting_data["pks"][0][mask]
-            label = "Negative Value" if not neg_label_before else None
-            ax.scatter(pks_x_neg_before, pks_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-            neg_values_sub.append(len(pks_x_neg_before))
-            neg_label_before = True
-            warnings.warn(f"Negative Peak(s) in time period {start}-{end}", Warning)
-    if "trgs" in variables:
-        if (plotting_data["trgs"][1] < 0).any():
-            mask =  plotting_data["trgs"][1]<0
-            trgs_x_neg_before = plotting_data["trgs"][0][mask]
-            trgs_y_neg_before = plotting_data["trgs"][1][mask]
-            label = "Negative Value" if not neg_label_before else None
-            ax.scatter(trgs_x_neg_before, trgs_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-            neg_values_sub.append(len(trgs_x_neg_before))
-            neg_label_before = True
-            warnings.warn(f"Negative Troughs(s) in time period {start}-{end}", Warning)
+
 
     if "midUP" in variables:
         ax.scatter(plotting_data["midUP"][0], plotting_data["midUP"][1], color="mediumseagreen", s=30, marker="^", zorder=4, label="Mid Up")
-        if (plotting_data["midUP"][1] < 0).any():
-            mask =  plotting_data["midUP"][1]<0
-            midUP_x_neg_before = plotting_data["midUP"][0][mask]
-            midUP_y_neg_before = plotting_data["midUP"][1][mask]
-            label = "Negative Value" if not neg_label_before else None
-            ax.scatter(midUP_x_neg_before, midUP_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-            neg_values_sub.append(len(midUP_x_neg_before))
-            neg_label_before = True
-            warnings.warn(f"Negative Mid Up(s) in time period {start}-{end}", Warning)
 
     if "midDOWN" in variables:
         ax.scatter(plotting_data["midDOWN"][0], plotting_data["midDOWN"][1], color="darkgreen", s=30, marker="v", zorder=4, label="Mid Down")
-        if (plotting_data["midDOWN"][1] < 0).any():
-            mask =  plotting_data["midDOWN"][1]<0
-            midDOWN_x_neg_before = plotting_data["midDOWN"][0][mask]
-            midDOWN_y_neg_before = plotting_data["midDOWN"][1][mask]
-            label = "Negative Value" if not neg_label_before else None
-            ax.scatter(midDOWN_x_neg_before, midDOWN_y_neg_before, color="red", s=50, marker="x", zorder=6, label=label)
-            neg_values_sub.append(len(midDOWN_x_neg_before))
-            neg_label_before = True
-            warnings.warn(f"Negative Mid Down(s) in time period {start}-{end}", Warning)
+
+    neg_values_sub = mark_negative_values_timeseries_plot(ax,plotting_data,time_frame)
     return neg_values_sub
 
 
