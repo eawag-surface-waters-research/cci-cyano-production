@@ -18,7 +18,7 @@ from matplotlib.patches import Rectangle, Patch
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import pearsonr
 from csaps import csaps
-from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan, define_year_range, plot_lake_outline, grab_metrics, grab_time_data, plot_map_data, set_labels, prep_dimark_data, create_empty_heatmap, bivariate_legend, bivariate_continuous_legend, interpolate_from_color_set, to_frac_month, bivariate_continuous_legend, grab_plotting_variables, calculate_spline, calculate_metrics_to_plot, plot_variables, lakeID_to_name
+import functions as f
 import multiprocessing
 from functools import partial
 import shapely.ops as ops
@@ -55,10 +55,10 @@ def _init_worker(p_path, e_path):
     qa_name = getattr(nc_e, "qa")
 
     time_raw = nc_e.variables["time"][:]
-    t_all = unix_to_datenum(time_raw)
+    t_all = f.unix_to_datenum(time_raw)
 
     # Convert once, not per pixel
-    time_dt = np.array(datenum_to_datetime(t_all))
+    time_dt = np.array(f.datenum_to_datetime(t_all))
     years_all = np.array([d.year for d in time_dt])
 
     smoothing_all = np.asarray(nc_p.variables["smoothing_parameter"][:])
@@ -281,8 +281,8 @@ class PhenologyVisualization:
         result = {}
 
         for x,y in zip(variables_x, variables_y):
-            var_x = unix_to_datetime(remove_nan(p[x][latitude_idx,longitude_idx,:]))
-            var_y = remove_nan(p[y][latitude_idx,longitude_idx,:])
+            var_x =f.unix_to_datetime(f.remove_nan(p[x][latitude_idx,longitude_idx,:]))
+            var_y = f.remove_nan(p[y][latitude_idx,longitude_idx,:])
             var_label = [x[:-2]]*len(var_y)
             df = pd.DataFrame({"Value":var_y,
                             "Variable": var_label,
@@ -430,7 +430,7 @@ class PhenologyVisualization:
 
             years_m = years_all[mask]
 
-            function_start, function_end = define_year_range(start= start, end= end, years= years_m)
+            function_start, function_end = f.define_year_range(start= start, end= end, years= years_m)
 
             mask_sub = (years_m>= function_start) & (years_m <=function_end)
 
@@ -458,7 +458,7 @@ class PhenologyVisualization:
             
             if len(values_m)>1:
 
-                function_start, function_end = define_year_range(start= start, end = end, years = years_m)
+                function_start, function_end = f.define_year_range(start= start, end = end, years = years_m)
 
                 y_pred =csaps(time_m, values_m, time_m, smooth=smoothing)
                 y_true = values_m
@@ -704,7 +704,7 @@ class PhenologyVisualization:
         with netCDF4.Dataset(self.e_path) as nc:
             lat = np.asarray(nc.variables["lat"][:])
             lon = np.asarray(nc.variables["lon"][:])
-            t_all = unix_to_datenum(nc.variables["time"][:])
+            t_all = f.unix_to_datenum(nc.variables["time"][:])
 
             variable_name = getattr(nc, "variable")
             data_var = nc.variables[variable_name]
@@ -930,11 +930,11 @@ class PhenologyVisualization:
         buffered_geom = self.shrink_geometry(geom)
         buffered_geom_prepared = prep(buffered_geom)
 
-        map_data, extent = grab_metrics(self.e_path, metric_scores, buffered_geom_prepared)
+        map_data, extent = f.grab_metrics(self.e_path, metric_scores, buffered_geom_prepared)
 
-        im = plot_map_data(colormap, map_data, extent, ax, cmap_extent=colorbar_extent)
-        plot_lake_outline(geometry=geom, ax=ax)
-        set_labels(ax, fig, im,
+        im = f.plot_map_data(colormap, map_data, extent, ax, cmap_extent=colorbar_extent)
+        f.plot_lake_outline(geometry=geom, ax=ax)
+        f.set_labels(ax, fig, im,
             title=f"{metric_str}-Scores for Lake: ID {lake_id}",
             colorbar_label=metric_str)
 
@@ -978,14 +978,14 @@ class PhenologyVisualization:
         buffered_geom = self.shrink_geometry(geom)
         buffered_geom_prepared = prep(buffered_geom)
 
-        map_data, extent = grab_metrics(self.e_path, metric_scores, buffered_geom_prepared)
+        map_data, extent = f.grab_metrics(self.e_path, metric_scores, buffered_geom_prepared)
         g = self._load_extracted_globals()
         lats = g["lat"]
         lons = g["lon"]
 
-        im = plot_map_data(None, map_data, extent, ax, cmap_extent=[0, 1])
-        plot_lake_outline(geometry=geom, ax=ax)
-        set_labels(ax, fig, im,
+        im = f.plot_map_data(None, map_data, extent, ax, cmap_extent=[0, 1])
+        f.plot_lake_outline(geometry=geom, ax=ax)
+        f.set_labels(ax, fig, im,
             title=f"{metric_str}-Scores for Lake: ID {lake_id}",
             colorbar_label=metric_str)
 
@@ -1055,12 +1055,12 @@ class PhenologyVisualization:
         var_y = "pks_y" if peaks else "green_up_mid_y"
         extrema_label = "Peak" if peaks else "Green Mid Up"
 
-        map_data, extent = grab_time_data(self.e_path, self.p_path, self.valid_coords,
+        map_data, extent = f.grab_time_data(self.e_path, self.p_path, self.valid_coords,
                                             buffered_geom_prepared, var_x, var_y, year, max)
-        im = plot_map_data("rainbow", map_data, extent, ax, cmap_extent=[160, 250])
-        plot_lake_outline(geometry=geom, ax=ax)
+        im = f.plot_map_data("rainbow", map_data, extent, ax, cmap_extent=[160, 250])
+        f.plot_lake_outline(geometry=geom, ax=ax)
         if colorbar:
-            set_labels(ax, fig, im,
+            f.set_labels(ax, fig, im,
                 title=f"{extrema_label} Day of Year\n Lake ID: {lake_id}\n Year: {year}",
                 colorbar_label="Day of Year",
                 colorbar_ticks=[160, 185, 215, 250])
@@ -1127,7 +1127,7 @@ class PhenologyVisualization:
             date = date.tz_convert("UTC")
         g = self._load_extracted_globals()
         t_all = g["t_all"]
-        idx = np.argwhere(datenum_to_datetime(t_all) == date)
+        idx = np.argwhere(f.datenum_to_datetime(t_all) == date)
         if len(idx) == 0:
             raise ValueError(f"Date {date} not found in the extract time axis.")
         time_index = idx[0, 0]
@@ -1189,7 +1189,7 @@ class PhenologyVisualization:
                 self._extracted_globals= {
                     "lat": np.asarray(nc.variables["lat"]),
                     "lon": np.asarray(nc.variables["lon"]),
-                    "t_all":    unix_to_datenum(nc.variables["time"]),
+                    "t_all":    f.unix_to_datenum(nc.variables["time"]),
                     "variable": getattr(nc, "variable"),
                     "qa":       getattr(nc, "qa"),
                     }
@@ -1224,29 +1224,29 @@ class PhenologyVisualization:
                 smoothing = float(nc.variables["smoothing_parameter"][i, j])
                 pks_x_raw = np.array(nc.variables["pks_x"][i, j, :])
                 pk_mask   = ~np.isnan(pks_x_raw)
-                pks_x  = unix_to_datetime(pks_x_raw[pk_mask])
+                pks_x  =f.unix_to_datetime(pks_x_raw[pk_mask])
                 pks_y  = np.array(nc.variables["pks_y"][i, j, :])[pk_mask]
                 pks_qa = np.array(nc.variables["pks_qa"][i, j, :])[pk_mask]
                 trgs_x_raw = np.array(nc.variables["trgs_x"][i, j, :])
                 trg_mask   = ~np.isnan(trgs_x_raw)
-                trgs_x  = unix_to_datetime(trgs_x_raw[trg_mask])
+                trgs_x  = f.unix_to_datetime(trgs_x_raw[trg_mask])
                 trgs_y  = np.array(nc.variables["trgs_y"][i, j, :])[trg_mask]
                 trgs_qa = np.array(nc.variables["trgs_qa"][i, j, :])[trg_mask]
-                midUP_x    = unix_to_datetime(remove_nan(nc.variables["green_up_mid_x"][i, j, :]))
-                midUP_y    = remove_nan(nc.variables["green_up_mid_y"][i, j, :])
-                midDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_mid_x"][i, j, :]))
-                midDOWN_y  = remove_nan(nc.variables["green_down_mid_y"][i, j, :])
-                onsetUP_x    = unix_to_datetime(remove_nan(nc.variables["green_up_onset_x"][i, j, :]))
-                onsetUP_y    = remove_nan(nc.variables["green_up_onset_y"][i, j, :])
-                onsetDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_onset_x"][i, j, :]))
-                onsetDOWN_y  = remove_nan(nc.variables["green_down_onset_y"][i, j, :])
-                advUP_x    = unix_to_datetime(remove_nan(nc.variables["green_up_advanced_x"][i, j, :]))
-                advUP_y    = remove_nan(nc.variables["green_up_advanced_y"][i, j, :])
-                advDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_advanced_x"][i, j, :]))
-                advDOWN_y  = remove_nan(nc.variables["green_down_advanced_y"][i, j, :])
+                midUP_x    = f.unix_to_datetime(f.remove_nan(nc.variables["green_up_mid_x"][i, j, :]))
+                midUP_y    = f.remove_nan(nc.variables["green_up_mid_y"][i, j, :])
+                midDOWN_x  = f.unix_to_datetime(f.remove_nan(nc.variables["green_down_mid_x"][i, j, :]))
+                midDOWN_y  = f.remove_nan(nc.variables["green_down_mid_y"][i, j, :])
+                onsetUP_x    = f.unix_to_datetime(f.remove_nan(nc.variables["green_up_onset_x"][i, j, :]))
+                onsetUP_y    = f.remove_nan(nc.variables["green_up_onset_y"][i, j, :])
+                onsetDOWN_x  = f.unix_to_datetime(f.remove_nan(nc.variables["green_down_onset_x"][i, j, :]))
+                onsetDOWN_y  = f.remove_nan(nc.variables["green_down_onset_y"][i, j, :])
+                advUP_x    = f.unix_to_datetime(f.remove_nan(nc.variables["green_up_advanced_x"][i, j, :]))
+                advUP_y    = f.remove_nan(nc.variables["green_up_advanced_y"][i, j, :])
+                advDOWN_x  = f.unix_to_datetime(f.remove_nan(nc.variables["green_down_advanced_x"][i, j, :]))
+                advDOWN_y  = f.remove_nan(nc.variables["green_down_advanced_y"][i, j, :])
 
-                gap_starts = unix_to_datetime(remove_nan(nc.variables["data_gap_start"][i, j, :]))
-                gap_ends   = unix_to_datetime(remove_nan(nc.variables["data_gap_end"][i, j, :]))
+                gap_starts = f.unix_to_datetime(f.remove_nan(nc.variables["data_gap_start"][i, j, :]))
+                gap_ends   = f.unix_to_datetime(f.remove_nan(nc.variables["data_gap_end"][i, j, :]))
             self._pixel_cache[(i,j)] = {
                 "values": values, "qa": qa, "smoothing": smoothing,
                 "pks_x": pks_x, "pks_y": pks_y, "pks_qa": pks_qa,
@@ -1285,7 +1285,7 @@ class PhenologyVisualization:
         t_all = g["t_all"]
         mask     = (px["values"] != -9999) & (px["qa"] == 0)
         values_m = px["values"][mask]
-        time_dt   = datenum_to_datetime(t_all[mask])
+        time_dt   = f.datenum_to_datetime(t_all[mask])
         return pd.Series(index=time_dt,data=values_m)
 
 
@@ -1339,7 +1339,7 @@ class PhenologyVisualization:
         lon_val = float(lon[longitude_idx])
 
         var = "pks" if peak else "trgs"
-        plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=px, variables=[var])
+        plotting_data = f.grab_plotting_variables(start=start, end=end, pixel_data=px, variables=[var])
         x_sub, y_sub, qa_sub = plotting_data[var]
 
         mask     = (px["values"] != -9999) & (px["qa"] == 0)
@@ -1351,7 +1351,7 @@ class PhenologyVisualization:
             warnings.warn("No data to plot (check valid indices)")
             return None
 
-        limits = sorted(datenum_to_datetime(time_m))
+        limits = sorted(f.datenum_to_datetime(time_m))
         function_start = min(limits).year if start == 0 else start
         function_end= max(limits).year if end ==9999 else end
 
@@ -1660,7 +1660,7 @@ class PhenologyVisualization:
         lat, lon, t_all = g["lat"], g["lon"], g["t_all"]
         smoothing = pixel_data["smoothing"]
 
-        plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=pixel_data)
+        plotting_data = f.grab_plotting_variables(start=start, end=end, pixel_data=pixel_data)
 
         # No QA==0 filter here — all non-fill values kept for QA-coloured scatter
         mask     = (pixel_data["values"] != -9999)
@@ -1672,7 +1672,7 @@ class PhenologyVisualization:
             warnings.warn("No data to plot")
             return
 
-        smooth_x, smooth_y = calculate_spline(
+        smooth_x, smooth_y = f.calculate_spline(
             whole_timeframe=t_all, masked_values=values_m,
             masked_time=time_m, smoothing_parameter=smoothing
         )
@@ -1680,7 +1680,7 @@ class PhenologyVisualization:
             warnings.warn("No data to plot")
             return
 
-        metrics_dict, plot_time_frame = calculate_metrics_to_plot(
+        metrics_dict, plot_time_frame = f.calculate_metrics_to_plot(
             start=start, end=end, masked_values=values_m,
             masked_time=time_m, smoothing_parameter=smoothing
         )
@@ -1709,7 +1709,7 @@ class PhenologyVisualization:
         # else:
         #     sc = ax.scatter(datenum_to_datetime(time_m), values_m, c=qa_idx, cmap=cmap_new, norm=norm, alpha=1, s=10, label="Data")
 
-        neg_values_sub = plot_variables(
+        neg_values_sub = f.plot_variables(
             ax=ax, plotting_data=plotting_data, spline_x=smooth_x, spline_y=smooth_y,
             time_frame=plot_time_frame
         )
@@ -1748,7 +1748,7 @@ class PhenologyVisualization:
         """
         var = "pks" if peaks else "trgs"
         pixel_data = self._load_pixel_data(latitude_idx, longitude_idx)
-        plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=pixel_data, variables=[var])
+        plotting_data = f.grab_plotting_variables(start=start, end=end, pixel_data=pixel_data, variables=[var])
         return len(plotting_data[var][0])
 
 
@@ -1786,19 +1786,26 @@ class PhenologyVisualization:
         result = {}
         if not fraction:
             with netCDF4.Dataset(self.p_path) as nc:
-                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][latitude_idx, longitude_idx, :]))
-                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][latitude_idx, longitude_idx, :]))
+                pks_x = f.unix_to_datetime(f.remove_nan(nc.variables["pks_x"][latitude_idx, longitude_idx, :]))
+                trgs_x = f.unix_to_datetime(f.remove_nan(nc.variables["trgs_x"][latitude_idx, longitude_idx, :]))
         
                 for year in range(start_year, end_year + 1):
                     year_counts = []
                     for (q_start, q_end) in quarters:
                         n_pks = sum(
                             1 for d in pks_x
-                            if d.year == year and q_start <= d.month <= q_end)
+                            if d.year == year and q_start <= d.month <= q_end
+                        )
+                        n_trgs = sum(
+                            1 for d in trgs_x
+                            if d.year == year and q_start <= d.month <= q_end
+                        )
+                        year_counts.append((n_pks, n_trgs))
+                    result[year] = year_counts
         else:
             with netCDF4.Dataset(self.p_path) as nc:
-                pks_x = unix_to_datetime(remove_nan(nc.variables["pks_x"][:, :, :]))
-                trgs_x = unix_to_datetime(remove_nan(nc.variables["trgs_x"][:, :, :]))
+                pks_x = f.unix_to_datetime(f.remove_nan(nc.variables["pks_x"][:, :, :]))
+                trgs_x = f.unix_to_datetime(f.remove_nan(nc.variables["trgs_x"][:, :, :]))
         
                 for year in range(start_year, end_year + 1):
                     year_fractions = []
@@ -1831,7 +1838,7 @@ class PhenologyVisualization:
 
         When whole_lake=False, counts for the single pixel at (latitude_idx, longitude_idx)
         are binned into four levels (0, 1, 2, 3+) and the cell is coloured from the
-        discrete 4×4 grid using bivariate_legend.
+        discrete 4×4 grid using f.bivariate_legend.
 
         When whole_lake=True, peak and trough events are aggregated across all
         lake pixels and each cell shows the fraction of that year's total events
@@ -1861,7 +1868,7 @@ class PhenologyVisualization:
             The axes on which the heatmap is drawn.
         """
         heatmap_data = self.create_heatmap_output(latitude_idx=latitude_idx, longitude_idx=longitude_idx, fraction = False)
-        fig, ax, _ = create_empty_heatmap()
+        fig, ax, _ = f.create_empty_heatmap()
         g  = self._load_extracted_globals()
         lat, lon = g["lat"], g["lon"]
         lat_val = float(lat[latitude_idx])
@@ -1879,7 +1886,7 @@ class PhenologyVisualization:
                 ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
 
         ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform = ax.transAxes)
-        bivariate_legend(ax_legend, color_set)
+        f.bivariate_legend(ax_legend, color_set)
 
         return fig, ax
     
@@ -1887,7 +1894,7 @@ class PhenologyVisualization:
     def yearly_heatmap_lake(self, color_scheme= "pink-blue"):
         # lat and lon are not needed as the heatmap uses all pixels from the lake, thus they can be arbitrary
         heatmap_data = self.create_heatmap_output(latitude_idx=-1, longitude_idx=-1, fraction=True)
-        fig, ax, _ = create_empty_heatmap()
+        fig, ax, _ = f.create_empty_heatmap()
         textstr = f"Yearly Heatmap for Lake ID: {self.lakeID}\n  {self.variable}"
         ax.set_title(textstr)
 
@@ -1895,11 +1902,11 @@ class PhenologyVisualization:
 
         for year, quarters in heatmap_data.items():
             for q_idx, (pks_frac, trgs_frac) in enumerate(quarters):
-                color = interpolate_from_color_set(pks_frac, trgs_frac, color_set)
+                color = f.interpolate_from_color_set(pks_frac, trgs_frac, color_set)
                 ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
 
         ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform=ax.transAxes)
-        bivariate_continuous_legend(ax_legend, color_set)
+        f.bivariate_continuous_legend(ax_legend, color_set)
 
         return fig, ax
 
@@ -2046,10 +2053,10 @@ class PhenologyVisualization:
             background_time = background_sub["time"].to_numpy()
             background_values = background_sub["MA_value"]
 
-            x = datenum_to_datetime(background_time)
+            x = f.datenum_to_datetime(background_time)
             y = background_values
         else:
-            x = datenum_to_datetime(masked_time)
+            x = f.datenum_to_datetime(masked_time)
             y = masked_values
 
         sc = ax.scatter(x, y, label="Data", **style)
@@ -2155,7 +2162,7 @@ class PhenologyVisualization:
         lon_val = float(lon[longitude_idx])
         smoothing = pixel_data["smoothing"]
 
-        plotting_data = grab_plotting_variables(start = start, end = end, pixel_data=pixel_data, variables=variables)
+        plotting_data = f.grab_plotting_variables(start = start, end = end, pixel_data=pixel_data, variables=variables)
 
         mask     = (pixel_data["values"] != -9999) & (pixel_data["qa"] == 0)
         values_m = pixel_data["values"][mask]
@@ -2165,16 +2172,16 @@ class PhenologyVisualization:
             warnings.warn("No data to plot")
             return
 
-        smooth_x, smooth_y = calculate_spline(whole_timeframe= t_all, masked_values=values_m, masked_time= time_m, smoothing_parameter=smoothing)
+        smooth_x, smooth_y = f.calculate_spline(whole_timeframe= t_all, masked_values=values_m, masked_time= time_m, smoothing_parameter=smoothing)
 
-        metrics_dict, plot_time_frame = calculate_metrics_to_plot(start = start, end = end, masked_values= values_m, masked_time=time_m, smoothing_parameter=smoothing)
+        metrics_dict, plot_time_frame = f.calculate_metrics_to_plot(start = start, end = end, masked_values= values_m, masked_time=time_m, smoothing_parameter=smoothing)
 
         if metrics_dict is None:
             return
 
         self.plot_background_pts(ax = ax, latitude_idx= latitude_idx, longitude_idx = longitude_idx, masked_values=values_m, masked_time=time_m, aggregation=aggregation)
         self.plot_data_gaps(ax = ax, pixel_data = pixel_data)
-        neg_values_sub =  plot_variables(ax = ax, plotting_data= plotting_data, spline_x= smooth_x, spline_y= smooth_y, time_frame= plot_time_frame, variables= variables)
+        neg_values_sub =  f.plot_variables(ax = ax, plotting_data= plotting_data, spline_x= smooth_x, spline_y= smooth_y, time_frame= plot_time_frame, variables= variables)
         self.annotations_and_limits(ax = ax, plotting_data= plotting_data, metrics_dict= metrics_dict, time_frame=plot_time_frame, lat_val = lat_val, lon_val = lon_val, neg_values_sub=neg_values_sub, annotation = annotation)
 
 
@@ -2238,7 +2245,7 @@ class PhenologyVisualization:
         None
         """
         with netCDF4.Dataset(self.e_path) as nc:
-            t_all = unix_to_datenum(nc.variables["time"])
+            t_all = f.unix_to_datenum(nc.variables["time"])
             variable = getattr(nc, "variable")
             values = np.array(nc.variables[variable][:, latitude_idx, longitude_idx])
             mask = (values != -9999) & (np.array(nc.variables[getattr(nc, 'qa')][:, latitude_idx, longitude_idx]) == 0)
@@ -2246,7 +2253,7 @@ class PhenologyVisualization:
             time_m = t_all[mask]
 
         if len(values_m) > 1:
-            limits = sorted(datenum_to_datetime(time_m))
+            limits = sorted(f.datenum_to_datetime(time_m))
             full_plot_start = min(limits).year
             full_plot_end = max(limits).year
             self.single_plot(latitude_idx= latitude_idx, longitude_idx= longitude_idx, ax = ax, aggregation = aggregation, start=full_plot_start, end= full_plot_end)
@@ -2336,7 +2343,7 @@ class PhenologyVisualization:
         # PREPARE IN SITU DATA
         # -------------------------------------------------
 
-        insitu_mean = prep_dimark_data(insitu_df = insitu_df,start=start, end=end,  insitu_date_col=insitu_date_col, insitu_value_col=insitu_value_col, insitu_station_col=insitu_station_col, station_id=station_id, max_depth = max_depth)
+        insitu_mean = f.prep_dimark_data(insitu_df = insitu_df,start=start, end=end,  insitu_date_col=insitu_date_col, insitu_value_col=insitu_value_col, insitu_station_col=insitu_station_col, station_id=station_id, max_depth = max_depth)
         
         # -------------------------------------------------
         # OVERLAY IN SITU DATA
@@ -2436,7 +2443,7 @@ class PhenologyVisualization:
         ratio = merged["value_self"] / merged["value_other"]
 
         ax.scatter(
-            datenum_to_datetime(merged["time"].to_numpy()),
+            f.datenum_to_datetime(merged["time"].to_numpy()),
             ratio,
             color=color,
             s=10,
@@ -2583,17 +2590,17 @@ class PhenologyVisualization:
         mask_all = (px["values"] != -9999) & (px["qa"] == 0)
         values_m_all = px["values"][mask_all]
         time_m_all = t_all[mask_all]
-        smooth_x_all, smooth_y_all = calculate_spline(
+        smooth_x_all, smooth_y_all = f.calculate_spline(
             whole_timeframe=t_all, masked_values=values_m_all,
             masked_time=time_m_all, smoothing_parameter=smoothing
         )
         if smooth_x_all is None:
             warnings.warn("No data to plot")
             return
-        smooth_dates_all = np.array(datenum_to_datetime(smooth_x_all))
+        smooth_dates_all = np.array(f.datenum_to_datetime(smooth_x_all))
 
         for year in years:
-            plotting_data = grab_plotting_variables(
+            plotting_data = f.grab_plotting_variables(
                 start=year,
                 end=year,
                 pixel_data=px,
@@ -2608,18 +2615,18 @@ class PhenologyVisualization:
             smooth_y  = smooth_y_all[mask_year]
 
             if len(smooth_dates_year) > 1:
-                smooth_x_month = to_frac_month(smooth_dates_year)
+                smooth_x_month = f.to_frac_month(smooth_dates_year)
                 ax.plot(smooth_x_month, smooth_y, color=year_colors[year], linewidth=1, label=str(year))
 
                 for qa in self.QA_LEVELS:
                     pm = pks_qa_sub == qa
                     tm = trgs_qa_sub == qa
                     if pm.any():
-                        ax.scatter(to_frac_month(pks_x_sub[pm]), pks_y_sub[pm], color="black", s=50,
+                        ax.scatter(f.to_frac_month(pks_x_sub[pm]), pks_y_sub[pm], color="black", s=50,
                             marker=qa_markers[qa], edgecolors="black", linewidths=0.5,
                             zorder=4, label= qa_labels[qa] if year == years[0] else None)
                     if tm.any():
-                        ax.scatter(to_frac_month(trgs_x_sub[tm]), trgs_y_sub[tm], color="darkgray", s=50,
+                        ax.scatter(f.to_frac_month(trgs_x_sub[tm]), trgs_y_sub[tm], color="darkgray", s=50,
                             marker=qa_markers[qa], edgecolors="black", linewidths=0.5,
                             zorder=4, label=qa_labels[qa] if (year == years[0] and not pm.any()) else None)
             else:
