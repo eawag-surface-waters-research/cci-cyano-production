@@ -306,6 +306,7 @@ def grab_plotting_variables(start, end, pixel_data, variables = None):
             result[var] = [var_x_sub, var_y_sub, var_qa_sub]
         else:
             result[var] = [var_x_sub, var_y_sub]
+    return result
     
     # if "pks" in variables:
     #     mask_pks     = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["pks_x"]])
