@@ -120,17 +120,21 @@ class PhenologyVisualization:
     QA_CONFIG = {
         0: {
             "label": "Good",
-            "style":{"marker": "o", "color": "green"}
+            "style":{"marker": "o", "color": "green"},
+            "style_alt":{"marker": "o"}
         },
         1: {
             "label": "Fair",
-            "style":{"marker": "o", "color": "orange"}
+            "style":{"marker": "o", "color": "orange"},
+             "style_alt":{"marker": "s"}
         },
         2: {
             "label": "Poor",
-            "style":{"marker": "o", "color": "red"}
+            "style":{"marker": "o", "color": "red"},
+             "style_alt":{"marker": "x"}
         },
     }
+
 
     VAR_CONFIG = {
         "phycocyanin": {
@@ -355,7 +359,8 @@ class PhenologyVisualization:
 
         # Optional override (e.g. purple_chla21)
         if kwargs.get("use_alt") and "style_alt" in cfg:
-            style.update(cfg["style_alt"])
+            alt = {("color" if k == "color_alt" else k): v for k, v in cfg["style_alt"].items()}
+            style.update(alt)
 
         return {
             "label": cfg.get("label"),
@@ -1430,7 +1435,7 @@ class PhenologyVisualization:
             if not qm.any():
                 continue
 
-            qa_cfg = self.get_plot_config("qa", q)
+            qa_cfg = self.get_plot_config("qa", q, use_alt = True)
             qa_style = qa_cfg["style"]
 
             qa_label = qa_cfg["label"]
