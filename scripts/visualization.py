@@ -148,7 +148,47 @@ class PhenologyVisualization:
         },
     }
 
-    METRIC_CONFIG = {}
+    METRIC_CONFIG = {
+        'pks': {
+            'label':'peak',
+            'style':{'marker':'o','color':'blue','label':'peak'}
+        },
+        'trg': {
+            'label':'trough',
+            'style':{'marker':'o','color':'orange','label':'trough'}
+        },
+        'midUP': {
+            'label':'green up',
+            'style':{'marker':'^','color':'mediumseagreen'},
+            'meta':{}
+        },
+        'midDOWN': {
+            'label':'green down',
+            'style':{'marker':'v','color':'darkgreen'},
+            'meta':{}
+        },
+        'onsetUP': {
+            'label':'green up',
+            'style':{'marker':'^','color':'mediumseagreen'},
+            'meta':{}
+        },
+        'onsetDOWN': {
+            'label':'green down',
+            'style':{'marker':'v','color':'darkgreen'},
+            'meta':{}
+        },
+        'advUP': {
+            'label':'green up',
+            'style':{'marker':'^','color':'mediumseagreen'},
+            'meta':{}
+        },
+        'advDOWN': {
+            'label':'green down',
+            'style':{'marker':'v','color':'darkgreen'},
+            'meta':{}
+        },
+    }
+
 
     def __init__(self, extract_path, phenology_path):
         """Initialise a PhenologyVisualization instance for a single lake and variable.
@@ -2072,6 +2112,39 @@ class PhenologyVisualization:
             ax.axvspan(gap_starts[0], gap_ends[0], color="orange", alpha=0.15, zorder=0, label="Data gap")
 
             
+    def plot_pheno_metrics(self, ax, plotting_data, spline_x, spline_y, time_frame, variables = None):
+
+        if variables is None:
+            variables = ["pks", "trgs", "midUP", "midDOWN"]
+
+        ax.plot(f.datenum_to_datetime(spline_x), spline_y, color="black", linewidth=1, label="Spline")
+
+        used_labels = set()
+        qa_colors = {0: "blue", 1: "orange", 2: "red"}
+        qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
+        qa_vars = {'pks','trgs'}
+        for var in variables:
+            if var in qa_vars:
+                qa_vals = plotting_data[var][2]
+
+                for qa in self.QA_LEVELS:
+                    pm =  qa_vals == qa
+                    if not pm.any():
+                        continue
+                    label = qa_labels[qa]
+                    ax.scatter(plotting_data[var][0][pm], plotting_data[var][1][pm], color=qa_colors[qa], s=50,
+                                    marker="o", edgecolors="black", linewidths=0.5,
+                                    zorder=4, label=label if label not in used_labels else None)
+                    used_labels.add(label)
+
+            else:
+                ax.scatter(plotting_data[var][0], plotting_data[var][1], s=30, zorder=4, **self.METRIC_CONFIG[var]['style'])
+                used_labels.add(label)
+                # labeling not working right now
+
+        neg_values_sub = f.mark_negative_values_timeseries_plot(ax,plotting_data,time_frame)
+        return neg_values_sub
+
     def annotations_and_limits(self, ax, plotting_data, metrics_dict, time_frame, lat_val, lon_val, neg_values_sub, annotation = None):
         start, end = time_frame[0], time_frame[1]
 
@@ -2181,7 +2254,7 @@ class PhenologyVisualization:
 
         self.plot_background_pts(ax = ax, latitude_idx= latitude_idx, longitude_idx = longitude_idx, masked_values=values_m, masked_time=time_m, aggregation=aggregation)
         self.plot_data_gaps(ax = ax, pixel_data = pixel_data)
-        neg_values_sub =  f.plot_variables(ax = ax, plotting_data= plotting_data, spline_x= smooth_x, spline_y= smooth_y, time_frame= plot_time_frame, variables= variables)
+        neg_values_sub =  self.plot_pheno_metrics(ax = ax, plotting_data= plotting_data, spline_x= smooth_x, spline_y= smooth_y, time_frame= plot_time_frame, variables= variables)
         self.annotations_and_limits(ax = ax, plotting_data= plotting_data, metrics_dict= metrics_dict, time_frame=plot_time_frame, lat_val = lat_val, lon_val = lon_val, neg_values_sub=neg_values_sub, annotation = annotation)
 
 
