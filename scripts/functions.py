@@ -307,66 +307,6 @@ def grab_plotting_variables(start, end, pixel_data, variables = None):
         else:
             result[var] = [var_x_sub, var_y_sub]
     return result
-    
-    # if "pks" in variables:
-    #     mask_pks     = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["pks_x"]])
-    #     pks_x_sub    = pixel_data["pks_x"][mask_pks]
-    #     pks_y_sub    = pixel_data["pks_y"][mask_pks]
-    #     pks_qa_sub   = pixel_data["pks_qa"][mask_pks]    
-    # if "trgs" in variables:
-    #     dict_key = "trgs"
-    #     mask_trgs    = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["trgs_x"]])
-    #     trgs_x_sub   = pixel_data["trgs_x"][mask_trgs]
-    #     trgs_y_sub   = pixel_data["trgs_y"][mask_trgs]
-    #     trgs_qa_sub  = pixel_data["trgs_qa"][mask_trgs]
-    # if "midUP" in variables:
-    #     dict_key = "midUP"
-    #     mask_midUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midUP_x"]])
-    #     midUP_x_sub  = pixel_data["midUP_x"][mask_midUP]
-    #     midUP_y_sub  = pixel_data["midUP_y"][mask_midUP]
-    # if "midDOWN" in variables:
-    #     dict_key = "midDOWN"
-    #     mask_midDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["midDOWN_x"]])
-    #     midDOWN_x_sub = pixel_data["midDOWN_x"][mask_midDOWN]
-    #     midDOWN_y_sub = pixel_data["midDOWN_y"][mask_midDOWN]
-    # if "onsetUP" in variables:
-    #     dict_key = "onsetUP"
-    #     mask_onsetUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["onsetUP_x"]])
-    #     onsetUP_x_sub  = pixel_data["onsetUP_x"][mask_onsetUP]
-    #     onsetUP_y_sub  = pixel_data["onsetUP_y"][mask_onsetUP]
-    # if "onsetDOWN" in variables:
-    #     dict_key = "onsetDOWN"
-    #     mask_onsetDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["onsetDOWN_x"]])
-    #     onsetDOWN_x_sub = pixel_data["onsetDOWN_x"][mask_onsetDOWN]
-    #     onsetDOWN_y_sub = pixel_data["onsetDOWN_y"][mask_onsetDOWN]  
-    # if "advUP" in variables:
-    #     dict_key = "advUP"
-    #     mask_advUP   = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["advUP_x"]])
-    #     advUP_x_sub  = pixel_data["advUP_x"][mask_advUP]
-    #     advUP_y_sub  = pixel_data["advUP_y"][mask_advUP]
-    # if "advDOWN" in variables:
-    #     dict_key = "advDOWN"
-    #     mask_advDOWN  = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data["advDOWN_x"]])
-    #     advDOWN_x_sub = pixel_data["advDOWN_x"][mask_advDOWN]
-    #     advDOWN_y_sub = pixel_data["advDOWN_y"][mask_advDOWN]
-
-    # if "pks" in variables:
-    #     result["pks"] = [pks_x_sub, pks_y_sub, pks_qa_sub]
-    # if "trgs" in variables:
-    #     result["trgs"] = [trgs_x_sub, trgs_y_sub, trgs_qa_sub]
-    # if "midUP" in variables:
-    #     result["midUP"] = [midUP_x_sub, midUP_y_sub]
-    # if "midDOWN" in variables:
-    #     result["midDOWN"] = [midDOWN_x_sub, midDOWN_y_sub]
-    # if "onsetUP" in variables:
-    #     result["onsetUP"] = [onsetUP_x_sub, onsetUP_y_sub]
-    # if "onsetDOWN" in variables:
-    #     result["onsetDOWN"] = [onsetDOWN_x_sub, onsetDOWN_y_sub]
-    # if "advUP" in variables:
-    #     result["advUP"] = [advUP_x_sub, advUP_y_sub]
-    # if "advDOWN" in variables:
-    #     result["advDOWN"] = [advDOWN_x_sub, advDOWN_y_sub]
-    # return result
 
 
 def calculate_spline(whole_timeframe, masked_values, masked_time, smoothing_parameter ):
@@ -418,16 +358,17 @@ def mark_negative_values_timeseries_plot(ax,plotting_data,time_frame):
     neg_dates = {}
     neg_label = False
     for var in vars:
-        if (plotting_data[var][1] < 0).any():
-            mask =  plotting_data[var][1]<0
-            var_x_neg = plotting_data[var][0][mask]
-            var_y_neg = plotting_data[var][1][mask]
-            label = "Negative Value" if not neg_label else None
-            ax.scatter(var_x_neg, var_y_neg, color="red", s=50, marker="x", zorder=6, label=label)
-            neg_label = True
-            neg_count = len(var_x_neg)
-            neg_dates[var] = neg_count
-            warnings.warn(f"{neg_count} negative {var} in time period {start}-{end}", Warning)
+        if (plotting_data[var][1] >= 0).all():
+            continue
+        mask =  plotting_data[var][1]<0
+        var_x_neg = plotting_data[var][0][mask]
+        var_y_neg = plotting_data[var][1][mask]
+        label = "Negative Value" if not neg_label else None
+        ax.scatter(var_x_neg, var_y_neg, color="red", s=50, marker="x", zorder=6, label=label)
+        neg_label = True
+        neg_count = len(var_x_neg)
+        neg_dates[var] = neg_count
+        warnings.warn(f"{neg_count} negative {var} in time period {start}-{end}", Warning)
     return list(neg_dates.values()) # convert to list for backwards compatibility
 
 
@@ -435,28 +376,38 @@ def plot_variables(ax, plotting_data, spline_x, spline_y, time_frame, variables 
 
     if variables is None:
         variables = ["pks", "trgs", "midUP", "midDOWN"]
-    
+
     ax.plot(datenum_to_datetime(spline_x), spline_y, color="black", linewidth=1, label="Spline")
+
+    used_labels = set()
     qa_colors = {0: "blue", 1: "orange", 2: "red"}
     qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
-    for qa in (0, 1, 2):
-        pm = plotting_data["pks"][2] == qa if "pks" in variables else None
-        tm = plotting_data["trgs"][2] == qa if "trgs" in variables else None
-        if pm is not None and pm.any():
-            ax.scatter(plotting_data["pks"][0][pm], plotting_data["pks"][1][pm], color=qa_colors[qa], s=50,
-                            marker="o", edgecolors="black", linewidths=0.5,
-                            zorder=4, label=qa_labels[qa])
-        if tm is not None and tm.any():
-            ax.scatter(plotting_data["trgs"][0][tm], plotting_data["trgs"][1][tm], color=qa_colors[qa], s=50,
-                            marker="o", edgecolors="black", linewidths=0.5,
-                            zorder=4, label=qa_labels[qa] if (pm is not None and pm.any()) else None)
+    qa_vars = {'pks','trgs'}
+    for var in variables:
+        if var in qa_vars:
+            qa_vals = plotting_data[var][2]
 
+            for qa in (0, 1, 2):
+                pm =  qa_vals == qa
+                if not pm.any():
+                    continue
+                label = qa_labels[qa]
+                ax.scatter(plotting_data[var][0][pm], plotting_data[var][1][pm], color=qa_colors[qa], s=50,
+                                marker="o", edgecolors="black", linewidths=0.5,
+                                zorder=4, label=label if label not in used_labels else None)
+                used_labels.add(label)
 
-    if "midUP" in variables:
-        ax.scatter(plotting_data["midUP"][0], plotting_data["midUP"][1], color="mediumseagreen", s=30, marker="^", zorder=4, label="Mid Up")
-
-    if "midDOWN" in variables:
-        ax.scatter(plotting_data["midDOWN"][0], plotting_data["midDOWN"][1], color="darkgreen", s=30, marker="v", zorder=4, label="Mid Down")
+        elif "UP" in var:
+            label = "Green Up"
+            ax.scatter(plotting_data[var][0], plotting_data[var][1], color="mediumseagreen", s=30, marker="^", zorder=4, label=label if label not in used_labels else None)
+            used_labels.add(label)
+        elif "DOWN" in var:
+            label = "Green Down"
+            ax.scatter(plotting_data[var][0], plotting_data[var][1], color="darkgreen", s=30, marker="v", zorder=4, label=label if label not in used_labels else None)
+            used_labels.add(label)
+        else:
+            ax.scatter(plotting_data[var][0], plotting_data[var][1], color="green", s=30, marker="o", zorder=4, label=str(var))
+            
 
     neg_values_sub = mark_negative_values_timeseries_plot(ax,plotting_data,time_frame)
     return neg_values_sub

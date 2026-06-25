@@ -2254,7 +2254,7 @@ class PhenologyVisualization:
 
         self.plot_background_pts(ax = ax, latitude_idx= latitude_idx, longitude_idx = longitude_idx, masked_values=values_m, masked_time=time_m, aggregation=aggregation)
         self.plot_data_gaps(ax = ax, pixel_data = pixel_data)
-        neg_values_sub =  self.plot_pheno_metrics(ax = ax, plotting_data= plotting_data, spline_x= smooth_x, spline_y= smooth_y, time_frame= plot_time_frame, variables= variables)
+        neg_values_sub = f.plot_variables(ax = ax, plotting_data= plotting_data, spline_x= smooth_x, spline_y= smooth_y, time_frame= plot_time_frame, variables= variables)
         self.annotations_and_limits(ax = ax, plotting_data= plotting_data, metrics_dict= metrics_dict, time_frame=plot_time_frame, lat_val = lat_val, lon_val = lon_val, neg_values_sub=neg_values_sub, annotation = annotation)
 
 
