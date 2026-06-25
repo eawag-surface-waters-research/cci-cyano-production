@@ -232,6 +232,7 @@ class PhenologyVisualization:
         self.geom_shrunk = None
         self._extracted_globals = None
         self._pixel_cache = {}
+        self._lake_cache = {}
         self.prep_geometry_from_shapefile()
 
 
@@ -1333,6 +1334,8 @@ class PhenologyVisualization:
         values_m = px["values"][mask]
         time_dt   = f.datenum_to_datetime(t_all[mask])
         return pd.Series(index=time_dt,data=values_m)
+
+    
 
 
     def extrema_plot(self, latitude_idx, longitude_idx, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False, show_legend = True):
@@ -2836,6 +2839,8 @@ class PhenologyVisualization:
         y = np.array(green_down_onset_doys, dtype=float)
 
         sns.kdeplot(x=x, y=y, ax=ax, fill=True, cmap="viridis", levels=20, thresh=0.05)
+        plt.axline([0,0], [1,1])
+        ax.axline(xy1=(0,365), slope=1)
         #ax.scatter(x, y, s=3, alpha=0.25, color="grey", zorder=5)
 
         # sm = plt.cm.ScalarMappable(cmap="viridis")
@@ -2850,4 +2855,134 @@ class PhenologyVisualization:
         # ax.set_ylabel("Green-down Onset (DOY)")
         # ax.set_title(f"Green-up Advanced vs Green-down Onset\nLake ID: {self.lakeID} | {year_str}")
         # ax.grid(linewidth=0.5)
+
+
+
+    def assemble_kde_data(self):
+        """Collect green-up advanced, peak, and green-down onset events lake-wide into a DataFrame.
+
+        Iterates all valid pixels inside the 1 km-inset lake boundary and gathers
+        three phenological event types. Each row represents one event occurrence.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Index named 'year.DOY' — a float of the form year + DOY/1000
+            (e.g. 2005.150 = year 2005, day-of-year 150).
+            Columns:
+              green_up_advanced : bool   — True for green-up advanced events, False otherwise.
+              peaks             : float  — QA indicator (0=Good, 1=Fair, 2=Poor) for peak
+                                          events, np.nan otherwise.
+              green_down_onset  : bool   — True for green-down onset events, False otherwise.
+            Row count equals the total number of events across all three variables and pixels.
+        """
+        g = self._load_extracted_globals()
+        lats = g["lat"]
+        lons = g["lon"]
+
+        rows = []
+
+        with netCDF4.Dataset(self.p_path) as nc:
+            for (i, j) in self.valid_coords:
+                if not self.prepped_geom.contains(Point(lons[j], lats[i])):
+                    continue
+
+                adv_raw = f.remove_nan(nc.variables["green_up_advanced_x"][i, j, :])
+                if len(adv_raw) > 0:
+                    for d in f.unix_to_datetime(adv_raw):
+                        doy = d.timetuple().tm_yday
+                        rows.append({
+                            "year.DOY": d.year + doy / 1000,
+                            "i": i, "j": j,
+                            "green_up_advanced": True,
+                            "peaks": np.nan,
+                            "green_down_onset": False,
+                        })
+
+                pks_x_raw = np.array(nc.variables["pks_x"][i, j, :])
+                pk_mask = ~np.isnan(pks_x_raw)
+                if pk_mask.any():
+                    pks_qa = np.array(nc.variables["pks_qa"][i, j, :])[pk_mask]
+                    for d, qa in zip(f.unix_to_datetime(pks_x_raw[pk_mask]), pks_qa):
+                        doy = d.timetuple().tm_yday
+                        rows.append({
+                            "year.DOY": d.year + doy / 1000,
+                            "i": i, "j": j,
+                            "green_up_advanced": False,
+                            "peaks": int(qa),
+                            "green_down_onset": False,
+                        })
+
+                onset_raw = f.remove_nan(nc.variables["green_down_onset_x"][i, j, :])
+                if len(onset_raw) > 0:
+                    for d in f.unix_to_datetime(onset_raw):
+                        doy = d.timetuple().tm_yday
+                        rows.append({
+                            "year.DOY": d.year + doy / 1000,
+                            "i": i, "j": j,
+                            "green_up_advanced": False,
+                            "peaks": np.nan,
+                            "green_down_onset": True,
+                        })
+
+        if not rows:
+            return pd.DataFrame(columns=["i", "j", "green_up_advanced", "peaks", "green_down_onset"])
+
+        df = pd.DataFrame(rows).set_index("year.DOY")
+        return df
+
+
+    def prep_kde_data(self, kde_df):
+        """Pair each peak with its bracketing green-up advanced and green-down onset, per pixel.
+
+        For each pixel, finds all peaks and matches each one with the most recent
+        green-up advanced event before it and the earliest green-down onset event
+        after it (within that same pixel). Peaks that cannot be fully bracketed are
+        dropped. Results from all pixels are then pooled into a single DataFrame.
+
+        Parameters
+        ----------
+        kde_df : pandas.DataFrame
+            Output of assemble_kde_data. Index is year.DOY (float), columns include
+            i, j (pixel indices), green_up_advanced (bool), peaks (float QA or NaN),
+            green_down_onset (bool).
+
+        Returns
+        -------
+        pandas.DataFrame
+            Columns:
+              green_up_advanced : float — year.DOY of the bracketing green-up advanced event.
+              peak_qa           : int   — QA indicator of the peak (0=Good, 1=Fair, 2=Poor).
+              green_down_onset  : float — year.DOY of the bracketing green-down onset event.
+            Each row is one fully-bracketed peak. Duplicates across pixels are retained.
+        """
+        rows = []
+
+        for _, pixel_df in kde_df.groupby(["i", "j"]):
+            adv_doys = np.sort(pixel_df.index[pixel_df["green_up_advanced"]].values)
+            onset_doys = np.sort(pixel_df.index[pixel_df["green_down_onset"]].values)
+            peak_df = pixel_df[pixel_df["peaks"].notna()]
+
+            for peak_doy, row in peak_df.iterrows():
+                adv_before = adv_doys[adv_doys < peak_doy]
+                if len(adv_before) == 0:
+                    continue
+                onset_after = onset_doys[onset_doys > peak_doy]
+                if len(onset_after) == 0:
+                    continue
+                rows.append({
+                    "green_up_advanced": adv_before[-1],
+                    "peak_qa": int(row["peaks"]),
+                    "green_down_onset": onset_after[0],
+                })
+
+        if not rows:
+            return pd.DataFrame(columns=["green_up_advanced", "peak_qa", "green_down_onset"])
+
+        return pd.DataFrame(rows)
+
+                
+
+
+
 
