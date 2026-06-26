@@ -2755,12 +2755,33 @@ class PhenologyVisualization:
         cbar.set_ticklabels(years)
 
 
+    def extract_pixel_timing_OHE(self, nc, i, j, vars= None, qa_var = 'pks'):
+        frames = {}
+        if vars is None:
+            vars = ['pks','trgs','midUP','midDOWN']
 
-   
+        for var in vars:
+            var = f.coerce_varname_to_var_x(var)
+    
+            var_raw = f.remove_nan(nc.variables[var][i,j,:])
+            if len(var_raw) <1:
+                continue
+            var_dt = pd.to_datetime(var_raw, unit='s',utc=True)
+            doy = var_dt.year + var_dt.day_of_year / 1000
+            frames[var] = pd.Series(index=doy,dtype=bool)
 
-
-
-
+        qa_var = f.parse_qa_var_from_str(qa_var)
+        if qa_var is not None:
+            qa_x = f.coerce_varname_to_var_x(qa_var)
+            qa_x_raw = np.array(nc.variables[qa_x][i, j, :])
+            qa_mask = ~np.isnan(qa_x_raw)
+            if len(qa_x_raw) <1:
+                pass
+            qa_dt = pd.to_datetime(qa_x_raw[qa_mask], unit="s", utc=True)
+            qa_doy = qa_dt.year + qa_dt.day_of_year / 1000
+            qa = np.array(nc.variables[qa_var][i, j, :])[qa_mask].astype(int)
+            frames[qa_var] = pd.Series(index=qa_doy, data= qa)
+        return pd.DataFrame(frames)
 
     def _extract_pixel_kde_events(self, nc, i, j, adv_var, pks_var, pks_qa_var, onset_var):
         """Extract green-up advanced, peak, and green-down onset events for a single pixel.
@@ -2787,6 +2808,7 @@ class PhenologyVisualization:
             Empty DataFrame if the pixel has no events.
         """
         frames = []
+
 
         adv_raw = f.remove_nan(nc.variables[adv_var][i, j, :])
         if len(adv_raw) > 0:
@@ -2825,6 +2847,7 @@ class PhenologyVisualization:
         if not frames:
             return pd.DataFrame(columns=["year.DOY", "i", "j", "primary", "qa_column", "secondary"])
         return pd.concat(frames, ignore_index=True)
+
 
     def assemble_kde_data(self, adv_var="green_up_advanced_x", pks_var="pks_x",
                           pks_qa_var="pks_qa", onset_var="green_down_onset_x"):
@@ -2925,6 +2948,36 @@ class PhenologyVisualization:
 
         return pd.DataFrame(rows)
     
+
+    # def find_preceding_and_following(df):
+    #     df = df.copy()
+
+    #     var1 = 'green_up_advanced_x'
+    #     var2 = 'green_down_onset_x'
+    #     # Mask where we care about QA
+    #     mask = df["pks_qa"].isin([0, 1])
+
+    #     # Forward-fill var1 timestamps (last valid previous)
+    #     prev_var1_time = df[var1].notna()
+    #     prev_var1_time = prev_var1_time.where(prev_var1_time).ffill()
+
+    #     # Backward-fill var2 timestamps (next valid future)
+    #     next_var2_time = df[var2].notna()
+    #     next_var2_time = next_var2_time.where(next_var2_time).bfill()
+
+    #     # But we actually want timestamps, not booleans
+    #     df["var1_time"] = df.index.where(df[var1].notna())
+    #     df["var2_time"] = df.index.where(df[var2].notna())
+
+    #     df["prev_var1_time"] = df["var1_time"].ffill()
+    #     df["next_var2_time"] = df["var2_time"].bfill()
+
+    #     # Keep only rows where QA is 0 or 1
+    #     result = df.loc[mask, ["prev_var1_time", "next_var2_time",'pks_qa']]
+
+    #     return result
+
+
     def sort_by_year(self, df, start_year=None, end_year=None):
         """Filter a prep_kde_data DataFrame to rows whose bloom overlaps [start_year, end_year].
 
@@ -2965,10 +3018,6 @@ class PhenologyVisualization:
             mask &= adv_year <= end_year
 
         return df[mask]
-
-
-
-
 
 
     def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999):

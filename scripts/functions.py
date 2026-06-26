@@ -1612,3 +1612,20 @@ def name_to_shortname(metadata_df, name:str):
         raise ValueError(f"Lake name {name} not found")
     return matches.iloc[0]
 
+
+def parse_qa_var_from_str(qa_var):
+    if 'pks' in qa_var:
+        qa_var = 'pks_qa'
+    elif 'trgs' in qa_var:
+        qa_var = 'trgs_qa'
+    else:
+        qa_var = None
+    return qa_var
+
+
+def coerce_varname_to_var_x(var):
+    if var.endswith(('_y','_qa')): # if provided a non-x variable, manipulate.
+        var = var.removesuffix('_qa').removesuffix('_y') + '_x'
+    elif not var.endswith('_x'):
+        var = var + '_x'
+    return var
