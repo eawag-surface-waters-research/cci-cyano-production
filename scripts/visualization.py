@@ -2768,93 +2768,6 @@ class PhenologyVisualization:
                 result[year] = year_counts
 
 
-    def lake_bloom_kde(self, fig, ax, start_year=None, end_year=None):
-        """Plot a 2D kernel density map of green onset vs green advanced DOY across all lake pixels.
-
-        Collects green onset and green advanced day-of-year values for every pixel
-        within the 1 km-inset lake boundary (prepped_geom), pairs them by year, and
-        renders a filled 2D KDE contour plot. Raw data points are overlaid as a
-        semi-transparent scatter.
-
-        Parameters
-        ----------
-        fig : matplotlib.figure.Figure
-            Figure used to attach the colorbar.
-        ax : matplotlib.axes.Axes
-            Axes on which to draw the KDE.
-        start_year : int, optional
-            First calendar year to include. None = all available years.
-        end_year : int, optional
-            Last calendar year to include. None = all available years.
-
-        Returns
-        -------
-        None
-        """
-        g = self._load_extracted_globals()
-        lats = g["lat"]
-        lons = g["lon"]
-
-        green_up_adv_doys = []
-        green_down_onset_doys = []
-
-        with netCDF4.Dataset(self.p_path) as nc:
-            for (i, j) in self.valid_coords:
-                if not self.prepped_geom.contains(Point(lons[j], lats[i])):
-                    continue
-
-                adv_raw = f.remove_nan(nc.variables["green_up_advanced_x"][i, j, :])
-                onset_raw = f.remove_nan(nc.variables["green_down_onset_x"][i, j, :])
-
-                if len(adv_raw) == 0 or len(onset_raw) == 0:
-                    continue
-
-                adv_dates = f.unix_to_datetime(adv_raw)
-                onset_dates = f.unix_to_datetime(onset_raw)
-
-                adv_by_year = {}
-                for d in adv_dates:
-                    adv_by_year.setdefault(d.year, []).append(d.timetuple().tm_yday)
-
-                onset_by_year = {}
-                for d in onset_dates:
-                    onset_by_year.setdefault(d.year, []).append(d.timetuple().tm_yday)
-
-                for year, adv_list in adv_by_year.items():
-                    if year not in onset_by_year:
-                        continue
-                    if start_year is not None and year < start_year:
-                        continue
-                    if end_year is not None and year > end_year:
-                        continue
-                    for adv, on in zip(adv_list, onset_by_year[year]):
-                        green_up_adv_doys.append(adv)
-                        green_down_onset_doys.append(on)
-
-        if len(green_up_adv_doys) < 2:
-            warnings.warn("Not enough paired green-up advanced / green-down onset values within the lake boundary for KDE.")
-            return
-
-        x = np.array(green_up_adv_doys, dtype=float)
-        y = np.array(green_down_onset_doys, dtype=float)
-
-        sns.kdeplot(x=x, y=y, ax=ax, fill=True, cmap="viridis", levels=20, thresh=0.05)
-        plt.axline([0,0], [1,1])
-        ax.axline(xy1=(0,365), slope=1)
-        #ax.scatter(x, y, s=3, alpha=0.25, color="grey", zorder=5)
-
-        # sm = plt.cm.ScalarMappable(cmap="viridis")
-        # sm.set_array(np.linspace(0, 1, 256))
-        # fig.colorbar(sm, ax=ax, label="Density")
-
-        # if start_year is not None or end_year is not None:
-        #     year_str = f"{start_year or ''}–{end_year or ''}"
-        # else:
-        #     year_str = "All years"
-        # ax.set_xlabel("Green-up Advanced (DOY)")
-        # ax.set_ylabel("Green-down Onset (DOY)")
-        # ax.set_title(f"Green-up Advanced vs Green-down Onset\nLake ID: {self.lakeID} | {year_str}")
-        # ax.grid(linewidth=0.5)
 
 
 
@@ -2980,8 +2893,92 @@ class PhenologyVisualization:
             return pd.DataFrame(columns=["green_up_advanced", "peak_qa", "green_down_onset"])
 
         return pd.DataFrame(rows)
+    
+    def sort_by_year(self, df, start_year=None, end_year=None):
+        """Filter a prep_kde_data DataFrame to rows whose bloom overlaps [start_year, end_year].
 
-                
+        Each row is treated as a triple (green_up_advanced, peak_qa, green_down_onset).
+        A row is kept when its bloom interval [adv_year, onset_year] overlaps the
+        requested range. Cross-year blooms (e.g. green_up_advanced in December,
+        green_down_onset in January of the next year) are included if either end
+        falls within the range — the whole triple is kept rather than dropped.
+
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            Output of prep_kde_data (columns: green_up_advanced, peak_qa, green_down_onset).
+        start_year : int or None
+            Earliest year to include. None means no lower bound.
+        end_year : int or None
+            Latest year to include. None means no upper bound.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Filtered copy of df.
+        """
+        if start_year is None and end_year is None:
+            return df
+
+    
+
+        adv_year = df["green_up_advanced"].astype(int)
+        onset_year = df["green_down_onset"].astype(int)
+
+        mask = pd.Series(True, index=df.index)
+        if start_year is not None:
+            # keep rows where the bloom ends at or after start_year
+            mask &= onset_year >= start_year
+        if end_year is not None:
+            # keep rows where the bloom begins at or before end_year
+            mask &= adv_year <= end_year
+
+        return df[mask]
+
+
+
+
+
+
+    def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999):
+        df = self.assemble_kde_data()
+        if not qa_value:
+            compressed_df = self.prep_kde_data(df)
+        else:
+            if type(qa_value) != set:
+                warnings.warn("qa_value needs to be a set")
+            else:
+                compressed_df = self.prep_kde_data(df)
+                compressed_df = compressed_df[compressed_df['peak_qa'].isin(qa_value)]
+
+        
+        if len(compressed_df) < 2:
+            warnings.warn("Not enough data to plot kde")
+            return
+        
+        years_all = np.unique(list(compressed_df["green_up_advanced"].astype(int) ) + list(compressed_df["green_down_onset"].astype(int) ))
+        start, end = f.define_year_range(start_year, end_year, years_all)
+        plot_df = self.sort_by_year(compressed_df, start_year=start, end_year=end)
+        
+
+
+        x = np.round((plot_df["green_up_advanced"].values % 1) * 1000).astype(int)
+        y = np.round((plot_df["green_down_onset"].values % 1) * 1000).astype(int)
+        
+
+        sns.kdeplot(x=x, y=y, ax=ax, fill=True, cmap="viridis", levels=20, thresh=0.05, cbar = True)
+        ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
+        ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")
+        
+     
+        ax.set_xlim(left=0)
+        ax.set_ylim(bottom=0)
+        ax.set_xlabel("Green-up Advanced (DOY)")
+        ax.set_ylabel("Green-down Onset (DOY)")
+        ax.set_title(f"Green-up Advanced vs Green-down Onset\nLake ID: {self.lakeID} | {start} - {end}")
+
+
+            
 
 
 
