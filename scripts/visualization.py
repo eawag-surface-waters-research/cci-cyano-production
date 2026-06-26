@@ -2756,16 +2756,7 @@ class PhenologyVisualization:
 
 
 
-    def lake_bloom_KDE(self, start_year, end_year):
-        result = {}
-        with netCDF4.Dataset(self.p_path) as nc:
-            pks_x = f.unix_to_datetime(f.remove_nan(nc.variables["pks_x"][:, :, :]))
-            trgs_x = f.unix_to_datetime(f.remove_nan(nc.variables["trgs_x"][:, :, :]))
-
-            for year in range(start_year, end_year + 1):
-                year_counts = []
-
-                result[year] = year_counts
+   
 
 
 
@@ -2803,9 +2794,9 @@ class PhenologyVisualization:
             frames.append(pd.DataFrame({
                 "year.DOY": adv_dt.year + adv_dt.day_of_year / 1000,
                 "i": i, "j": j,
-                "green_up_advanced": True,
-                "peaks": np.nan,
-                "green_down_onset": False,
+                "primary": True,
+                "qa_column": np.nan,
+                "secondary": False,
             }))
 
         pks_x_raw = np.array(nc.variables[pks_var][i, j, :])
@@ -2815,9 +2806,9 @@ class PhenologyVisualization:
             frames.append(pd.DataFrame({
                 "year.DOY": pks_dt.year + pks_dt.day_of_year / 1000,
                 "i": i, "j": j,
-                "green_up_advanced": False,
-                "peaks": np.array(nc.variables[pks_qa_var][i, j, :])[pk_mask].astype(int),
-                "green_down_onset": False,
+                "primary": False,
+                "qa_column": np.array(nc.variables[pks_qa_var][i, j, :])[pk_mask].astype(int),
+                "secondary": False,
             }))
 
         onset_raw = f.remove_nan(nc.variables[onset_var][i, j, :])
@@ -2826,13 +2817,13 @@ class PhenologyVisualization:
             frames.append(pd.DataFrame({
                 "year.DOY": onset_dt.year + onset_dt.day_of_year / 1000,
                 "i": i, "j": j,
-                "green_up_advanced": False,
-                "peaks": np.nan,
-                "green_down_onset": True,
+                "primary": False,
+                "qa_column": np.nan,
+                "secondary": True,
             }))
 
         if not frames:
-            return pd.DataFrame(columns=["year.DOY", "i", "j", "green_up_advanced", "peaks", "green_down_onset"])
+            return pd.DataFrame(columns=["year.DOY", "i", "j", "primary", "qa_column", "secondary"])
         return pd.concat(frames, ignore_index=True)
 
     def assemble_kde_data(self, adv_var="green_up_advanced_x", pks_var="pks_x",
@@ -2880,7 +2871,7 @@ class PhenologyVisualization:
                     frames.append(pixel_df)
 
         if not frames:
-            return pd.DataFrame(columns=["i", "j", "green_up_advanced", "peaks", "green_down_onset"])
+            return pd.DataFrame(columns=["i", "j", "primary", "qa_column", "secondary"])
 
         return pd.concat(frames, ignore_index=True).set_index("year.DOY")
 
@@ -2912,9 +2903,9 @@ class PhenologyVisualization:
         rows = []
 
         for _, pixel_df in kde_df.groupby(["i", "j"]):
-            adv_doys = np.sort(pixel_df.index[pixel_df["green_up_advanced"]].values)
-            onset_doys = np.sort(pixel_df.index[pixel_df["green_down_onset"]].values)
-            peak_df = pixel_df[pixel_df["peaks"].notna()]
+            adv_doys = np.sort(pixel_df.index[pixel_df["primary"].fillna(False).astype(bool)].values)
+            onset_doys = np.sort(pixel_df.index[pixel_df["secondary"].fillna(False).astype(bool)].values)
+            peak_df = pixel_df[pixel_df["qa_column"].notna()]
 
             for peak_doy, row in peak_df.iterrows():
                 adv_before = adv_doys[adv_doys < peak_doy]
@@ -2924,13 +2915,13 @@ class PhenologyVisualization:
                 if len(onset_after) == 0:
                     continue
                 rows.append({
-                    "green_up_advanced": adv_before[-1],
-                    "peak_qa": int(row["peaks"]),
-                    "green_down_onset": onset_after[0],
+                    "primary": adv_before[-1],
+                    "qa_column": int(row["qa_column"]),
+                    "secondary": onset_after[0],
                 })
 
         if not rows:
-            return pd.DataFrame(columns=["green_up_advanced", "peak_qa", "green_down_onset"])
+            return pd.DataFrame(columns=["primary", "qa_column", "secondary"])
 
         return pd.DataFrame(rows)
     
@@ -2962,8 +2953,8 @@ class PhenologyVisualization:
 
     
 
-        adv_year = df["green_up_advanced"].astype(int)
-        onset_year = df["green_down_onset"].astype(int)
+        adv_year = df["primary"].astype(int)
+        onset_year = df["secondary"].astype(int)
 
         mask = pd.Series(True, index=df.index)
         if start_year is not None:
@@ -2989,21 +2980,21 @@ class PhenologyVisualization:
                 warnings.warn("qa_value needs to be a set")
             else:
                 compressed_df = self.prep_kde_data(df)
-                compressed_df = compressed_df[compressed_df['peak_qa'].isin(qa_value)]
+                compressed_df = compressed_df[compressed_df['qa_column'].isin(qa_value)]
 
         
         if len(compressed_df) < 2:
             warnings.warn("Not enough data to plot kde")
             return
         
-        years_all = np.unique(list(compressed_df["green_up_advanced"].astype(int) ) + list(compressed_df["green_down_onset"].astype(int) ))
+        years_all = np.unique(list(compressed_df["primary"].astype(int) ) + list(compressed_df["secondary"].astype(int) ))
         start, end = f.define_year_range(start_year, end_year, years_all)
         plot_df = self.sort_by_year(compressed_df, start_year=start, end_year=end)
         
 
 
-        x = np.round((plot_df["green_up_advanced"].values % 1) * 1000).astype(int)
-        y = np.round((plot_df["green_down_onset"].values % 1) * 1000).astype(int)
+        x = np.round((plot_df["primary"].values % 1) * 1000).astype(int)
+        y = np.round((plot_df["secondary"].values % 1) * 1000).astype(int)
         
 
         sns.kdeplot(x=x, y=y, ax=ax, fill=True, cmap="viridis", levels=20, thresh=0.05, cbar = True)
