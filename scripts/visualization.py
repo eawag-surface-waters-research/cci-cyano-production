@@ -2771,11 +2771,87 @@ class PhenologyVisualization:
 
 
 
-    def assemble_kde_data(self):
+    def _extract_pixel_kde_events(self, nc, i, j, adv_var, pks_var, pks_qa_var, onset_var):
+        """Extract green-up advanced, peak, and green-down onset events for a single pixel.
+
+        Parameters
+        ----------
+        nc : netCDF4.Dataset
+            Open phenology dataset.
+        i, j : int
+            Pixel row and column indices.
+        adv_var : str
+            NetCDF variable name for green-up advanced timestamps.
+        pks_var : str
+            NetCDF variable name for peak timestamps.
+        pks_qa_var : str
+            NetCDF variable name for peak QA values.
+        onset_var : str
+            NetCDF variable name for green-down onset timestamps.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Columns: year.DOY, i, j, green_up_advanced, peaks, green_down_onset.
+            Empty DataFrame if the pixel has no events.
+        """
+        frames = []
+
+        adv_raw = f.remove_nan(nc.variables[adv_var][i, j, :])
+        if len(adv_raw) > 0:
+            adv_dt = pd.to_datetime(adv_raw, unit="s", utc=True)
+            frames.append(pd.DataFrame({
+                "year.DOY": adv_dt.year + adv_dt.day_of_year / 1000,
+                "i": i, "j": j,
+                "green_up_advanced": True,
+                "peaks": np.nan,
+                "green_down_onset": False,
+            }))
+
+        pks_x_raw = np.array(nc.variables[pks_var][i, j, :])
+        pk_mask = ~np.isnan(pks_x_raw)
+        if pk_mask.any():
+            pks_dt = pd.to_datetime(pks_x_raw[pk_mask], unit="s", utc=True)
+            frames.append(pd.DataFrame({
+                "year.DOY": pks_dt.year + pks_dt.day_of_year / 1000,
+                "i": i, "j": j,
+                "green_up_advanced": False,
+                "peaks": np.array(nc.variables[pks_qa_var][i, j, :])[pk_mask].astype(int),
+                "green_down_onset": False,
+            }))
+
+        onset_raw = f.remove_nan(nc.variables[onset_var][i, j, :])
+        if len(onset_raw) > 0:
+            onset_dt = pd.to_datetime(onset_raw, unit="s", utc=True)
+            frames.append(pd.DataFrame({
+                "year.DOY": onset_dt.year + onset_dt.day_of_year / 1000,
+                "i": i, "j": j,
+                "green_up_advanced": False,
+                "peaks": np.nan,
+                "green_down_onset": True,
+            }))
+
+        if not frames:
+            return pd.DataFrame(columns=["year.DOY", "i", "j", "green_up_advanced", "peaks", "green_down_onset"])
+        return pd.concat(frames, ignore_index=True)
+
+    def assemble_kde_data(self, adv_var="green_up_advanced_x", pks_var="pks_x",
+                          pks_qa_var="pks_qa", onset_var="green_down_onset_x"):
         """Collect green-up advanced, peak, and green-down onset events lake-wide into a DataFrame.
 
         Iterates all valid pixels inside the 1 km-inset lake boundary and gathers
         three phenological event types. Each row represents one event occurrence.
+
+        Parameters
+        ----------
+        adv_var : str
+            NetCDF variable name for green-up advanced timestamps.
+        pks_var : str
+            NetCDF variable name for peak timestamps.
+        pks_qa_var : str
+            NetCDF variable name for peak QA values.
+        onset_var : str
+            NetCDF variable name for green-down onset timestamps.
 
         Returns
         -------
@@ -2793,56 +2869,20 @@ class PhenologyVisualization:
         lats = g["lat"]
         lons = g["lon"]
 
-        rows = []
+        frames = []
 
         with netCDF4.Dataset(self.p_path) as nc:
             for (i, j) in self.valid_coords:
                 if not self.prepped_geom.contains(Point(lons[j], lats[i])):
                     continue
+                pixel_df = self._extract_pixel_kde_events(nc, i, j, adv_var, pks_var, pks_qa_var, onset_var)
+                if not pixel_df.empty:
+                    frames.append(pixel_df)
 
-                adv_raw = f.remove_nan(nc.variables["green_up_advanced_x"][i, j, :])
-                if len(adv_raw) > 0:
-                    for d in f.unix_to_datetime(adv_raw):
-                        doy = d.timetuple().tm_yday
-                        rows.append({
-                            "year.DOY": d.year + doy / 1000,
-                            "i": i, "j": j,
-                            "green_up_advanced": True,
-                            "peaks": np.nan,
-                            "green_down_onset": False,
-                        })
-
-                pks_x_raw = np.array(nc.variables["pks_x"][i, j, :])
-                pk_mask = ~np.isnan(pks_x_raw)
-                if pk_mask.any():
-                    pks_qa = np.array(nc.variables["pks_qa"][i, j, :])[pk_mask]
-                    for d, qa in zip(f.unix_to_datetime(pks_x_raw[pk_mask]), pks_qa):
-                        doy = d.timetuple().tm_yday
-                        rows.append({
-                            "year.DOY": d.year + doy / 1000,
-                            "i": i, "j": j,
-                            "green_up_advanced": False,
-                            "peaks": int(qa),
-                            "green_down_onset": False,
-                        })
-
-                onset_raw = f.remove_nan(nc.variables["green_down_onset_x"][i, j, :])
-                if len(onset_raw) > 0:
-                    for d in f.unix_to_datetime(onset_raw):
-                        doy = d.timetuple().tm_yday
-                        rows.append({
-                            "year.DOY": d.year + doy / 1000,
-                            "i": i, "j": j,
-                            "green_up_advanced": False,
-                            "peaks": np.nan,
-                            "green_down_onset": True,
-                        })
-
-        if not rows:
+        if not frames:
             return pd.DataFrame(columns=["i", "j", "green_up_advanced", "peaks", "green_down_onset"])
 
-        df = pd.DataFrame(rows).set_index("year.DOY")
-        return df
+        return pd.concat(frames, ignore_index=True).set_index("year.DOY")
 
 
     def prep_kde_data(self, kde_df):
