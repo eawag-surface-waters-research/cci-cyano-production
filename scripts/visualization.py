@@ -2783,8 +2783,10 @@ class PhenologyVisualization:
             frames[qa_var] = pd.Series(index=qa_doy, data= qa)
         return pd.DataFrame(frames)
 
-    def _extract_pixel_kde_events(self, nc, i, j, adv_var, pks_var, pks_qa_var, onset_var):
-        """Extract green-up advanced, peak, and green-down onset events for a single pixel.
+    def _extract_pixel_kde_events(self, nc, i, j,
+                                   primary_vars=None, secondary_vars=None,
+                                   qa_var="pks"):
+        """Extract bracketing and peak events for a single pixel.
 
         Parameters
         ----------
@@ -2792,14 +2794,15 @@ class PhenologyVisualization:
             Open phenology dataset.
         i, j : int
             Pixel row and column indices.
-        adv_var : str
-            NetCDF variable name for green-up advanced timestamps.
-        pks_var : str
-            NetCDF variable name for peak timestamps.
-        pks_qa_var : str
-            NetCDF variable name for peak QA values.
-        onset_var : str
-            NetCDF variable name for green-down onset timestamps.
+        primary_vars : list of str, optional
+            NetCDF variable names whose events mark the start of a bloom bracket
+            (e.g. green-up). Defaults to ['green_up_advanced'].
+        secondary_vars : list of str, optional
+            NetCDF variable names whose events mark the end of a bloom bracket
+            (e.g. green-down onset). Defaults to ['green_down_onset'].
+        qa_var : str, optional
+            Short name for the peak QA variable (passed through parse_qa_var_from_str).
+            Defaults to 'pks'.
 
         Returns
         -------
@@ -2807,37 +2810,50 @@ class PhenologyVisualization:
             Columns: year.DOY, i, j, green_up_advanced, peaks, green_down_onset.
             Empty DataFrame if the pixel has no events.
         """
+        if primary_vars is None:
+            primary_vars = ["green_up_advanced"]
+        if secondary_vars is None:
+            secondary_vars = ["green_down_onset"]
+
         frames = []
 
-
-        adv_raw = f.remove_nan(nc.variables[adv_var][i, j, :])
-        if len(adv_raw) > 0:
-            adv_dt = pd.to_datetime(adv_raw, unit="s", utc=True)
+        for var in primary_vars:
+            var_x = f.coerce_varname_to_var_x(var)
+            raw = f.remove_nan(nc.variables[var_x][i, j, :])
+            if len(raw) == 0:
+                continue
+            dt = pd.to_datetime(raw, unit="s", utc=True)
             frames.append(pd.DataFrame({
-                "year.DOY": adv_dt.year + adv_dt.day_of_year / 1000,
+                "year.DOY": dt.year + dt.day_of_year / 1000,
                 "i": i, "j": j,
                 "primary": True,
                 "qa_column": np.nan,
                 "secondary": False,
             }))
 
-        pks_x_raw = np.array(nc.variables[pks_var][i, j, :])
-        pk_mask = ~np.isnan(pks_x_raw)
-        if pk_mask.any():
-            pks_dt = pd.to_datetime(pks_x_raw[pk_mask], unit="s", utc=True)
-            frames.append(pd.DataFrame({
-                "year.DOY": pks_dt.year + pks_dt.day_of_year / 1000,
-                "i": i, "j": j,
-                "primary": False,
-                "qa_column": np.array(nc.variables[pks_qa_var][i, j, :])[pk_mask].astype(int),
-                "secondary": False,
-            }))
+        qa_var_parsed = f.parse_qa_var_from_str(qa_var)
+        if qa_var_parsed is not None:
+            qa_x = f.coerce_varname_to_var_x(qa_var_parsed)
+            qa_x_raw = np.array(nc.variables[qa_x][i, j, :])
+            pk_mask = ~np.isnan(qa_x_raw)
+            if pk_mask.any():
+                pks_dt = pd.to_datetime(qa_x_raw[pk_mask], unit="s", utc=True)
+                frames.append(pd.DataFrame({
+                    "year.DOY": pks_dt.year + pks_dt.day_of_year / 1000,
+                    "i": i, "j": j,
+                    "primary": False,
+                    "qa_column": np.array(nc.variables[qa_var_parsed][i, j, :])[pk_mask].astype(int),
+                    "secondary": False,
+                }))
 
-        onset_raw = f.remove_nan(nc.variables[onset_var][i, j, :])
-        if len(onset_raw) > 0:
-            onset_dt = pd.to_datetime(onset_raw, unit="s", utc=True)
+        for var in secondary_vars:
+            var_x = f.coerce_varname_to_var_x(var)
+            raw = f.remove_nan(nc.variables[var_x][i, j, :])
+            if len(raw) == 0:
+                continue
+            dt = pd.to_datetime(raw, unit="s", utc=True)
             frames.append(pd.DataFrame({
-                "year.DOY": onset_dt.year + onset_dt.day_of_year / 1000,
+                "year.DOY": dt.year + dt.day_of_year / 1000,
                 "i": i, "j": j,
                 "primary": False,
                 "qa_column": np.nan,
@@ -2858,26 +2874,20 @@ class PhenologyVisualization:
 
         Parameters
         ----------
-        adv_var : str
-            NetCDF variable name for green-up advanced timestamps.
-        pks_var : str
-            NetCDF variable name for peak timestamps.
-        pks_qa_var : str
-            NetCDF variable name for peak QA values.
-        onset_var : str
-            NetCDF variable name for green-down onset timestamps.
+        primary_vars : list of str, optional
+            Variables marking the start of a bloom bracket. Defaults to ['green_up_advanced'].
+        secondary_vars : list of str, optional
+            Variables marking the end of a bloom bracket. Defaults to ['green_down_onset'].
+        qa_var : str, optional
+            Short name for the peak QA variable. Defaults to 'pks'.
 
         Returns
         -------
         pandas.DataFrame
             Index named 'year.DOY' — a float of the form year + DOY/1000
             (e.g. 2005.150 = year 2005, day-of-year 150).
-            Columns:
-              green_up_advanced : bool   — True for green-up advanced events, False otherwise.
-              peaks             : float  — QA indicator (0=Good, 1=Fair, 2=Poor) for peak
-                                          events, np.nan otherwise.
-              green_down_onset  : bool   — True for green-down onset events, False otherwise.
-            Row count equals the total number of events across all three variables and pixels.
+            Columns: i, j, primary (bool), qa_column (float), secondary (bool).
+            Row count equals the total number of events across all variables and pixels.
         """
         g = self._load_extracted_globals()
         lats = g["lat"]
@@ -2889,7 +2899,7 @@ class PhenologyVisualization:
             for (i, j) in self.valid_coords:
                 if not self.prepped_geom.contains(Point(lons[j], lats[i])):
                     continue
-                pixel_df = self._extract_pixel_kde_events(nc, i, j, adv_var, pks_var, pks_qa_var, onset_var)
+                pixel_df = self._extract_pixel_kde_events(nc, i, j, primary_vars, secondary_vars, qa_var)
                 if not pixel_df.empty:
                     frames.append(pixel_df)
 
