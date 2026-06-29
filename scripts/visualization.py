@@ -2923,59 +2923,55 @@ class PhenologyVisualization:
               green_down_onset  : float — year.DOY of the bracketing green-down onset event.
             Each row is one fully-bracketed peak. Duplicates across pixels are retained.
         """
-        rows = []
+        frames = []
 
         for _, pixel_df in kde_df.groupby(["i", "j"]):
-            adv_doys = np.sort(pixel_df.index[pixel_df["primary"].fillna(False).astype(bool)].values)
-            onset_doys = np.sort(pixel_df.index[pixel_df["secondary"].fillna(False).astype(bool)].values)
-            peak_df = pixel_df[pixel_df["qa_column"].notna()]
+            bracketed = self.find_preceding_and_following(pixel_df.sort_index()).dropna(
+                subset=["prev_var1_time", "next_var2_time"]
+            )
+            if bracketed.empty:
+                continue
+            bracketed = bracketed.rename(columns={
+                "prev_var1_time": "primary",
+                "next_var2_time": "secondary",
+            })
+            bracketed["qa_column"] = bracketed["qa_column"].astype(int)
+            frames.append(bracketed[["primary", "qa_column", "secondary"]])
 
-            for peak_doy, row in peak_df.iterrows():
-                adv_before = adv_doys[adv_doys < peak_doy]
-                if len(adv_before) == 0:
-                    continue
-                onset_after = onset_doys[onset_doys > peak_doy]
-                if len(onset_after) == 0:
-                    continue
-                rows.append({
-                    "primary": adv_before[-1],
-                    "qa_column": int(row["qa_column"]),
-                    "secondary": onset_after[0],
-                })
-
-        if not rows:
+        if not frames:
             return pd.DataFrame(columns=["primary", "qa_column", "secondary"])
 
-        return pd.DataFrame(rows)
+        return pd.concat(frames, ignore_index=True)
     
 
-    # def find_preceding_and_following(df):
-    #     df = df.copy()
+    @staticmethod
+    def find_preceding_and_following(pixel_df):
+        """Vectorized bracket-finder for a single pixel's long-format event DataFrame.
 
-    #     var1 = 'green_up_advanced_x'
-    #     var2 = 'green_down_onset_x'
-    #     # Mask where we care about QA
-    #     mask = df["pks_qa"].isin([0, 1])
+        For each peak row (qa_column not NaN), finds the most recent preceding
+        green_up_advanced event (primary=True) and the earliest following
+        green_down_onset event (secondary=True) using ffill/bfill on the year.DOY index.
 
-    #     # Forward-fill var1 timestamps (last valid previous)
-    #     prev_var1_time = df[var1].notna()
-    #     prev_var1_time = prev_var1_time.where(prev_var1_time).ffill()
+        Parameters
+        ----------
+        pixel_df : pandas.DataFrame
+            Single-pixel slice of the output of assemble_kde_data. Index is year.DOY,
+            columns include primary (bool), qa_column (float), secondary (bool).
 
-    #     # Backward-fill var2 timestamps (next valid future)
-    #     next_var2_time = df[var2].notna()
-    #     next_var2_time = next_var2_time.where(next_var2_time).bfill()
-
-    #     # But we actually want timestamps, not booleans
-    #     df["var1_time"] = df.index.where(df[var1].notna())
-    #     df["var2_time"] = df.index.where(df[var2].notna())
-
-    #     df["prev_var1_time"] = df["var1_time"].ffill()
-    #     df["next_var2_time"] = df["var2_time"].bfill()
-
-    #     # Keep only rows where QA is 0 or 1
-    #     result = df.loc[mask, ["prev_var1_time", "next_var2_time",'pks_qa']]
-
-    #     return result
+        Returns
+        -------
+        pandas.DataFrame
+            Columns: prev_var1_time, next_var2_time, qa_column.
+            Only peak rows are returned; NaN in either bracket column means
+            the peak is not fully bracketed.
+        """
+        df = pixel_df.copy()
+        df["var1_time"] = df.index.where(df["primary"].fillna(False).astype(bool))
+        df["var2_time"] = df.index.where(df["secondary"].fillna(False).astype(bool))
+        df["prev_var1_time"] = df["var1_time"].ffill()
+        df["next_var2_time"] = df["var2_time"].bfill()
+        mask = df["qa_column"].notna()
+        return df.loc[mask, ["prev_var1_time", "next_var2_time", "qa_column"]]
 
 
     def sort_by_year(self, df, start_year=None, end_year=None):
@@ -3003,8 +2999,6 @@ class PhenologyVisualization:
         """
         if start_year is None and end_year is None:
             return df
-
-    
 
         adv_year = df["primary"].astype(int)
         onset_year = df["secondary"].astype(int)
