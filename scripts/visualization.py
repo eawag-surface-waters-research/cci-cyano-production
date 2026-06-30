@@ -16,7 +16,7 @@ import warnings
 from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib.patches import Rectangle, Patch
 from sklearn.metrics import mean_squared_error, r2_score
-from scipy.stats import pearsonr
+from scipy.stats import pearsonr, gaussian_kde
 from csaps import csaps
 import functions as f
 import multiprocessing
@@ -29,7 +29,7 @@ from shapely.geometry import Point
 from shapely import vectorized
 from numpy.lib.stride_tricks import sliding_window_view
 import colorcet as cc
-import seaborn as sns
+import time
 
 
 
@@ -82,6 +82,24 @@ def _init_worker(p_path, e_path):
     _GLOBALS["lats"] = lats
     _GLOBALS["lons"] = lons
 
+
+def _init_kde_worker(p_path, var_names):
+    """Initialise per-process globals for KDE pixel extraction.
+
+    Called once per worker process by multiprocessing.Pool. Preloads all
+    required phenology arrays as numpy arrays so per-pixel work is pure
+    in-memory indexing with no NetCDF I/O in the hot path.
+
+    Parameters
+    ----------
+    p_path : str
+        Path to the phenology NetCDF file.
+    var_names : list of str
+        NetCDF variable names to preload (determined by assemble_kde_data).
+    """
+    with netCDF4.Dataset(p_path) as nc:
+        for var in var_names:
+            _GLOBALS[f"kde_{var}"] = np.asarray(nc.variables[var][:])
 
 
 # color_sets_4x4: bivariate color palettes for the 4×4 heatmap legend.
@@ -219,7 +237,7 @@ class PhenologyVisualization:
             self.gdf = geopandas.read_file(self.shapefile_path)
         self.p_path = phenology_path
         self.e_path = extract_path
-        self.version = Path(self.p_path).parents[2].stem.removeprefix('v')
+        self.version = Path(self.p_path).parents[2].name.removeprefix('v')
         self.variable = Path(self.p_path).parents[0].stem
         self.lakeID = Path(self.p_path).stem
         # self.lakename = lakeID_to_name(self.gdf,self.lakeID)
@@ -236,6 +254,30 @@ class PhenologyVisualization:
         self._lake_cache = {}
         self.prep_geometry_from_shapefile()
         self.extract_nonborder_coords()
+
+    def ID_to_name(self, id):
+        """Return the lake name for a given lake ID from the shapefile.
+
+        Parameters
+        ----------
+        id : int
+            Lake ID matching the 'id' column in the CCI shapefile.
+
+        Returns
+        -------
+        str
+            Lake name from the 'name' column.
+
+        Raises
+        ------
+        ValueError
+            If the ID is not found in the shapefile.
+        """
+        matches = self.gdf.loc[self.gdf["id"] == int(id), "name"]
+        if matches.empty:
+            raise ValueError(f"Lake ID {id} not found in shapefile.")
+        return matches.iloc[0]
+
 
     def index_to_lat_lon(self, lat_index, lon_index):
         """Return the geographic coordinates for a grid index pair.
@@ -601,7 +643,26 @@ class PhenologyVisualization:
             fname = f"ts_{start}_to_{end}.csv"
         
         return base, os.path.join(base, fname)
-            
+
+    def build_kde_path(self):
+        """Return the output directory and file path for the cached KDE events CSV.
+
+        Returns
+        -------
+        base : str
+            Directory path where the CSV will be written.
+        file_path : str
+            Full path to the CSV file.
+        """
+        lake_name = self.ID_to_name(int(self.lakeID)).replace(" ", "")
+        base = os.path.join(
+            self.out_folder.parents[1], "lake_analysis",
+             f"ID{self.lakeID}_{lake_name}", "calculated_values", "kde_data",
+            f"v{self.version}", self.variable,
+        )
+        base, path =  base, os.path.join(base, "kde_events.csv")
+        print(path)
+        return base, path
 
     def compute_and_cache_metric(self, metric_name, col_name, compute_fn, start=0, end=9999):
         """Compute a metric for all valid pixels in parallel and cache to CSV.
@@ -2809,23 +2870,30 @@ class PhenologyVisualization:
             frames[qa_var] = pd.Series(index=qa_doy, data= qa)
         return pd.DataFrame(frames)
 
-    def _extract_pixel_kde_events(self, nc, i, j, adv_var, pks_var, pks_qa_var, onset_var):
-        """Extract green-up advanced, peak, and green-down onset events for a single pixel.
+    def _extract_pixel_kde_events(self, nc, i, j,
+                                   primary_vars=None, secondary_vars=None,
+                                   qa_var="pks", arrays=None):
+        """Extract bracketing and peak events for a single pixel.
 
         Parameters
         ----------
-        nc : netCDF4.Dataset
-            Open phenology dataset.
+        nc : netCDF4.Dataset or None
+            Open phenology dataset. Ignored when arrays is provided.
         i, j : int
             Pixel row and column indices.
-        adv_var : str
-            NetCDF variable name for green-up advanced timestamps.
-        pks_var : str
-            NetCDF variable name for peak timestamps.
-        pks_qa_var : str
-            NetCDF variable name for peak QA values.
-        onset_var : str
-            NetCDF variable name for green-down onset timestamps.
+        primary_vars : list of str, optional
+            NetCDF variable names whose events mark the start of a bloom bracket
+            (e.g. green-up). Defaults to ['green_up_advanced'].
+        secondary_vars : list of str, optional
+            NetCDF variable names whose events mark the end of a bloom bracket
+            (e.g. green-down onset). Defaults to ['green_down_onset'].
+        qa_var : str, optional
+            Short name for the peak QA variable (passed through parse_qa_var_from_str).
+            Defaults to 'pks'.
+        arrays : dict of str -> np.ndarray, optional
+            Preloaded full arrays keyed by NetCDF variable name. When provided,
+            pixel slices are taken from these in-memory arrays instead of reading
+            from nc, which is the fast path used by _kde_pixel_worker.
 
         Returns
         -------
@@ -2833,37 +2901,55 @@ class PhenologyVisualization:
             Columns: year.DOY, i, j, green_up_advanced, peaks, green_down_onset.
             Empty DataFrame if the pixel has no events.
         """
+        if primary_vars is None:
+            primary_vars = ["green_up_advanced"]
+        if secondary_vars is None:
+            secondary_vars = ["green_down_onset"]
+
+        def _get(var_name):
+            if arrays is not None:
+                return arrays[var_name][i, j, :]
+            return nc.variables[var_name][i, j, :]
+
         frames = []
 
-
-        adv_raw = f.remove_nan(nc.variables[adv_var][i, j, :])
-        if len(adv_raw) > 0:
-            adv_dt = pd.to_datetime(adv_raw, unit="s", utc=True)
+        for var in primary_vars:
+            var_x = f.coerce_varname_to_var_x(var)
+            raw = f.remove_nan(_get(var_x))
+            if len(raw) == 0:
+                continue
+            dt = pd.to_datetime(raw, unit="s", utc=True)
             frames.append(pd.DataFrame({
-                "year.DOY": adv_dt.year + adv_dt.day_of_year / 1000,
+                "year.DOY": dt.year + dt.day_of_year / 1000,
                 "i": i, "j": j,
                 "primary": True,
                 "qa_column": np.nan,
                 "secondary": False,
             }))
 
-        pks_x_raw = np.array(nc.variables[pks_var][i, j, :])
-        pk_mask = ~np.isnan(pks_x_raw)
-        if pk_mask.any():
-            pks_dt = pd.to_datetime(pks_x_raw[pk_mask], unit="s", utc=True)
-            frames.append(pd.DataFrame({
-                "year.DOY": pks_dt.year + pks_dt.day_of_year / 1000,
-                "i": i, "j": j,
-                "primary": False,
-                "qa_column": np.array(nc.variables[pks_qa_var][i, j, :])[pk_mask].astype(int),
-                "secondary": False,
-            }))
+        qa_var_parsed = f.parse_qa_var_from_str(qa_var)
+        if qa_var_parsed is not None:
+            qa_x = f.coerce_varname_to_var_x(qa_var_parsed)
+            qa_x_raw = np.array(_get(qa_x))
+            pk_mask = ~np.isnan(qa_x_raw)
+            if pk_mask.any():
+                pks_dt = pd.to_datetime(qa_x_raw[pk_mask], unit="s", utc=True)
+                frames.append(pd.DataFrame({
+                    "year.DOY": pks_dt.year + pks_dt.day_of_year / 1000,
+                    "i": i, "j": j,
+                    "primary": False,
+                    "qa_column": np.array(_get(qa_var_parsed))[pk_mask].astype(int),
+                    "secondary": False,
+                }))
 
-        onset_raw = f.remove_nan(nc.variables[onset_var][i, j, :])
-        if len(onset_raw) > 0:
-            onset_dt = pd.to_datetime(onset_raw, unit="s", utc=True)
+        for var in secondary_vars:
+            var_x = f.coerce_varname_to_var_x(var)
+            raw = f.remove_nan(_get(var_x))
+            if len(raw) == 0:
+                continue
+            dt = pd.to_datetime(raw, unit="s", utc=True)
             frames.append(pd.DataFrame({
-                "year.DOY": onset_dt.year + onset_dt.day_of_year / 1000,
+                "year.DOY": dt.year + dt.day_of_year / 1000,
                 "i": i, "j": j,
                 "primary": False,
                 "qa_column": np.nan,
@@ -2874,54 +2960,97 @@ class PhenologyVisualization:
             return pd.DataFrame(columns=["year.DOY", "i", "j", "primary", "qa_column", "secondary"])
         return pd.concat(frames, ignore_index=True)
 
+    @staticmethod
+    def _kde_pixel_worker(coord, primary_vars, secondary_vars, qa_var):
+        """Multiprocessing worker for a single pixel's KDE event extraction.
 
-    def assemble_kde_data(self, adv_var="green_up_advanced_x", pks_var="pks_x",
-                          pks_qa_var="pks_qa", onset_var="green_down_onset_x"):
-        """Collect green-up advanced, peak, and green-down onset events lake-wide into a DataFrame.
-
-        Iterates all valid pixels inside the 1 km-inset lake boundary and gathers
-        three phenological event types. Each row represents one event occurrence.
+        Uses preloaded numpy arrays from _GLOBALS (populated by _init_kde_worker)
+        for pure in-memory indexing — no NetCDF I/O in the hot path.
 
         Parameters
         ----------
-        adv_var : str
-            NetCDF variable name for green-up advanced timestamps.
-        pks_var : str
-            NetCDF variable name for peak timestamps.
-        pks_qa_var : str
-            NetCDF variable name for peak QA values.
-        onset_var : str
-            NetCDF variable name for green-down onset timestamps.
+        coord : tuple of int
+            (i, j) grid index pair.
+        primary_vars, secondary_vars : list of str
+            Passed through to the extraction logic.
+        qa_var : str
+            Short name for the peak QA variable.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Same schema as _extract_pixel_kde_events; empty if no events found.
+        """
+        i, j = coord
+        arrays = {k[4:]: v for k, v in _GLOBALS.items() if k.startswith("kde_")}
+        return PhenologyVisualization._extract_pixel_kde_events(
+            None, None, i, j, primary_vars, secondary_vars, qa_var, arrays=arrays
+        )
+
+    def assemble_kde_data(self, primary_vars=None, secondary_vars=None, qa_var="pks"):
+        """Collect bracketing and peak events lake-wide into a DataFrame.
+
+        Iterates all valid pixels inside the 1 km-inset lake boundary and gathers
+        events for each variable type. Each row represents one event occurrence.
+
+        Parameters
+        ----------
+        primary_vars : list of str, optional
+            Variables marking the start of a bloom bracket. Defaults to ['green_up_advanced'].
+        secondary_vars : list of str, optional
+            Variables marking the end of a bloom bracket. Defaults to ['green_down_onset'].
+        qa_var : str, optional
+            Short name for the peak QA variable. Defaults to 'pks'.
 
         Returns
         -------
         pandas.DataFrame
             Index named 'year.DOY' — a float of the form year + DOY/1000
             (e.g. 2005.150 = year 2005, day-of-year 150).
-            Columns:
-              green_up_advanced : bool   — True for green-up advanced events, False otherwise.
-              peaks             : float  — QA indicator (0=Good, 1=Fair, 2=Poor) for peak
-                                          events, np.nan otherwise.
-              green_down_onset  : bool   — True for green-down onset events, False otherwise.
-            Row count equals the total number of events across all three variables and pixels.
+            Columns: i, j, primary (bool), qa_column (float), secondary (bool).
+            Row count equals the total number of events across all variables and pixels.
         """
+
+        print(f"assemble kde started at: {datetime.datetime.now()}")
         g = self._load_extracted_globals()
         lats = g["lat"]
         lons = g["lon"]
 
-        frames = []
+        inset_coords = [
+            (i, j) for (i, j) in self.valid_coords
+            if self.prepped_geom.contains(Point(lons[j], lats[i]))
+        ]
 
-        with netCDF4.Dataset(self.p_path) as nc:
-            for (i, j) in self.valid_coords:
-                if not self.prepped_geom.contains(Point(lons[j], lats[i])):
-                    continue
-                pixel_df = self._extract_pixel_kde_events(nc, i, j, adv_var, pks_var, pks_qa_var, onset_var)
-                if not pixel_df.empty:
-                    frames.append(pixel_df)
+        # Compute the full set of NetCDF variable names needed so the initializer
+        # can preload them as numpy arrays — eliminates per-pixel disk reads.
+        var_names_set = set()
+        _pv = primary_vars if primary_vars is not None else ["green_up_advanced"]
+        _sv = secondary_vars if secondary_vars is not None else ["green_down_onset"]
+        for var in _pv:
+            var_names_set.add(f.coerce_varname_to_var_x(var))
+        qa_var_parsed = f.parse_qa_var_from_str(qa_var)
+        if qa_var_parsed is not None:
+            var_names_set.add(f.coerce_varname_to_var_x(qa_var_parsed))
+            var_names_set.add(qa_var_parsed)
+        for var in _sv:
+            var_names_set.add(f.coerce_varname_to_var_x(var))
+        var_names = list(var_names_set)
 
+        worker = partial(
+            PhenologyVisualization._kde_pixel_worker,
+            primary_vars=primary_vars, secondary_vars=secondary_vars, qa_var=qa_var,
+        )
+        n_workers = min(10, os.cpu_count() or 4)
+        chunksize = max(1, len(inset_coords) // (n_workers * 4))
+        with multiprocessing.Pool(
+            initializer=_init_kde_worker, initargs=(self.p_path, var_names), processes=n_workers
+        ) as pool:
+            results = list(pool.imap_unordered(worker, inset_coords, chunksize=chunksize))
+
+        frames = [df for df in results if not df.empty]
         if not frames:
             return pd.DataFrame(columns=["i", "j", "primary", "qa_column", "secondary"])
-
+        print(f"assemble kde finished at: {datetime.datetime.now()}")
         return pd.concat(frames, ignore_index=True).set_index("year.DOY")
 
 
@@ -2949,59 +3078,79 @@ class PhenologyVisualization:
               green_down_onset  : float — year.DOY of the bracketing green-down onset event.
             Each row is one fully-bracketed peak. Duplicates across pixels are retained.
         """
-        rows = []
 
-        for _, pixel_df in kde_df.groupby(["i", "j"]):
-            adv_doys = np.sort(pixel_df.index[pixel_df["primary"].fillna(False).astype(bool)].values)
-            onset_doys = np.sort(pixel_df.index[pixel_df["secondary"].fillna(False).astype(bool)].values)
-            peak_df = pixel_df[pixel_df["qa_column"].notna()]
+        print(f"prep kde started at: {datetime.datetime.now()}")
 
-            for peak_doy, row in peak_df.iterrows():
-                adv_before = adv_doys[adv_doys < peak_doy]
-                if len(adv_before) == 0:
-                    continue
-                onset_after = onset_doys[onset_doys > peak_doy]
-                if len(onset_after) == 0:
-                    continue
-                rows.append({
-                    "primary": adv_before[-1],
-                    "qa_column": int(row["qa_column"]),
-                    "secondary": onset_after[0],
-                })
+        pixel_groups = [pixel_df for _, pixel_df in kde_df.groupby(["i", "j"])]
 
-        if not rows:
+        with multiprocessing.Pool(processes=os.cpu_count()) as pool:
+            results = pool.map(PhenologyVisualization._prep_kde_pixel_worker, pixel_groups)
+
+        frames = [df for df in results if not df.empty]
+        if not frames:
             return pd.DataFrame(columns=["primary", "qa_column", "secondary"])
-
-        return pd.DataFrame(rows)
+        print(f"prep kde finished at: {datetime.datetime.now()}")
+        return pd.concat(frames, ignore_index=True)
     
 
-    # def find_preceding_and_following(df):
-    #     df = df.copy()
+    @staticmethod
+    def _prep_kde_pixel_worker(pixel_df):
+        """Multiprocessing worker for a single pixel's bracket-matching step.
 
-    #     var1 = 'green_up_advanced_x'
-    #     var2 = 'green_down_onset_x'
-    #     # Mask where we care about QA
-    #     mask = df["pks_qa"].isin([0, 1])
+        Designed to be dispatched by multiprocessing.Pool in prep_kde_data.
+        No initializer needed — all data is passed directly as a DataFrame.
 
-    #     # Forward-fill var1 timestamps (last valid previous)
-    #     prev_var1_time = df[var1].notna()
-    #     prev_var1_time = prev_var1_time.where(prev_var1_time).ffill()
+        Parameters
+        ----------
+        pixel_df : pandas.DataFrame
+            Single-pixel slice of the kde_df produced by assemble_kde_data.
 
-    #     # Backward-fill var2 timestamps (next valid future)
-    #     next_var2_time = df[var2].notna()
-    #     next_var2_time = next_var2_time.where(next_var2_time).bfill()
+        Returns
+        -------
+        pandas.DataFrame
+            Columns: primary, qa_column, secondary. Empty if no fully-bracketed
+            peaks exist for this pixel.
+        """
+        bracketed = PhenologyVisualization.find_preceding_and_following(
+            pixel_df.sort_index()
+        ).dropna(subset=["prev_var1_time", "next_var2_time"])
+        if bracketed.empty:
+            return pd.DataFrame(columns=["primary", "qa_column", "secondary"])
+        bracketed = bracketed.rename(columns={
+            "prev_var1_time": "primary",
+            "next_var2_time": "secondary",
+        })
+        bracketed["qa_column"] = bracketed["qa_column"].astype(int)
+        return bracketed[["primary", "qa_column", "secondary"]]
 
-    #     # But we actually want timestamps, not booleans
-    #     df["var1_time"] = df.index.where(df[var1].notna())
-    #     df["var2_time"] = df.index.where(df[var2].notna())
+    @staticmethod
+    def find_preceding_and_following(pixel_df):
+        """Vectorized bracket-finder for a single pixel's long-format event DataFrame.
 
-    #     df["prev_var1_time"] = df["var1_time"].ffill()
-    #     df["next_var2_time"] = df["var2_time"].bfill()
+        For each peak row (qa_column not NaN), finds the most recent preceding
+        green_up_advanced event (primary=True) and the earliest following
+        green_down_onset event (secondary=True) using ffill/bfill on the year.DOY index.
 
-    #     # Keep only rows where QA is 0 or 1
-    #     result = df.loc[mask, ["prev_var1_time", "next_var2_time",'pks_qa']]
+        Parameters
+        ----------
+        pixel_df : pandas.DataFrame
+            Single-pixel slice of the output of assemble_kde_data. Index is year.DOY,
+            columns include primary (bool), qa_column (float), secondary (bool).
 
-    #     return result
+        Returns
+        -------
+        pandas.DataFrame
+            Columns: prev_var1_time, next_var2_time, qa_column.
+            Only peak rows are returned; NaN in either bracket column means
+            the peak is not fully bracketed.
+        """
+        df = pixel_df.copy()
+        df["var1_time"] = df.index.where(df["primary"].fillna(False).astype(bool))
+        df["var2_time"] = df.index.where(df["secondary"].fillna(False).astype(bool))
+        df["prev_var1_time"] = df["var1_time"].ffill()
+        df["next_var2_time"] = df["var2_time"].bfill()
+        mask = df["qa_column"].notna()
+        return df.loc[mask, ["prev_var1_time", "next_var2_time", "qa_column"]]
 
 
     def sort_by_year(self, df, start_year=None, end_year=None):
@@ -3045,14 +3194,22 @@ class PhenologyVisualization:
 
 
     def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999):
-        df = self.assemble_kde_data()
-        if not qa_value:
-            compressed_df = self.prep_kde_data(df)
+        print(f"plotting started at: {datetime.datetime.now()}")
+        dir_path, file_path = self.build_kde_path()
+        if os.path.isfile(file_path):
+            compressed_df = pd.read_csv(file_path)
+            print(file_path)
         else:
+            warnings.warn("KDE events need to be calculated. Depending on the lake size this may take a while.")
+            os.makedirs(dir_path, exist_ok=True)
+            df = self.assemble_kde_data()
+            compressed_df = self.prep_kde_data(df)
+            compressed_df.to_csv(file_path, index=False)
+
+        if qa_value is not None:
             if type(qa_value) != set:
                 warnings.warn("qa_value needs to be a set")
             else:
-                compressed_df = self.prep_kde_data(df)
                 compressed_df = compressed_df[compressed_df['qa_column'].isin(qa_value)]
 
         
@@ -3068,18 +3225,24 @@ class PhenologyVisualization:
 
         x = np.round((plot_df["primary"].values % 1) * 1000).astype(int)
         y = np.round((plot_df["secondary"].values % 1) * 1000).astype(int)
-        
 
-        sns.kdeplot(x=x, y=y, ax=ax, fill=True, cmap="viridis", levels=20, thresh=0.05, cbar = True)
+        kde = gaussian_kde(np.vstack([x, y]))
+        xi = np.linspace(0, 400, 100)
+        yi = np.linspace(0, 400, 100)
+        Xi, Yi = np.meshgrid(xi, yi)
+        Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape)
+        Zi_norm = Zi / Zi.max()
+        cf = ax.contourf(Xi, Yi, Zi_norm, levels=np.linspace(0.05, 1.0, 20), cmap="viridis")
+        plt.colorbar(cf, ax=ax)
         ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
         ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")
-        
-     
-        ax.set_xlim(left=0)
-        ax.set_ylim(bottom=0)
+
+        ax.set_xlim(0, 400)
+        ax.set_ylim(0, 400)
         ax.set_xlabel("Green-up Advanced (DOY)")
         ax.set_ylabel("Green-down Onset (DOY)")
         ax.set_title(f"Green-up Advanced vs Green-down Onset\nLake ID: {self.lakeID} | {start} - {end}")
+        print(f"plotting ended at: {datetime.datetime.now()}")
 
 
             
