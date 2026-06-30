@@ -2828,13 +2828,13 @@ class PhenologyVisualization:
 
     def _extract_pixel_kde_events(self, nc, i, j,
                                    primary_vars=None, secondary_vars=None,
-                                   qa_var="pks"):
+                                   qa_var="pks", arrays=None):
         """Extract bracketing and peak events for a single pixel.
 
         Parameters
         ----------
-        nc : netCDF4.Dataset
-            Open phenology dataset.
+        nc : netCDF4.Dataset or None
+            Open phenology dataset. Ignored when arrays is provided.
         i, j : int
             Pixel row and column indices.
         primary_vars : list of str, optional
@@ -2846,6 +2846,10 @@ class PhenologyVisualization:
         qa_var : str, optional
             Short name for the peak QA variable (passed through parse_qa_var_from_str).
             Defaults to 'pks'.
+        arrays : dict of str -> np.ndarray, optional
+            Preloaded full arrays keyed by NetCDF variable name. When provided,
+            pixel slices are taken from these in-memory arrays instead of reading
+            from nc, which is the fast path used by _kde_pixel_worker.
 
         Returns
         -------
@@ -2858,11 +2862,16 @@ class PhenologyVisualization:
         if secondary_vars is None:
             secondary_vars = ["green_down_onset"]
 
+        def _get(var_name):
+            if arrays is not None:
+                return arrays[var_name][i, j, :]
+            return nc.variables[var_name][i, j, :]
+
         frames = []
 
         for var in primary_vars:
             var_x = f.coerce_varname_to_var_x(var)
-            raw = f.remove_nan(nc.variables[var_x][i, j, :])
+            raw = f.remove_nan(_get(var_x))
             if len(raw) == 0:
                 continue
             dt = pd.to_datetime(raw, unit="s", utc=True)
@@ -2877,7 +2886,7 @@ class PhenologyVisualization:
         qa_var_parsed = f.parse_qa_var_from_str(qa_var)
         if qa_var_parsed is not None:
             qa_x = f.coerce_varname_to_var_x(qa_var_parsed)
-            qa_x_raw = np.array(nc.variables[qa_x][i, j, :])
+            qa_x_raw = np.array(_get(qa_x))
             pk_mask = ~np.isnan(qa_x_raw)
             if pk_mask.any():
                 pks_dt = pd.to_datetime(qa_x_raw[pk_mask], unit="s", utc=True)
@@ -2885,13 +2894,13 @@ class PhenologyVisualization:
                     "year.DOY": pks_dt.year + pks_dt.day_of_year / 1000,
                     "i": i, "j": j,
                     "primary": False,
-                    "qa_column": np.array(nc.variables[qa_var_parsed][i, j, :])[pk_mask].astype(int),
+                    "qa_column": np.array(_get(qa_var_parsed))[pk_mask].astype(int),
                     "secondary": False,
                 }))
 
         for var in secondary_vars:
             var_x = f.coerce_varname_to_var_x(var)
-            raw = f.remove_nan(nc.variables[var_x][i, j, :])
+            raw = f.remove_nan(_get(var_x))
             if len(raw) == 0:
                 continue
             dt = pd.to_datetime(raw, unit="s", utc=True)
@@ -2907,13 +2916,38 @@ class PhenologyVisualization:
             return pd.DataFrame(columns=["year.DOY", "i", "j", "primary", "qa_column", "secondary"])
         return pd.concat(frames, ignore_index=True)
 
+    @staticmethod
+    def _kde_pixel_worker(coord, primary_vars, secondary_vars, qa_var):
+        """Multiprocessing worker for a single pixel's KDE event extraction.
 
-    def assemble_kde_data(self, adv_var="green_up_advanced_x", pks_var="pks_x",
-                          pks_qa_var="pks_qa", onset_var="green_down_onset_x"):
-        """Collect green-up advanced, peak, and green-down onset events lake-wide into a DataFrame.
+        Uses preloaded numpy arrays from _GLOBALS (populated by _init_kde_worker)
+        for pure in-memory indexing — no NetCDF I/O in the hot path.
+
+        Parameters
+        ----------
+        coord : tuple of int
+            (i, j) grid index pair.
+        primary_vars, secondary_vars : list of str
+            Passed through to the extraction logic.
+        qa_var : str
+            Short name for the peak QA variable.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Same schema as _extract_pixel_kde_events; empty if no events found.
+        """
+        i, j = coord
+        arrays = {k[4:]: v for k, v in _GLOBALS.items() if k.startswith("kde_")}
+        return PhenologyVisualization._extract_pixel_kde_events(
+            None, None, i, j, primary_vars, secondary_vars, qa_var, arrays=arrays
+        )
+
+    def assemble_kde_data(self, primary_vars=None, secondary_vars=None, qa_var="pks"):
+        """Collect bracketing and peak events lake-wide into a DataFrame.
 
         Iterates all valid pixels inside the 1 km-inset lake boundary and gathers
-        three phenological event types. Each row represents one event occurrence.
+        events for each variable type. Each row represents one event occurrence.
 
         Parameters
         ----------
@@ -2932,23 +2966,47 @@ class PhenologyVisualization:
             Columns: i, j, primary (bool), qa_column (float), secondary (bool).
             Row count equals the total number of events across all variables and pixels.
         """
+
+        print(f"assemble kde started at: {datetime.datetime.now()}")
         g = self._load_extracted_globals()
         lats = g["lat"]
         lons = g["lon"]
 
-        frames = []
+        inset_coords = [
+            (i, j) for (i, j) in self.valid_coords
+            if self.prepped_geom.contains(Point(lons[j], lats[i]))
+        ]
 
-        with netCDF4.Dataset(self.p_path) as nc:
-            for (i, j) in self.valid_coords:
-                if not self.prepped_geom.contains(Point(lons[j], lats[i])):
-                    continue
-                pixel_df = self._extract_pixel_kde_events(nc, i, j, primary_vars, secondary_vars, qa_var)
-                if not pixel_df.empty:
-                    frames.append(pixel_df)
+        # Compute the full set of NetCDF variable names needed so the initializer
+        # can preload them as numpy arrays — eliminates per-pixel disk reads.
+        var_names_set = set()
+        _pv = primary_vars if primary_vars is not None else ["green_up_advanced"]
+        _sv = secondary_vars if secondary_vars is not None else ["green_down_onset"]
+        for var in _pv:
+            var_names_set.add(f.coerce_varname_to_var_x(var))
+        qa_var_parsed = f.parse_qa_var_from_str(qa_var)
+        if qa_var_parsed is not None:
+            var_names_set.add(f.coerce_varname_to_var_x(qa_var_parsed))
+            var_names_set.add(qa_var_parsed)
+        for var in _sv:
+            var_names_set.add(f.coerce_varname_to_var_x(var))
+        var_names = list(var_names_set)
 
+        worker = partial(
+            PhenologyVisualization._kde_pixel_worker,
+            primary_vars=primary_vars, secondary_vars=secondary_vars, qa_var=qa_var,
+        )
+        n_workers = min(10, os.cpu_count() or 4)
+        chunksize = max(1, len(inset_coords) // (n_workers * 4))
+        with multiprocessing.Pool(
+            initializer=_init_kde_worker, initargs=(self.p_path, var_names), processes=n_workers
+        ) as pool:
+            results = list(pool.imap_unordered(worker, inset_coords, chunksize=chunksize))
+
+        frames = [df for df in results if not df.empty]
         if not frames:
             return pd.DataFrame(columns=["i", "j", "primary", "qa_column", "secondary"])
-
+        print(f"assemble kde finished at: {datetime.datetime.now()}")
         return pd.concat(frames, ignore_index=True).set_index("year.DOY")
 
 
@@ -2976,26 +3034,50 @@ class PhenologyVisualization:
               green_down_onset  : float — year.DOY of the bracketing green-down onset event.
             Each row is one fully-bracketed peak. Duplicates across pixels are retained.
         """
-        frames = []
 
-        for _, pixel_df in kde_df.groupby(["i", "j"]):
-            bracketed = self.find_preceding_and_following(pixel_df.sort_index()).dropna(
-                subset=["prev_var1_time", "next_var2_time"]
-            )
-            if bracketed.empty:
-                continue
-            bracketed = bracketed.rename(columns={
-                "prev_var1_time": "primary",
-                "next_var2_time": "secondary",
-            })
-            bracketed["qa_column"] = bracketed["qa_column"].astype(int)
-            frames.append(bracketed[["primary", "qa_column", "secondary"]])
+        print(f"prep kde started at: {datetime.datetime.now()}")
 
+        pixel_groups = [pixel_df for _, pixel_df in kde_df.groupby(["i", "j"])]
+
+        with multiprocessing.Pool(processes=os.cpu_count()) as pool:
+            results = pool.map(PhenologyVisualization._prep_kde_pixel_worker, pixel_groups)
+
+        frames = [df for df in results if not df.empty]
         if not frames:
             return pd.DataFrame(columns=["primary", "qa_column", "secondary"])
-
+        print(f"prep kde finished at: {datetime.datetime.now()}")
         return pd.concat(frames, ignore_index=True)
     
+
+    @staticmethod
+    def _prep_kde_pixel_worker(pixel_df):
+        """Multiprocessing worker for a single pixel's bracket-matching step.
+
+        Designed to be dispatched by multiprocessing.Pool in prep_kde_data.
+        No initializer needed — all data is passed directly as a DataFrame.
+
+        Parameters
+        ----------
+        pixel_df : pandas.DataFrame
+            Single-pixel slice of the kde_df produced by assemble_kde_data.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Columns: primary, qa_column, secondary. Empty if no fully-bracketed
+            peaks exist for this pixel.
+        """
+        bracketed = PhenologyVisualization.find_preceding_and_following(
+            pixel_df.sort_index()
+        ).dropna(subset=["prev_var1_time", "next_var2_time"])
+        if bracketed.empty:
+            return pd.DataFrame(columns=["primary", "qa_column", "secondary"])
+        bracketed = bracketed.rename(columns={
+            "prev_var1_time": "primary",
+            "next_var2_time": "secondary",
+        })
+        bracketed["qa_column"] = bracketed["qa_column"].astype(int)
+        return bracketed[["primary", "qa_column", "secondary"]]
 
     @staticmethod
     def find_preceding_and_following(pixel_df):
@@ -3068,14 +3150,22 @@ class PhenologyVisualization:
 
 
     def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999):
-        df = self.assemble_kde_data()
-        if not qa_value:
-            compressed_df = self.prep_kde_data(df)
+        print(f"plotting started at: {datetime.datetime.now()}")
+        dir_path, file_path = self.build_kde_path()
+        if os.path.isfile(file_path):
+            compressed_df = pd.read_csv(file_path)
+            print(file_path)
         else:
+            warnings.warn("KDE events need to be calculated. Depending on the lake size this may take a while.")
+            os.makedirs(dir_path, exist_ok=True)
+            df = self.assemble_kde_data()
+            compressed_df = self.prep_kde_data(df)
+            compressed_df.to_csv(file_path, index=False)
+
+        if qa_value is not None:
             if type(qa_value) != set:
                 warnings.warn("qa_value needs to be a set")
             else:
-                compressed_df = self.prep_kde_data(df)
                 compressed_df = compressed_df[compressed_df['qa_column'].isin(qa_value)]
 
         
