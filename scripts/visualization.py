@@ -26,6 +26,7 @@ from pyproj import CRS, Transformer
 import geopandas
 from shapely.prepared import prep
 from shapely.geometry import Point
+from shapely import vectorized
 from numpy.lib.stride_tricks import sliding_window_view
 import colorcet as cc
 import seaborn as sns
@@ -234,7 +235,7 @@ class PhenologyVisualization:
         self._pixel_cache = {}
         self._lake_cache = {}
         self.prep_geometry_from_shapefile()
-
+        self.extract_nonborder_coords()
 
     def index_to_lat_lon(self, lat_index, lon_index):
         """Return the geographic coordinates for a grid index pair.
@@ -432,6 +433,33 @@ class PhenologyVisualization:
         self.geom_shrunk = geom_shrunk
         self.prepped_geom = prep(geom_shrunk)
     
+
+    def extract_nonborder_coords(self):
+        with netCDF4.Dataset(self.e_path) as nc:
+            lats   = nc.variables["lat"][:]
+            lons   = nc.variables["lon"][:]
+        idxs = np.array(self.valid_coords)
+        ii = idxs[:, 0]
+        jj = idxs[:, 1]
+
+        lons = lons[jj]  # longitudes
+        lats = lats[ii]  # latitudes
+
+        # mask of points inside geometry
+        mask = vectorized.contains(self.prepped_geom.context, lons, lats)
+
+        
+        inside_indices = [
+            (int(i), int(j))
+            for i, j in zip(ii[mask], jj[mask])
+        ]
+
+        # collect indices + coordinates
+        inside_coords = list(zip(lats[mask], lons[mask]))
+
+        self.valid_idx_prep = inside_indices
+        self.valid_coords_prep = inside_coords
+
 
     @staticmethod
     def compute_metric_score(coord, start=0, end=9999, metrics_to_compute= None):
@@ -1334,8 +1362,6 @@ class PhenologyVisualization:
         values_m = px["values"][mask]
         time_dt   = f.datenum_to_datetime(t_all[mask])
         return pd.Series(index=time_dt,data=values_m)
-
-    
 
 
     def extrema_plot(self, latitude_idx, longitude_idx, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False, show_legend = True):
@@ -3003,8 +3029,6 @@ class PhenologyVisualization:
         """
         if start_year is None and end_year is None:
             return df
-
-    
 
         adv_year = df["primary"].astype(int)
         onset_year = df["secondary"].astype(int)
