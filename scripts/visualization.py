@@ -236,7 +236,7 @@ class PhenologyVisualization:
             self.gdf = geopandas.read_file(self.shapefile_path)
         self.p_path = phenology_path
         self.e_path = extract_path
-        self.version = Path(self.p_path).parents[2].stem.removeprefix('v')
+        self.version = Path(self.p_path).parents[2].name.removeprefix('v')
         self.variable = Path(self.p_path).parents[0].stem
         self.lakeID = Path(self.p_path).stem
         # self.lakename = lakeID_to_name(self.gdf,self.lakeID)
