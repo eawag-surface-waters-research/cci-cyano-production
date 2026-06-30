@@ -236,6 +236,30 @@ class PhenologyVisualization:
         self.prep_geometry_from_shapefile()
 
 
+    def ID_to_name(self, id):
+        """Return the lake name for a given lake ID from the shapefile.
+
+        Parameters
+        ----------
+        id : int
+            Lake ID matching the 'id' column in the CCI shapefile.
+
+        Returns
+        -------
+        str
+            Lake name from the 'name' column.
+
+        Raises
+        ------
+        ValueError
+            If the ID is not found in the shapefile.
+        """
+        matches = self.gdf.loc[self.gdf["id"] == int(id), "name"]
+        if matches.empty:
+            raise ValueError(f"Lake ID {id} not found in shapefile.")
+        return matches.iloc[0]
+
+
     def index_to_lat_lon(self, lat_index, lon_index):
         """Return the geographic coordinates for a grid index pair.
 
