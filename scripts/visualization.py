@@ -597,7 +597,26 @@ class PhenologyVisualization:
             fname = f"ts_{start}_to_{end}.csv"
         
         return base, os.path.join(base, fname)
-            
+
+    def build_kde_path(self):
+        """Return the output directory and file path for the cached KDE events CSV.
+
+        Returns
+        -------
+        base : str
+            Directory path where the CSV will be written.
+        file_path : str
+            Full path to the CSV file.
+        """
+        lake_name = self.ID_to_name(int(self.lakeID)).replace(" ", "")
+        base = os.path.join(
+            self.out_folder.parents[1], "lake_analysis",
+             f"ID{self.lakeID}_{lake_name}", "calculated_values", "kde_data",
+            f"v{self.version}", self.variable,
+        )
+        base, path =  base, os.path.join(base, "kde_events.csv")
+        print(path)
+        return base, path
 
     def compute_and_cache_metric(self, metric_name, col_name, compute_fn, start=0, end=9999):
         """Compute a metric for all valid pixels in parallel and cache to CSV.
