@@ -16,7 +16,7 @@ import warnings
 from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib.patches import Rectangle, Patch
 from sklearn.metrics import mean_squared_error, r2_score
-from scipy.stats import pearsonr
+from scipy.stats import pearsonr, gaussian_kde
 from csaps import csaps
 import functions as f
 import multiprocessing
@@ -28,7 +28,7 @@ from shapely.prepared import prep
 from shapely.geometry import Point
 from numpy.lib.stride_tricks import sliding_window_view
 import colorcet as cc
-import seaborn as sns
+import time
 
 
 
@@ -81,6 +81,24 @@ def _init_worker(p_path, e_path):
     _GLOBALS["lats"] = lats
     _GLOBALS["lons"] = lons
 
+
+def _init_kde_worker(p_path, var_names):
+    """Initialise per-process globals for KDE pixel extraction.
+
+    Called once per worker process by multiprocessing.Pool. Preloads all
+    required phenology arrays as numpy arrays so per-pixel work is pure
+    in-memory indexing with no NetCDF I/O in the hot path.
+
+    Parameters
+    ----------
+    p_path : str
+        Path to the phenology NetCDF file.
+    var_names : list of str
+        NetCDF variable names to preload (determined by assemble_kde_data).
+    """
+    with netCDF4.Dataset(p_path) as nc:
+        for var in var_names:
+            _GLOBALS[f"kde_{var}"] = np.asarray(nc.variables[var][:])
 
 
 # color_sets_4x4: bivariate color palettes for the 4×4 heatmap legend.
@@ -3181,18 +3199,24 @@ class PhenologyVisualization:
 
         x = np.round((plot_df["primary"].values % 1) * 1000).astype(int)
         y = np.round((plot_df["secondary"].values % 1) * 1000).astype(int)
-        
 
-        sns.kdeplot(x=x, y=y, ax=ax, fill=True, cmap="viridis", levels=20, thresh=0.05, cbar = True)
+        kde = gaussian_kde(np.vstack([x, y]))
+        xi = np.linspace(0, 400, 100)
+        yi = np.linspace(0, 400, 100)
+        Xi, Yi = np.meshgrid(xi, yi)
+        Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape)
+        Zi_norm = Zi / Zi.max()
+        cf = ax.contourf(Xi, Yi, Zi_norm, levels=np.linspace(0.05, 1.0, 20), cmap="viridis")
+        plt.colorbar(cf, ax=ax)
         ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
         ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")
-        
-     
-        ax.set_xlim(left=0)
-        ax.set_ylim(bottom=0)
+
+        ax.set_xlim(0, 400)
+        ax.set_ylim(0, 400)
         ax.set_xlabel("Green-up Advanced (DOY)")
         ax.set_ylabel("Green-down Onset (DOY)")
         ax.set_title(f"Green-up Advanced vs Green-down Onset\nLake ID: {self.lakeID} | {start} - {end}")
+        print(f"plotting ended at: {datetime.datetime.now()}")
 
 
             
