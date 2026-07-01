@@ -1939,7 +1939,45 @@ class PhenologyVisualization:
         return result
     
 
-    def yearly_heatmap_pixel(self, latitude_idx, longitude_idx, color_scheme='pink-blue'):
+    @staticmethod
+    def _gap_rectangles(gap_starts, gap_ends):
+        """Convert data gap intervals into heatmap cell coordinates.
+
+        For each gap, finds every year/quarter cell it overlaps and returns the
+        proportional position of the gap within that cell (matching how axvspan
+        renders gaps in single_plot, but mapped onto the heatmap grid).
+
+        Parameters
+        ----------
+        gap_starts, gap_ends : array-like of timezone-aware datetime
+
+        Returns
+        -------
+        list of (year, q_idx, x_offset, x_width)
+            x_offset and x_width are in [0, 1] relative to the cell width.
+        """
+        import calendar as _cal
+        quarters_def = [(1, 3), (4, 6), (7, 9), (10, 12)]
+        rects = []
+        for gs, ge in zip(gap_starts, gap_ends):
+            for year in range(gs.year, ge.year + 1):
+                for q_idx, (m_start, m_end) in enumerate(quarters_def):
+                    q_start = datetime.datetime(year, m_start, 1, tzinfo=datetime.timezone.utc)
+                    last_day = _cal.monthrange(year, m_end)[1]
+                    q_end = datetime.datetime(year, m_end, last_day, 23, 59, 59,
+                                             tzinfo=datetime.timezone.utc)
+                    q_duration = (q_end - q_start).total_seconds()
+                    clipped_start = max(gs, q_start)
+                    clipped_end = min(ge, q_end)
+                    if clipped_end <= clipped_start or q_duration <= 0:
+                        continue
+                    x_offset = (clipped_start - q_start).total_seconds() / q_duration
+                    x_width = (clipped_end - clipped_start).total_seconds() / q_duration
+                    rects.append((year, q_idx, x_offset, x_width))
+        return rects
+
+
+    def yearly_heatmap_pixel(self, latitude_idx, longitude_idx, color_scheme='pink-blue', show_gaps=False):
         """Plot a bivariate heatmap of peak and trough counts or fractions by year and quarter.
 
         Each cell in the heatmap represents one calendar quarter of one year. The
@@ -1969,6 +2007,10 @@ class PhenologyVisualization:
         whole_lake : bool, optional
             If False (default), plot per-pixel counts with a discrete legend.
             If True, plot lake-wide fractions with a continuous gradient legend.
+        show_gaps : bool, optional
+            If True, overlay a grey strip on the left of each cell whose width
+            is proportional to the fraction of that quarter covered by data gaps.
+            Default False.
 
         Returns
         -------
@@ -1995,13 +2037,46 @@ class PhenologyVisualization:
                 color = color_set[trg_bin * 4 + pk_bin]
                 ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
 
+        if show_gaps:
+            px = self._load_pixel_data(latitude_idx, longitude_idx)
+            gap_rects = self._gap_rectangles(px["gap_starts"], px["gap_ends"])
+            gap_patch_added = False
+            for year, q_idx, x_offset, x_width in gap_rects:
+                if 2002 <= year <= 2024:
+                    label = "Data gap" if not gap_patch_added else None
+                    ax.add_patch(Rectangle((q_idx + x_offset, year - 1), x_width, 1,
+                                           facecolor='grey', alpha=0.6, edgecolor='none', label=label))
+                    gap_patch_added = True
+            if gap_patch_added:
+                ax.legend(handles=[Patch(facecolor='grey', alpha=0.6, label='Data gap')],
+                          bbox_to_anchor=(1.5, 0.5),
+                          bbox_transform=ax.transAxes, fontsize=8)
+
         ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform = ax.transAxes)
         f.bivariate_legend(ax_legend, color_set)
 
         return fig, ax
-    
-    
-    def yearly_heatmap_lake(self, color_scheme= "pink-blue"):
+
+
+    def yearly_heatmap_lake(self, color_scheme="pink-blue", show_gaps=False):
+        """Plot a bivariate heatmap of lake-wide peak/trough fractions by year and quarter.
+
+        Parameters
+        ----------
+        color_scheme : str, optional
+            Key into color_sets_4x4 selecting the bivariate palette. Default 'pink-blue'.
+        show_gaps : bool, optional
+            If True, overlay a grey strip on the left of each cell whose width is
+            proportional to the fraction of that quarter covered by data gaps,
+            using the first valid pixel as a representative for the whole lake.
+            Default False.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        ax : matplotlib.axes.Axes
+        """
+        quarters_def = [(1, 3), (4, 6), (7, 9), (10, 12)]
         # lat and lon are not needed as the heatmap uses all pixels from the lake, thus they can be arbitrary
         heatmap_data = self.create_heatmap_output(latitude_idx=-1, longitude_idx=-1, fraction=True)
         fig, ax, _ = f.create_empty_heatmap()
@@ -2010,13 +2085,34 @@ class PhenologyVisualization:
 
         color_set = color_sets_4x4[color_scheme]
 
+        if show_gaps and self.valid_coords:
+            rep_i, rep_j = self.valid_coords[0]
+            px = self._load_pixel_data(rep_i, rep_j)
+            gap_starts = px["gap_starts"]
+            gap_ends = px["gap_ends"]
+        else:
+            gap_starts, gap_ends = [], []
+
+        gap_patch_added = False
         for year, quarters in heatmap_data.items():
             for q_idx, (pks_frac, trgs_frac) in enumerate(quarters):
                 color = f.interpolate_from_color_set(pks_frac, trgs_frac, color_set)
                 ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
+                if show_gaps:
+                    m_start, m_end = quarters_def[q_idx]
+                    gap_frac = self._gap_fraction_in_quarter(gap_starts, gap_ends, year, m_start, m_end)
+                    if gap_frac > 0:
+                        label = "Data gap" if not gap_patch_added else None
+                        ax.add_patch(Rectangle((q_idx, year - 1), gap_frac, 1,
+                                               facecolor='grey', alpha=0.6, edgecolor='none', label=label))
+                        gap_patch_added = True
 
         ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform=ax.transAxes)
         f.bivariate_continuous_legend(ax_legend, color_set)
+
+        if show_gaps and gap_patch_added:
+            ax.legend(handles=[Patch(facecolor='grey', alpha=0.6, label='Data gap')],
+                      loc='lower left', fontsize=8)
 
         return fig, ax
 
