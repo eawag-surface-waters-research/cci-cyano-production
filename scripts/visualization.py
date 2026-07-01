@@ -1992,6 +1992,35 @@ class PhenologyVisualization:
     
 
     @staticmethod
+    def _parse_mask_cells(mask_cells):
+        """Parse a list of 'YYYY Quarter' strings into (year, q_idx) tuples.
+
+        Parameters
+        ----------
+        mask_cells : list of str
+            Each entry is '<year> <quarter>', e.g. '2015 Apr-Jun'.
+            Valid quarter labels: 'Jan-Mar', 'Apr-Jun', 'Jul-Sep', 'Oct-Dec'.
+
+        Returns
+        -------
+        list of (int, int)
+            (year, q_idx) pairs where q_idx is 0–3.
+        """
+        quarter_map = {"Jan-Mar": 0, "Apr-Jun": 1, "Jul-Sep": 2, "Oct-Dec": 3}
+        result = []
+        for entry in mask_cells:
+            parts = entry.strip().split()
+            if len(parts) != 2:
+                raise ValueError(f"Invalid mask entry '{entry}'. Expected '<year> <quarter>'.")
+            year = int(parts[0])
+            quarter = parts[1]
+            if quarter not in quarter_map:
+                raise ValueError(f"Unknown quarter '{quarter}'. Must be one of {list(quarter_map)}.")
+            result.append((year, quarter_map[quarter]))
+        return result
+
+
+    @staticmethod
     def _gap_rectangles(gap_starts, gap_ends):
         """Convert data gap intervals into heatmap cell coordinates.
 
@@ -2029,7 +2058,7 @@ class PhenologyVisualization:
         return rects
 
 
-    def yearly_heatmap_pixel(self, latitude_idx, longitude_idx, color_scheme='pink-blue', show_gaps=False, qa=None):
+    def yearly_heatmap_pixel(self, latitude_idx, longitude_idx, color_scheme='pink-blue', show_gaps=False, qa=None, mask_cells=None, mask_color='grey'):
         """Plot a bivariate heatmap of peak and trough counts or fractions by year and quarter.
 
         Each cell in the heatmap represents one calendar quarter of one year. The
@@ -2063,6 +2092,14 @@ class PhenologyVisualization:
             If True, overlay a grey strip on the left of each cell whose width
             is proportional to the fraction of that quarter covered by data gaps.
             Default False.
+        mask_cells : list of str or None, optional
+            Cells to manually override with a solid colour after all other
+            drawing, regardless of the underlying data. Each entry is a string
+            '<year> <quarter>', e.g. ``['2015 Apr-Jun', '2016 Jul-Sep']``.
+            Valid quarter labels: 'Jan-Mar', 'Apr-Jun', 'Jul-Sep', 'Oct-Dec'.
+            Default None (no masking).
+        mask_color : str, optional
+            Colour used to fill masked cells. Default 'grey'.
 
         Returns
         -------
@@ -2104,13 +2141,18 @@ class PhenologyVisualization:
                           bbox_to_anchor=(1.5, 0.5),
                           bbox_transform=ax.transAxes, fontsize=8)
 
+        if mask_cells:
+            for year, q_idx in self._parse_mask_cells(mask_cells):
+                ax.add_patch(Rectangle((q_idx, year - 1), 1, 1,
+                                       facecolor=mask_color, edgecolor='none', zorder=4))
+
         ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform = ax.transAxes)
         f.bivariate_legend(ax_legend, color_set)
 
         return fig, ax
 
 
-    def yearly_heatmap_lake(self, color_scheme="pink-blue", qa=None):
+    def yearly_heatmap_lake(self, color_scheme="pink-blue", qa=None, mask_cells=None, mask_color='grey'):
         """Plot a bivariate heatmap of lake-wide peak/trough fractions by year and quarter.
 
         Parameters
@@ -2120,6 +2162,14 @@ class PhenologyVisualization:
         qa : set or list of int or None, optional
             QA levels to include when counting events. E.g. {0} for good only,
             {0, 1} for good and fair. None includes all levels (default).
+        mask_cells : list of str or None, optional
+            Cells to manually override with a solid colour after all other
+            drawing, regardless of the underlying data. Each entry is a string
+            '<year> <quarter>', e.g. ``['2015 Apr-Jun', '2016 Jul-Sep']``.
+            Valid quarter labels: 'Jan-Mar', 'Apr-Jun', 'Jul-Sep', 'Oct-Dec'.
+            Default None (no masking).
+        mask_color : str, optional
+            Colour used to fill masked cells. Default 'grey'.
 
         Returns
         -------
@@ -2138,6 +2188,11 @@ class PhenologyVisualization:
             for q_idx, (pks_frac, trgs_frac) in enumerate(quarters):
                 color = f.interpolate_from_color_set(pks_frac, trgs_frac, color_set)
                 ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
+
+        if mask_cells:
+            for year, q_idx in self._parse_mask_cells(mask_cells):
+                ax.add_patch(Rectangle((q_idx, year - 1), 1, 1,
+                                       facecolor=mask_color, edgecolor='none', zorder=4))
 
         ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform=ax.transAxes)
         f.bivariate_continuous_legend(ax_legend, color_set)
