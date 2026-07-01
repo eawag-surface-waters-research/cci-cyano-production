@@ -1888,7 +1888,7 @@ class PhenologyVisualization:
         return len(plotting_data[var][0])
 
 
-    def create_heatmap_output(self, latitude_idx, longitude_idx, start_year=2002, end_year=2024, fraction = False):
+    def create_heatmap_output(self, latitude_idx, longitude_idx, start_year=2002, end_year=2024, fraction=False, qa=None):
         """Return peak/trough counts or lake-wide fractions per year and quarter.
 
         When fraction=False, counts are read from the single pixel at (latitude_idx,
@@ -1909,6 +1909,10 @@ class PhenologyVisualization:
         fraction : bool, optional
             If False (default), return per-pixel integer counts.
             If True, return lake-wide fractions aggregated across all pixels.
+        qa : set of int or None, optional
+            QA levels to include when counting peaks and troughs (fraction=False only).
+            E.g. {0} for good only, {0, 1} for good and fair. None includes all
+            levels (default). Valid values: 0 (Good), 1 (Fair), 2 (Poor).
 
         Returns
         -------
@@ -1922,8 +1926,19 @@ class PhenologyVisualization:
         result = {}
         if not fraction:
             with netCDF4.Dataset(self.p_path) as nc:
-                pks_x = f.unix_to_datetime(f.remove_nan(nc.variables["pks_x"][latitude_idx, longitude_idx, :]))
-                trgs_x = f.unix_to_datetime(f.remove_nan(nc.variables["trgs_x"][latitude_idx, longitude_idx, :]))
+                pks_x_raw = np.array(nc.variables["pks_x"][latitude_idx, longitude_idx, :])
+                pk_mask = ~np.isnan(pks_x_raw)
+                pks_x = f.unix_to_datetime(pks_x_raw[pk_mask])
+                trgs_x_raw = np.array(nc.variables["trgs_x"][latitude_idx, longitude_idx, :])
+                trg_mask = ~np.isnan(trgs_x_raw)
+                trgs_x = f.unix_to_datetime(trgs_x_raw[trg_mask])
+
+                if qa is not None:
+                    qa_set = set(qa)
+                    pks_qa_arr = np.array(nc.variables["pks_qa"][latitude_idx, longitude_idx, :])[pk_mask]
+                    trgs_qa_arr = np.array(nc.variables["trgs_qa"][latitude_idx, longitude_idx, :])[trg_mask]
+                    pks_x = pks_x[np.isin(pks_qa_arr, list(qa_set))]
+                    trgs_x = trgs_x[np.isin(trgs_qa_arr, list(qa_set))]
         
                 for year in range(start_year, end_year + 1):
                     year_counts = []
@@ -1940,8 +1955,19 @@ class PhenologyVisualization:
                     result[year] = year_counts
         else:
             with netCDF4.Dataset(self.p_path) as nc:
-                pks_x = f.unix_to_datetime(f.remove_nan(nc.variables["pks_x"][:, :, :]))
-                trgs_x = f.unix_to_datetime(f.remove_nan(nc.variables["trgs_x"][:, :, :]))
+                pks_x_raw = np.array(nc.variables["pks_x"][:, :, :]).ravel()
+                pk_mask = ~np.isnan(pks_x_raw)
+                pks_x = f.unix_to_datetime(pks_x_raw[pk_mask])
+                trgs_x_raw = np.array(nc.variables["trgs_x"][:, :, :]).ravel()
+                trg_mask = ~np.isnan(trgs_x_raw)
+                trgs_x = f.unix_to_datetime(trgs_x_raw[trg_mask])
+
+                if qa is not None:
+                    qa_set = set(qa)
+                    pks_qa_arr = np.array(nc.variables["pks_qa"][:, :, :]).ravel()[pk_mask]
+                    trgs_qa_arr = np.array(nc.variables["trgs_qa"][:, :, :]).ravel()[trg_mask]
+                    pks_x = pks_x[np.isin(pks_qa_arr, list(qa_set))]
+                    trgs_x = trgs_x[np.isin(trgs_qa_arr, list(qa_set))]
         
                 for year in range(start_year, end_year + 1):
                     year_fractions = []
@@ -2003,7 +2029,7 @@ class PhenologyVisualization:
         return rects
 
 
-    def yearly_heatmap_pixel(self, latitude_idx, longitude_idx, color_scheme='pink-blue', show_gaps=False):
+    def yearly_heatmap_pixel(self, latitude_idx, longitude_idx, color_scheme='pink-blue', show_gaps=False, qa=None):
         """Plot a bivariate heatmap of peak and trough counts or fractions by year and quarter.
 
         Each cell in the heatmap represents one calendar quarter of one year. The
@@ -2045,7 +2071,7 @@ class PhenologyVisualization:
         ax : matplotlib.axes.Axes
             The axes on which the heatmap is drawn.
         """
-        heatmap_data = self.create_heatmap_output(latitude_idx=latitude_idx, longitude_idx=longitude_idx, fraction = False)
+        heatmap_data = self.create_heatmap_output(latitude_idx=latitude_idx, longitude_idx=longitude_idx, fraction=False, qa=qa)
         fig, ax, _ = f.create_empty_heatmap()
         g  = self._load_extracted_globals()
         lat, lon = g["lat"], g["lon"]
@@ -2084,61 +2110,37 @@ class PhenologyVisualization:
         return fig, ax
 
 
-    def yearly_heatmap_lake(self, color_scheme="pink-blue", show_gaps=False):
+    def yearly_heatmap_lake(self, color_scheme="pink-blue", qa=None):
         """Plot a bivariate heatmap of lake-wide peak/trough fractions by year and quarter.
 
         Parameters
         ----------
         color_scheme : str, optional
             Key into color_sets_4x4 selecting the bivariate palette. Default 'pink-blue'.
-        show_gaps : bool, optional
-            If True, overlay a grey strip on the left of each cell whose width is
-            proportional to the fraction of that quarter covered by data gaps,
-            using the first valid pixel as a representative for the whole lake.
-            Default False.
+        qa : set or list of int or None, optional
+            QA levels to include when counting events. E.g. {0} for good only,
+            {0, 1} for good and fair. None includes all levels (default).
 
         Returns
         -------
         fig : matplotlib.figure.Figure
         ax : matplotlib.axes.Axes
         """
-        quarters_def = [(1, 3), (4, 6), (7, 9), (10, 12)]
         # lat and lon are not needed as the heatmap uses all pixels from the lake, thus they can be arbitrary
-        heatmap_data = self.create_heatmap_output(latitude_idx=-1, longitude_idx=-1, fraction=True)
+        heatmap_data = self.create_heatmap_output(latitude_idx=-1, longitude_idx=-1, fraction=True, qa=qa)
         fig, ax, _ = f.create_empty_heatmap()
         textstr = f"Yearly Heatmap for Lake ID: {self.lakeID}\n  {self.variable}"
         ax.set_title(textstr)
 
         color_set = color_sets_4x4[color_scheme]
 
-        if show_gaps and self.valid_coords:
-            rep_i, rep_j = self.valid_coords[0]
-            px = self._load_pixel_data(rep_i, rep_j)
-            gap_starts = px["gap_starts"]
-            gap_ends = px["gap_ends"]
-        else:
-            gap_starts, gap_ends = [], []
-
-        gap_patch_added = False
         for year, quarters in heatmap_data.items():
             for q_idx, (pks_frac, trgs_frac) in enumerate(quarters):
                 color = f.interpolate_from_color_set(pks_frac, trgs_frac, color_set)
                 ax.add_patch(Rectangle((q_idx, year - 1), 1, 1, facecolor=color, edgecolor='none'))
-                if show_gaps:
-                    m_start, m_end = quarters_def[q_idx]
-                    gap_frac = self._gap_fraction_in_quarter(gap_starts, gap_ends, year, m_start, m_end)
-                    if gap_frac > 0:
-                        label = "Data gap" if not gap_patch_added else None
-                        ax.add_patch(Rectangle((q_idx, year - 1), gap_frac, 1,
-                                               facecolor='grey', alpha=0.6, edgecolor='none', label=label))
-                        gap_patch_added = True
 
         ax_legend = ax.inset_axes([1.2, 0.7, 0.3, 0.3], transform=ax.transAxes)
         f.bivariate_continuous_legend(ax_legend, color_set)
-
-        if show_gaps and gap_patch_added:
-            ax.legend(handles=[Patch(facecolor='grey', alpha=0.6, label='Data gap')],
-                      loc='lower left', fontsize=8)
 
         return fig, ax
 
