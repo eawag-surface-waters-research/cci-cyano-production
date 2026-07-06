@@ -626,6 +626,25 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
             file.write("\n")
 
 
+def save_special_plots(eda_instance, pixels, lake_analysis_folder, lake_str):
+    special_plots_path = os.path.join(lake_analysis_folder, lake_str, "plots", "pixel_plots", "special_plots")
+
+    for i, j in pixels:
+        pixel_out_path = os.path.join(special_plots_path, f"{i}_{j}")
+        os.makedirs(pixel_out_path, exist_ok=True)
+        fig, _ = eda_instance.yearly_heatmap_pixel(latitude_idx=i, longitude_idx=j)
+        file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_heatmap_{i}_{j}.png"
+        fig.savefig(os.path.join(pixel_out_path, file_name), dpi=600, bbox_inches="tight")
+        plt.close(fig)
+
+    os.makedirs(special_plots_path, exist_ok=True)
+    fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+    eda_instance.lake_bloom_kde(ax)
+    kde_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_kde.png"
+    fig.savefig(os.path.join(special_plots_path, kde_file_name), dpi=600, bbox_inches="tight")
+    plt.close(fig)
+
+
 def save_comparison_plots(instances, pixels, lake_analysis_folder, lake_str,
                           time_splits, comparison_plot_types,
                           aggregation=True, background_pts=False, purple_chla21=False):
