@@ -1,0 +1,19 @@
+{
+  "variable": "phycocyanin",
+  "qa": "lwlr_quality_flags",
+  "shapefile": "C:/Users/sparksno/Desktop/analysis_test/shapefile",
+  "images": "",
+  "out_folder": "C:/Users/sparksno/Desktop/analysis_test/data/v3.0",
+  "lakes": [327, 310, 21, 9],
+  "extract": false,
+  "qa_filter": true,
+  "phenology": false,
+  "analysis": true,
+  "purple_chla21": true,
+  "maps": true,
+  "aggregation": false,
+  "background_pts": true,
+  "comparison": false,
+  "time_splits": [[0,9999]], 
+  "pixel_plots": "C:/Users/sparksno/Documents/GitHub/cci-cyano-production/pixel_dicts/v3_chla_pixels.json"
+}

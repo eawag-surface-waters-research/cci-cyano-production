@@ -7,9 +7,10 @@ import logging
 import geopandas as gpd
 from concurrent.futures import ProcessPoolExecutor
 import os
+from pathlib import Path
 from datetime import datetime, timezone
 
-from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, write_provenance
+from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, save_special_plots, write_provenance
 from extract import extract
 from phenology import phenology
 from visualization import PhenologyVisualization
@@ -76,7 +77,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
             eda = PhenologyVisualization(e_path, p_path)
             lake_name = eda.ID_to_name(lake['id']).replace(" ", "")
             lake_str = f"ID{lake['id']}_{lake_name}"
-            eda.out_folder = os.path.join(lake_analysis_folder, lake_str)
+            eda.out_folder = Path(os.path.join(lake_analysis_folder, lake_str))
             eda.r2_scores(args["time_splits"])
             eda.MAD_scores(args["time_splits"])
             eda.RMSE_scores(args["time_splits"])
@@ -97,6 +98,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
                     logging.info(f"Starting pixel plots for lake {lake['id']}")
                     save_pixel_plots(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str, time_splits= args["time_splits"], aggregation=args["aggregation"])
                     create_summary(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str, time_splits= args["time_splits"])
+                    save_special_plots(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str)
                     logging.info(f"Pixel plots for lake {lake['id']} complete")
                 else:
                     logging.info(f"WARNING: lake {lake['id']} is not in the pixel dictionary")

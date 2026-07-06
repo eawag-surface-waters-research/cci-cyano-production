@@ -632,7 +632,7 @@ class PhenologyVisualization:
         file_path : str
             Full path to the CSV file.
         """
-        base = os.path.join(self.out_folder,self.lakeID, "calculated_values", "metrics", metric_name, f"v{self.version}", self.variable)
+        base = os.path.join(self.out_folder, "calculated_values", "metrics", metric_name, f"v{self.version}", self.variable)
         if start == 0 and end == 9999:
             fname = "full_ts.csv"
         elif start == 0:
