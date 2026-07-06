@@ -654,7 +654,7 @@ class PhenologyVisualization:
         file_path : str
             Full path to the CSV file.
         """
-        lake_name = self.ID_to_name(int(self.lakeID)).replace(" ", "")
+        lake_name = f.sanitize_filename(self.ID_to_name(int(self.lakeID)).replace(" ", ""))
         base = os.path.join(
             self.out_folder.parents[1], "lake_analysis",
              f"ID{self.lakeID}_{lake_name}", "calculated_values", "kde_data",

@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import subprocess
@@ -23,6 +24,17 @@ from sklearn.metrics import mean_squared_error, r2_score
 
 
 warnings.filterwarnings("ignore", category=SparseEfficiencyWarning)
+
+
+def sanitize_filename(name):
+    """Strip characters that are invalid in Windows file/folder names.
+
+    Windows reserves <>:"/\\|?* and disallows trailing dots/spaces; shapefile
+    'name' fields (e.g. mis-encoded diacritics) can contain these and break
+    os.makedirs with WinError 123.
+    """
+    cleaned = re.sub(r'[<>:"/\\|?*]', "", str(name))
+    return cleaned.strip(" .")
 
 def parse_args(args):
     default_args = {
