@@ -13,6 +13,7 @@ from pathlib import Path
 import csv
 import statistics
 import warnings
+import seaborn as sns
 from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib.patches import Rectangle, Patch
 from sklearn.metrics import mean_squared_error, r2_score
@@ -3346,8 +3347,13 @@ class PhenologyVisualization:
         return df[mask]
 
 
-    def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999):
+    def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999, plt_kwargs = None):
         print(f"plotting started at: {datetime.datetime.now()}")
+        if plt_kwargs is None:
+            plt_kwargs = {'cmap':'ocean_r',
+                          'levels':20,
+                          'cbar':True}
+
         dir_path, file_path = self.build_kde_path()
         if os.path.isfile(file_path):
             compressed_df = pd.read_csv(file_path)
@@ -3364,8 +3370,8 @@ class PhenologyVisualization:
                 warnings.warn("qa_value needs to be a set")
             else:
                 compressed_df = compressed_df[compressed_df['qa_column'].isin(qa_value)]
+                print(len(compressed_df))
 
-        
         if len(compressed_df) < 2:
             warnings.warn("Not enough data to plot kde")
             return
@@ -3373,31 +3379,31 @@ class PhenologyVisualization:
         years_all = np.unique(list(compressed_df["primary"].astype(int) ) + list(compressed_df["secondary"].astype(int) ))
         start, end = f.define_year_range(start_year, end_year, years_all)
         plot_df = self.sort_by_year(compressed_df, start_year=start, end_year=end)
-        
-
 
         x = np.round((plot_df["primary"].values % 1) * 1000).astype(int)
         y = np.round((plot_df["secondary"].values % 1) * 1000).astype(int)
+        y[y< x] += 365
 
         kde = gaussian_kde(np.vstack([x, y]))
         xi = np.linspace(0, 400, 100)
-        yi = np.linspace(0, 400, 100)
+        yi = np.linspace(0, 730, 100)
         Xi, Yi = np.meshgrid(xi, yi)
         Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape)
         Zi_norm = Zi / Zi.max()
-        cf = ax.contourf(Xi, Yi, Zi_norm, levels=np.linspace(0.05, 1.0, 20), cmap="viridis")
-        plt.colorbar(cf, ax=ax)
+        # cf = ax.contourf(Xi, Yi, Zi_norm, **plt_kwargs)
+        sns.kdeplot(x=x, y=y, ax = ax, fill=True,**plt_kwargs)
+        # plt.colorbar(cf, ax=ax)
         ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
         ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")
 
         ax.set_xlim(0, 400)
-        ax.set_ylim(0, 400)
+        ax.set_ylim(0, 730)
         ax.set_xlabel("Green-up Advanced (DOY)")
         ax.set_ylabel("Green-down Onset (DOY)")
         ax.set_title(f"Green-up Advanced vs Green-down Onset\nLake ID: {self.lakeID} | {start} - {end}")
         print(f"plotting ended at: {datetime.datetime.now()}")
 
-
+        return ax
             
 
 
