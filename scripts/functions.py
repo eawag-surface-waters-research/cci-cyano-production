@@ -261,30 +261,35 @@ def grab_time_data(e_path, p_path, valid_coords, buffered_geom_prep,
     extent = [lons.min(), lons.max(), lats.min(), lats.max()]
 
     with netCDF4.Dataset(p_path) as nc_p:
-        x_full = nc_p.variables[var_x][:, :, :]
-        y_full = nc_p.variables[var_y][:, :, :]
+        vx = nc_p.variables[var_x]
+        vy = nc_p.variables[var_y]
 
-    for (i, j) in valid_coords:
-        lon, lat = lons[j], lats[i]
-        if not buffered_geom_prep.contains(Point(lon, lat)):
-            continue
-        x_arr = np.array(unix_to_datetime(remove_nan(x_full[i, j, :])))
-        y_arr = np.array(remove_nan(y_full[i, j, :]))
-        if len(x_arr) == 0:
-            continue
-        year_arr = np.array([d.year for d in x_arr])
-        doys = np.array([d.timetuple().tm_yday for d in x_arr])
-        mask = (year_arr == year) & (doys >= DOY_start) & (doys <= DOY_end)
-        x_sub, y_sub = x_arr[mask], y_arr[mask]
-        if len(x_sub) == 0:
-            continue
-        if (y_sub < 0).any() and not neg_warned:
-            warnings.warn(f"Negative values in {year}", Warning)
-            neg_warned = True
-        if use_max:
-            map_data[i, j] = float(x_sub[int(np.argmax(y_sub))].timetuple().tm_yday)
-        else:
-            map_data[i, j] = float(x_sub[0].timetuple().tm_yday)
+        for (i, j) in valid_coords:
+            lon, lat = lons[j], lats[i]
+            if not buffered_geom_prep.contains(Point(lon, lat)):
+                continue
+            # read this pixel directly (nc_p.variables[var][i, j, :]) rather than slicing
+            # a bulk nc_p.variables[var][:, :, :] read - netCDF4 1.7.4 silently misattributes
+            # data between pixels when read this way for files with an unlimited 'record'
+            # dimension (verified against the trusted per-pixel access pattern used
+            # elsewhere in this codebase, e.g. PhenologyVisualization._load_pixel_data)
+            x_arr = np.array(unix_to_datetime(remove_nan(np.array(vx[i, j, :]))))
+            y_arr = np.array(remove_nan(np.array(vy[i, j, :])))
+            if len(x_arr) == 0:
+                continue
+            year_arr = np.array([d.year for d in x_arr])
+            doys = np.array([d.timetuple().tm_yday for d in x_arr])
+            mask = (year_arr == year) & (doys >= DOY_start) & (doys <= DOY_end)
+            x_sub, y_sub = x_arr[mask], y_arr[mask]
+            if len(x_sub) == 0:
+                continue
+            if (y_sub < 0).any() and not neg_warned:
+                warnings.warn(f"Negative values in {year}", Warning)
+                neg_warned = True
+            if use_max:
+                map_data[i, j] = float(x_sub[int(np.argmax(y_sub))].timetuple().tm_yday)
+            else:
+                map_data[i, j] = float(x_sub[0].timetuple().tm_yday)
 
     return map_data, extent
 
