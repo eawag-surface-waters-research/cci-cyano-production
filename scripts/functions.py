@@ -56,6 +56,7 @@ def parse_args(args):
         "comparison_plot_types": ["chla21 vs chla3", "chla21 vs phyco", "chla3 vs phyco", "triple"],
         "background_pts": True,
         "purple_chla21": True,
+        "ratio_qa_source": "self", # which side's QA to group the ratio boxplot by: 'self', 'other', or 'matched'
         "time_splits" : [(0,9999)], 
         # "start":0,
         # "end":9999,
@@ -573,6 +574,36 @@ def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_
         fig.savefig(os.path.join(out_path, file_name), dpi=600)
         plt.close(fig)
 
+        # QA boxplots (peaks and troughs)
+        for metric_key, metric_name in (("pks", "peaks"), ("trgs", "troughs")):
+            fig, axs = plt.subplots(rows, cols, constrained_layout=True, figsize=(10, 5))
+            for num, (start, end) in enumerate(time_splits):
+                ax = axs if num_splits == 1 else np.atleast_1d(axs).flatten()[num]
+                eda_instance.qa_boxplot(ax=ax, latitude_idx=i, longitude_idx=j, metric=metric_key, start=start, end=end)
+
+            if num_splits == 1:
+                start, end = time_splits[0]
+                if start == 0 and end == 9999:
+                    file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{metric_name}_qa_boxplot_full_ts.png"
+                elif start == 0:
+                    file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{metric_name}_qa_boxplot_ts_{2002}_to_{end}.png"
+                elif end == 9999:
+                    file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{metric_name}_qa_boxplot_ts_{start}_to_{2024}.png"
+                else:
+                    file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{metric_name}_qa_boxplot_ts_{start}_to_{end}.png"
+            elif num_splits == 2:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{metric_name}_qa_boxplot_split_ts.png"
+            else:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{num_splits}_{metric_name}_qa_boxplot_split_ts.png"
+            fig.savefig(os.path.join(out_path, file_name), dpi=600)
+            plt.close(fig)
+
+        # Per-pixel heatmap
+        fig, _ = eda_instance.yearly_heatmap_pixel(latitude_idx=i, longitude_idx=j)
+        heatmap_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_heatmap_{i}_{j}.png"
+        fig.savefig(os.path.join(out_path, heatmap_file_name), dpi=600, bbox_inches="tight")
+        plt.close(fig)
+
 
 def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_splits, summary_types = None):
     if summary_types is None:
@@ -643,28 +674,66 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
             file.write("\n")
 
 
-def save_special_plots(eda_instance, pixels, lake_analysis_folder, lake_str):
-    special_plots_path = os.path.join(lake_analysis_folder, lake_str, "plots", "pixel_plots", "special_plots")
+def save_timing_plots(eda_instance, lake_analysis_folder, lake_str, time_splits):
+    timing_plots_path = os.path.join(lake_analysis_folder, lake_str, "plots", "timing_plots")
+    os.makedirs(timing_plots_path, exist_ok=True)
 
-    for i, j in pixels:
-        pixel_out_path = os.path.join(special_plots_path, f"{i}_{j}")
-        os.makedirs(pixel_out_path, exist_ok=True)
-        fig, _ = eda_instance.yearly_heatmap_pixel(latitude_idx=i, longitude_idx=j)
-        file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_heatmap_{i}_{j}.png"
-        fig.savefig(os.path.join(pixel_out_path, file_name), dpi=600, bbox_inches="tight")
-        plt.close(fig)
+    def _year(v, zero_val=2002, max_val=2024):
+        return zero_val if v == 0 else (max_val if v == 9999 else v)
 
-    os.makedirs(special_plots_path, exist_ok=True)
+    # Lake-wide DOY plots (peaks and green-up midpoint), one panel per configured time split
+    for start, end in time_splits:
+        if start > end:
+            raise ValueError("Beginning of time split cannot be larger than the end")
+        years = list(range(_year(start), _year(end) + 1))
+        # close_factors degenerates to a 1-wide grid for prime counts (e.g. 23 years),
+        # which blows up the figure into a huge vertical strip - cap columns instead
+        cols = min(len(years), 6)
+        rows = -(-len(years) // cols)  # ceil division
+        ts_suffix = "full_ts" if (start == 0 and end == 9999) else f"{_year(start)}_to_{_year(end)}"
+
+        for peaks, metric_name in ((True, "peaks"), (False, "green_up_mid")):
+            fig = eda_instance.time_map_panel(years=years, nrow=rows, ncol=cols, peaks=peaks)
+            file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_doy_{metric_name}_{ts_suffix}.png"
+            fig.savefig(os.path.join(timing_plots_path, file_name), dpi=600, bbox_inches="tight")
+            plt.close(fig)
+
+    # Lake-wide heatmap
+    fig, _ = eda_instance.yearly_heatmap_lake()
+    heatmap_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_lake_heatmap.png"
+    fig.savefig(os.path.join(timing_plots_path, heatmap_file_name), dpi=600, bbox_inches="tight")
+    plt.close(fig)
+
+    # Lake-wide KDE
     fig, ax = plt.subplots(1, 1, figsize=(8, 8))
     eda_instance.lake_bloom_kde(ax)
     kde_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_kde.png"
-    fig.savefig(os.path.join(special_plots_path, kde_file_name), dpi=600, bbox_inches="tight")
+    fig.savefig(os.path.join(timing_plots_path, kde_file_name), dpi=600, bbox_inches="tight")
     plt.close(fig)
+
+    # Lake-wide QA boxplots (peaks and troughs), one panel per configured time split
+    for metric_key, metric_name in (("pks", "peaks"), ("trgs", "troughs")):
+        num_splits = len(time_splits)
+        rows, cols = close_factors(num_splits)
+        fig, axs = plt.subplots(rows, cols, constrained_layout=True, figsize=(5 * cols, 5 * rows))
+        for num, (start, end) in enumerate(time_splits):
+            ax = axs if num_splits == 1 else np.atleast_1d(axs).flatten()[num]
+            eda_instance.qa_boxplot_lake(ax=ax, metric=metric_key, start=start, end=end)
+
+        if num_splits == 1:
+            start, end = time_splits[0]
+            ts_suffix = "full_ts" if (start == 0 and end == 9999) else f"{_year(start)}_to_{_year(end)}"
+        else:
+            ts_suffix = f"{num_splits}_split_ts"
+        file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_lake_{metric_name}_qa_boxplot_{ts_suffix}.png"
+        fig.savefig(os.path.join(timing_plots_path, file_name), dpi=600)
+        plt.close(fig)
 
 
 def save_comparison_plots(instances, pixels, lake_analysis_folder, lake_str,
                           time_splits, comparison_plot_types,
-                          aggregation=True, background_pts=False, purple_chla21=False):
+                          aggregation=True, background_pts=False, purple_chla21=False,
+                          ratio_qa_source="self"):
     chla21 = instances.get("chla21")
     chla3 = instances.get("chla3")
     phyco  = instances.get("phycocyanin3")
@@ -720,6 +789,51 @@ def save_comparison_plots(instances, pixels, lake_analysis_folder, lake_str,
 
             fig.savefig(os.path.join(save_path, file_name), dpi=600)
             plt.close(fig)
+
+            # ratio QA boxplot - only defined for a pair of products, not the triple overlay
+            if inst3 is None:
+                # phycocyanin is always the numerator (dividend) when it's part of the pair
+                ratio_self, ratio_other = (inst2, inst1) if inst2 is phyco else (inst1, inst2)
+
+                ratio_file_name = f"comparison_pks_ratio_qa_boxplot_{label}_{ts_suffix}{agg}.png"
+
+                fig, axs = plt.subplots(rows, cols, figsize=(5 * cols, 5 * rows), constrained_layout=True)
+                axs_flat = np.atleast_1d(axs).flatten()
+
+                for k, (start, end) in enumerate(time_splits):
+                    ratio_self.qa_boxplot(
+                        latitude_idx=i, longitude_idx=j, ax=axs_flat[k],
+                        metric="pks", start=start, end=end,
+                        other=ratio_other, qa_source=ratio_qa_source,
+                    )
+
+                fig.savefig(os.path.join(save_path, ratio_file_name), dpi=600)
+                plt.close(fig)
+
+    # Lake-wide ratio QA boxplot - only defined for a pair of products, not the triple overlay.
+    # Lake-wide (unlike the per-pixel one above), so it goes into timing_plots, not comparisons/{i}_{j}
+    timing_plots_path = os.path.join(lake_analysis_folder, lake_str, "plots", "timing_plots")
+    os.makedirs(timing_plots_path, exist_ok=True)
+    rows, cols = close_factors(n)
+
+    for inst1, inst2, inst3, label in pair_plots:
+        if inst3 is not None:
+            continue
+
+        ratio_self, ratio_other = (inst2, inst1) if inst2 is phyco else (inst1, inst2)
+        ratio_file_name = f"lake_ratio_qa_boxplot_{label}_{ts_suffix}{agg}.png"
+
+        fig, axs = plt.subplots(rows, cols, figsize=(5 * cols, 5 * rows), constrained_layout=True)
+        axs_flat = np.atleast_1d(axs).flatten()
+
+        for k, (start, end) in enumerate(time_splits):
+            ratio_self.qa_boxplot_lake(
+                ax=axs_flat[k], metric="pks", start=start, end=end,
+                other=ratio_other, qa_source=ratio_qa_source,
+            )
+
+        fig.savefig(os.path.join(timing_plots_path, ratio_file_name), dpi=600)
+        plt.close(fig)
 
 
 def prep_dimark_data(insitu_df,start=0, end=9999,  insitu_date_col="datetime", insitu_value_col="chlorophyll_a", insitu_station_col=None, station_id=None, max_depth = 5):
