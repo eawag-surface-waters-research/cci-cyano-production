@@ -1233,8 +1233,15 @@ class PhenologyVisualization:
             cbar.set_ticks([160, 185, 215, 250])
             cbar.ax.tick_params(labelsize=15)
 
+        # single shared legend for the lake outline, placed next to the colorbar
+        # instead of repeating it inside every subplot
+        if outline_handle is not None:
+            fig.legend([outline_handle], [outline_label], loc="upper left",
+                       bbox_to_anchor=(1.0, 1.0), fontsize=15, frameon=False)
+
         fig.suptitle(f"{extrema_label} Day of Year", fontsize=25)
         plt.show()
+        return fig
 
 
     def single_day_map(self, date):
@@ -1428,6 +1435,136 @@ class PhenologyVisualization:
         values_m = px["values"][mask]
         time_dt   = f.datenum_to_datetime(t_all[mask])
         return pd.Series(index=time_dt,data=values_m)
+
+
+    def pair_phenology_events(self, other, latitude_idx, longitude_idx, metric="pks", tolerance_days=4):
+        """Pair phenology metric events between self and another phenology product/version.
+
+        Each event may be used in at most one pair. Candidate pairs (any self/other
+        event within `tolerance_days`) are ranked by how close they are in time and
+        claimed greedily closest-first, so once an event is paired it is removed from
+        contention - no event is ever paired twice. Everything is done with an all-pairs
+        distance matrix and pandas/numpy set ops (drop_duplicates, boolean masks), so no
+        Python loop is used over the (typically ragged, variable-length) per-pixel event
+        arrays.
+
+        Parameters
+        ----------
+        other : PhenologyVisualization
+            Second instance to pair against (e.g. phycocyanin vs chla, or v2.1 vs v3.0),
+            for the same lake/pixel.
+        latitude_idx : int
+            Row (lat) index of the pixel.
+        longitude_idx : int
+            Column (lon) index of the pixel.
+        metric : str, optional
+            One of 'pks', 'trgs', 'midUP', 'midDOWN', 'onsetUP', 'onsetDOWN', 'advUP',
+            'advDOWN'. Defaults to 'pks' (summer peaks).
+        tolerance_days : int, optional
+            Maximum gap in days between two events for them to count as a pair.
+            Defaults to 4.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per paired event, with columns time_<label>/value_<label> for
+            each side plus 'day_diff' (absolute gap in days). Unpaired events are
+            not included, and no event appears in more than one row.
+
+        Raises
+        ------
+        ValueError
+            If `metric` is not a recognised phenology metric key.
+        """
+        x_key, y_key, qa_key = f"{metric}_x", f"{metric}_y", f"{metric}_qa"
+
+        px_self = self._load_pixel_data(latitude_idx, longitude_idx)
+        px_other = other._load_pixel_data(latitude_idx, longitude_idx)
+
+        if x_key not in px_self or x_key not in px_other:
+            raise ValueError(f"'{metric}' is not a valid phenology metric.")
+
+        self_label, other_label = self.variable, other.variable
+        # if self_label == other_label:
+        #     self_label, other_label = f"{self_label}_v{self.version}", f"{other_label}_v{other.version}"
+
+        has_qa = qa_key in px_self and qa_key in px_other
+
+        columns = [f"time_{self_label}", f"value_{self_label}",
+                   f"time_{other_label}", f"value_{other_label}", "day_diff"]
+        if has_qa:
+            columns += [f"qa_{self_label}", f"qa_{other_label}"]
+
+        time_self = pd.to_datetime(px_self[x_key]).values
+        time_other = pd.to_datetime(px_other[x_key]).values
+
+        self_idx_matched, other_idx_matched, day_diff_matched = self._greedy_match_within_tolerance(
+            time_self, time_other, tolerance_days
+        )
+        if len(self_idx_matched) == 0:
+            return pd.DataFrame(columns=columns)
+
+        paired_dict = {
+            f"time_{self_label}": time_self[self_idx_matched],
+            f"value_{self_label}": px_self[y_key][self_idx_matched],
+            f"time_{other_label}": time_other[other_idx_matched],
+            f"value_{other_label}": px_other[y_key][other_idx_matched],
+            "day_diff": day_diff_matched,
+        }
+        if has_qa:
+            paired_dict[f"qa_{self_label}"] = px_self[qa_key][self_idx_matched]
+            paired_dict[f"qa_{other_label}"] = px_other[qa_key][other_idx_matched]
+
+        paired = pd.DataFrame(paired_dict)
+
+        return paired.sort_values(f"time_{self_label}").reset_index(drop=True)
+
+
+    @staticmethod
+    def _greedy_match_within_tolerance(time_self, time_other, tolerance_days):
+        """Match each self event to at most one other event within tolerance_days.
+
+        Core matching logic shared by pair_phenology_events (single pixel) and
+        qa_boxplot_lake's ratio mode (bulk, all lake pixels). Candidate pairs are
+        ranked by time gap and claimed closest-first, so no event is ever paired
+        twice - see pair_phenology_events's docstring for the full rationale.
+
+        Parameters
+        ----------
+        time_self, time_other : numpy.ndarray of numpy.datetime64
+            Event timestamps to match against each other.
+        tolerance_days : int
+            Maximum gap in days between two events for them to count as a pair.
+
+        Returns
+        -------
+        self_idx, other_idx : numpy.ndarray of int
+            Index arrays into time_self/time_other for matched pairs.
+        day_diff : numpy.ndarray of float
+            Matching day gap for each pair, same length as self_idx/other_idx.
+        """
+        empty = np.array([], dtype=int)
+        if len(time_self) == 0 or len(time_other) == 0:
+            return empty, empty, np.array([], dtype=float)
+
+        day_diff = np.abs(time_self[:, None] - time_other[None, :]) / np.timedelta64(1, "D")
+        self_idx, other_idx = np.where(day_diff <= tolerance_days)
+        if len(self_idx) == 0:
+            return empty, empty, np.array([], dtype=float)
+
+        candidates = pd.DataFrame({
+            "self_idx": self_idx,
+            "other_idx": other_idx,
+            "day_diff": day_diff[self_idx, other_idx],
+        }).sort_values("day_diff", kind="stable")
+
+        # claim closest pairs first; once an event is claimed on either side,
+        # drop_duplicates removes every other candidate row that reuses it
+        candidates = candidates.drop_duplicates(subset="self_idx", keep="first")
+        candidates = candidates.drop_duplicates(subset="other_idx", keep="first")
+
+        return (candidates["self_idx"].to_numpy(), candidates["other_idx"].to_numpy(),
+                candidates["day_diff"].to_numpy())
 
 
     def extrema_plot(self, latitude_idx, longitude_idx, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False, show_legend = True):
