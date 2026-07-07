@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from datetime import datetime, timezone
 
-from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, save_special_plots, write_provenance, sanitize_filename
+from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, save_timing_plots, write_provenance, sanitize_filename
 from extract import extract
 from phenology import phenology
 from visualization import PhenologyVisualization
@@ -98,7 +98,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
                     logging.info(f"Starting pixel plots for lake {lake['id']}")
                     save_pixel_plots(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str, time_splits= args["time_splits"], aggregation=args["aggregation"])
                     create_summary(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str, time_splits= args["time_splits"])
-                    save_special_plots(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str)
+                    save_timing_plots(eda, lake_analysis_folder, lake_str, time_splits=args["time_splits"])
                     logging.info(f"Pixel plots for lake {lake['id']} complete")
                 else:
                     logging.info(f"WARNING: lake {lake['id']} is not in the pixel dictionary")
@@ -136,7 +136,8 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
                             comparison_plot_types=args["comparison_plot_types"],
                             aggregation=args["aggregation"],
                             background_pts=args["background_pts"],
-                            purple_chla21=args["purple_chla21"]
+                            purple_chla21=args["purple_chla21"],
+                            ratio_qa_source=args["ratio_qa_source"]
                         )
                         logging.info(f"Comparison plots for lake {lake['id']} complete")
                 
