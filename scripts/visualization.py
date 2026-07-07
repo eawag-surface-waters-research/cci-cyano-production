@@ -695,8 +695,20 @@ class PhenologyVisualization:
         os.makedirs(dir_path, exist_ok=True)
         if os.path.isfile(file_path):
             df = pd.read_csv(file_path)
-            return dict(zip(zip(df["i"], df["j"]), df[col_name]))
-        warnings.warn(f"{metric_name} need to be calculated. Depending on the lake size this may take a while.")
+            data = dict(zip(zip(df["i"], df["j"]), df[col_name]))
+            missing = [coord for coord in self.valid_coords if coord not in data]
+            if not missing:
+                return data
+            # the cache predates a pixel that is now valid (e.g. extract/phenology
+            # was regenerated since the CSV was written) - it's stale, not just slow,
+            # so recompute the full metric rather than silently KeyError-ing later
+            warnings.warn(
+                f"Cached {metric_name} for lake ID {self.lakeID} is missing "
+                f"{len(missing)} currently-valid pixel(s) (e.g. {missing[0]}); "
+                f"the cache is stale and will be recomputed."
+            )
+        else:
+            warnings.warn(f"{metric_name} need to be calculated. Depending on the lake size this may take a while.")
         workers = partial(compute_fn, start=start, end=end, metrics_to_compute = [metric_name])
         with multiprocessing.Pool(initializer=_init_worker, initargs=(self.p_path, self.e_path), processes=3) as pool:
             result = pool.map(workers, self.valid_coords)
