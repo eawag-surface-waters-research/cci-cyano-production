@@ -2957,7 +2957,7 @@ class PhenologyVisualization:
                     transform=ax.transAxes, ha="right", va="top", zorder = 10)
 
 
-    def single_plot(self, latitude_idx, longitude_idx, ax, aggregation = False, start= 0, end= 9999, annotation = None,variables = None):
+    def single_plot(self, latitude_idx, longitude_idx, ax, aggregation = False, start= 0, end= 9999, annotation = None,variables = None, check_buffer = False):
         """Plot raw observations, the smoothed spline, and all phenological events for a pixel.
 
         Displays a scatter of valid (QA==0) observations or 3×3 aggregated values,
@@ -2981,6 +2981,10 @@ class PhenologyVisualization:
             First year to display (inclusive). 0 = earliest in the series.
         end : int, optional
             Last year to display (inclusive). 9999 = latest in the series.
+        check_buffer : bool, optional
+            If True, warn when the requested pixel falls outside the lake's 1 km
+            inward-shrunk boundary (self.prepped_geom). Default False - the pixel
+            is not checked against the buffer.
 
         Returns
         -------
@@ -2992,6 +2996,12 @@ class PhenologyVisualization:
         lat_val = float(lat[latitude_idx])
         lon_val = float(lon[longitude_idx])
         smoothing = pixel_data["smoothing"]
+
+        if check_buffer and not self.prepped_geom.contains(Point(lon_val, lat_val)):
+            warnings.warn(
+                f"Pixel ({latitude_idx}, {longitude_idx}) is outside the 1 km lake buffer "
+                f"for lake ID {self.lakeID}."
+            )
 
         plotting_data = f.grab_plotting_variables(start = start, end = end, pixel_data=pixel_data, variables=variables)
 
