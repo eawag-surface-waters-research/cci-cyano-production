@@ -1803,13 +1803,15 @@ class PhenologyVisualization:
 
             _, values, qa_values = plotting_data[metric]
             var_label = self.get_plot_config("var", self.variable)["label"]
-            title = f"{metric_label} Values by QA\n Lake ID: {self.lakeID}"
+            title = f"{var_label} {metric_label} Values by QA\n Lake ID: {self.lakeID}"
             ylabel = f"{var_label} [ug/L]"
         else:
             if qa_source not in ("self", "other", "matched"):
                 raise ValueError("qa_source must be 'self', 'other', or 'matched'.")
 
             self_label, other_label = self.variable, other.variable
+            self_pretty = self.get_plot_config("var", self.variable)["label"]
+            other_pretty = other.get_plot_config("var", other.variable)["label"]
 
             paired = self.pair_phenology_events(other, latitude_idx, longitude_idx, metric=metric, tolerance_days=tolerance_days)
             if len(paired) == 0:
@@ -1838,7 +1840,7 @@ class PhenologyVisualization:
                 qa_values = paired[f"qa_{qa_label}"].to_numpy()
 
             values = (paired[f"value_{self_label}"] / paired[f"value_{other_label}"]).to_numpy()
-            title = f"{metric_label} {self_label}/{other_label} Ratio by QA\n Lake ID: {self.lakeID}"
+            title = f"{metric_label} {self_pretty}/{other_pretty} Ratio by QA\n Lake ID: {self.lakeID}"
             ylabel = f"{self_label}/{other_label} ratio"
 
         return self._boxplot_by_qa(ax, values, qa_values, title=title, ylabel=ylabel)
@@ -1933,13 +1935,15 @@ class PhenologyVisualization:
                 return None
 
             var_label = self.get_plot_config("var", self.variable)["label"]
-            title = f"{metric_label} Values by QA\n Lake ID: {self.lakeID} (lake-wide)"
+            title = f"{var_label} {metric_label} Values by QA\n Lake ID: {self.lakeID} (lake-wide)"
             ylabel = f"{var_label} [ug/L]"
         else:
             if qa_source not in ("self", "other", "matched"):
                 raise ValueError("qa_source must be 'self', 'other', or 'matched'.")
 
             self_label, other_label = self.variable, other.variable
+            self_pretty = self.get_plot_config("var", self.variable)["label"]
+            other_pretty = other.get_plot_config("var", other.variable)["label"]
 
             self_vals, other_vals, self_qa_vals, other_qa_vals, self_times = [], [], [], [], []
             with netCDF4.Dataset(self.p_path) as nc_self, netCDF4.Dataset(other.p_path) as nc_other:
@@ -2002,7 +2006,7 @@ class PhenologyVisualization:
                 qa_values = self_qa_vals if qa_source == "self" else other_qa_vals
 
             values = self_vals / other_vals
-            title = f"{metric_label} {self_label}/{other_label} Ratio by QA\n Lake ID: {self.lakeID} (lake-wide)"
+            title = f"{metric_label} {self_pretty}/{other_pretty} Ratio by QA\n Lake ID: {self.lakeID} (lake-wide)"
             ylabel = f"{self_label}/{other_label} ratio"
 
         return self._boxplot_by_qa(ax, values, qa_values, title=title, ylabel=ylabel)
@@ -3826,21 +3830,33 @@ class PhenologyVisualization:
                           'cbar':True}
 
         dir_path, file_path = self.build_kde_path()
-        if os.path.isfile(file_path):
+        # the cached CSV doesn't retain per-pixel (i, j) identity (only pooled
+        # primary/qa_column/secondary event columns), so unlike compute_and_cache_metric
+        # we can't detect staleness by checking pixel coverage - fall back to comparing
+        # against the source NetCDFs' modification time instead
+        source_mtime = max(os.path.getmtime(self.p_path), os.path.getmtime(self.e_path))
+        cache_is_stale = os.path.isfile(file_path) and os.path.getmtime(file_path) < source_mtime
+
+        if os.path.isfile(file_path) and not cache_is_stale:
             compressed_df = pd.read_csv(file_path)
             print(file_path)
         else:
-            warnings.warn("KDE events need to be calculated. Depending on the lake size this may take a while.")
+            if cache_is_stale:
+                warnings.warn(f"Cached KDE events for lake ID {self.lakeID} predate the source data; recomputing.")
+            else:
+                warnings.warn("KDE events need to be calculated. Depending on the lake size this may take a while.")
             os.makedirs(dir_path, exist_ok=True)
             df = self.assemble_kde_data()
             compressed_df = self.prep_kde_data(df)
             compressed_df.to_csv(file_path, index=False)
 
+        qa_filtered_set = None
         if qa_value is not None:
             if type(qa_value) != set:
                 warnings.warn("qa_value needs to be a set")
             else:
                 compressed_df = compressed_df[compressed_df['qa_column'].isin(qa_value)]
+                qa_filtered_set = qa_value
                 print(len(compressed_df))
 
         if len(compressed_df) < 2:
@@ -3855,12 +3871,18 @@ class PhenologyVisualization:
         y = np.round((plot_df["secondary"].values % 1) * 1000).astype(int)
         y[y< x] += 365
 
-        kde = gaussian_kde(np.vstack([x, y]))
-        xi = np.linspace(0, 400, 100)
-        yi = np.linspace(0, 730, 100)
-        Xi, Yi = np.meshgrid(xi, yi)
-        Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape)
-        Zi_norm = Zi / Zi.max()
+        try:
+            kde = gaussian_kde(np.vstack([x, y]))
+            xi = np.linspace(0, 400, 100)
+            yi = np.linspace(0, 730, 100)
+            Xi, Yi = np.meshgrid(xi, yi)
+            Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape)
+            Zi_norm = Zi / Zi.max()
+        except np.linalg.LinAlgError:
+            # too few / too degenerate (collinear or duplicate) points for a 2D KDE -
+            # e.g. can happen with a restrictive qa_value filter that leaves very few events
+            warnings.warn(f"Not enough distinct {self.variable} events to plot KDE for lake ID {self.lakeID}.")
+            return
         # cf = ax.contourf(Xi, Yi, Zi_norm, **plt_kwargs)
         sns.kdeplot(x=x, y=y, ax = ax, fill=True,**plt_kwargs)
         # plt.colorbar(cf, ax=ax)
@@ -3871,7 +3893,16 @@ class PhenologyVisualization:
         ax.set_ylim(0, 730)
         ax.set_xlabel("Green-up Advanced (DOY)")
         ax.set_ylabel("Green-down Onset (DOY)")
-        ax.set_title(f"Green-up Advanced vs Green-down Onset\nLake ID: {self.lakeID} | {start} - {end}")
+
+        var_label = self.get_plot_config("var", self.variable)["label"]
+        if qa_filtered_set is None:
+            qa_label = "All QA"
+        else:
+            qa_label = "QA: " + ", ".join(self.get_plot_config("qa", q)["label"] for q in sorted(qa_filtered_set))
+        ax.set_title(
+            f"{var_label} - Green-up Advanced vs Green-down Onset\n"
+            f"Lake ID: {self.lakeID} | {start} - {end} | {qa_label}"
+        )
         print(f"plotting ended at: {datetime.datetime.now()}")
 
         return ax
