@@ -57,6 +57,7 @@ def parse_args(args):
         "background_pts": True,
         "purple_chla21": True,
         "ratio_qa_source": "self", # which side's QA to group the ratio boxplot by: 'self', 'other', or 'matched'
+        "kde_qa": None, # list of QA filters, one KDE plot per entry, e.g. [[0], [0,1], null] (null = all levels). None (unset) = a single all-levels plot
         "time_splits" : [(0,9999)], 
         # "start":0,
         # "end":9999,
@@ -674,7 +675,9 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
             file.write("\n")
 
 
-def save_timing_plots(eda_instance, lake_analysis_folder, lake_str, time_splits):
+def save_timing_plots(eda_instance, lake_analysis_folder, lake_str, time_splits, kde_qa=None):
+    if kde_qa is None:
+        kde_qa = [None]
     timing_plots_path = os.path.join(lake_analysis_folder, lake_str, "plots", "timing_plots")
     os.makedirs(timing_plots_path, exist_ok=True)
 
@@ -704,12 +707,15 @@ def save_timing_plots(eda_instance, lake_analysis_folder, lake_str, time_splits)
     fig.savefig(os.path.join(timing_plots_path, heatmap_file_name), dpi=600, bbox_inches="tight")
     plt.close(fig)
 
-    # Lake-wide KDE
-    fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-    eda_instance.lake_bloom_kde(ax)
-    kde_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_kde.png"
-    fig.savefig(os.path.join(timing_plots_path, kde_file_name), dpi=600, bbox_inches="tight")
-    plt.close(fig)
+    # Lake-wide KDE - one plot per requested QA filter, e.g. kde_qa=[None, {0}, {0,1}]
+    for qa_spec in kde_qa:
+        qa_set = set(qa_spec) if qa_spec is not None else None
+        qa_suffix = "all" if qa_set is None else "".join(str(q) for q in sorted(qa_set))
+        fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+        eda_instance.lake_bloom_kde(ax, qa_value=qa_set)
+        kde_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_kde_qa{qa_suffix}.png"
+        fig.savefig(os.path.join(timing_plots_path, kde_file_name), dpi=600, bbox_inches="tight")
+        plt.close(fig)
 
     # Lake-wide QA boxplots (peaks and troughs), one panel per configured time split
     for metric_key, metric_name in (("pks", "peaks"), ("trgs", "troughs")):
