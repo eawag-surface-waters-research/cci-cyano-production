@@ -100,7 +100,17 @@ def _init_kde_worker(p_path, var_names):
     """
     with netCDF4.Dataset(p_path) as nc:
         for var in var_names:
-            _GLOBALS[f"kde_{var}"] = np.asarray(nc.variables[var][:])
+            v = nc.variables[var]
+            nlat, nlon, nrec = v.shape
+            arr = np.empty((nlat, nlon, nrec), dtype=v.dtype)
+            # read pixel by pixel (v[i, j, :]) rather than a bulk v[:] read - netCDF4
+            # 1.7.4 silently misattributes data between pixels when read this way for
+            # files with an unlimited 'record' dimension, verified against the trusted
+            # per-pixel access pattern used elsewhere in this class (e.g. _load_pixel_data)
+            for i in range(nlat):
+                for j in range(nlon):
+                    arr[i, j, :] = v[i, j, :]
+            _GLOBALS[f"kde_{var}"] = arr
 
 
 # color_sets_4x4: bivariate color palettes for the 4×4 heatmap legend.
@@ -2431,20 +2441,43 @@ class PhenologyVisualization:
                     result[year] = year_counts
         else:
             with netCDF4.Dataset(self.p_path) as nc:
-                pks_x_raw = np.array(nc.variables["pks_x"][:, :, :]).ravel()
-                pk_mask = ~np.isnan(pks_x_raw)
-                pks_x = f.unix_to_datetime(pks_x_raw[pk_mask])
-                trgs_x_raw = np.array(nc.variables["trgs_x"][:, :, :]).ravel()
-                trg_mask = ~np.isnan(trgs_x_raw)
-                trgs_x = f.unix_to_datetime(trgs_x_raw[trg_mask])
+                vpx, vpqa = nc.variables["pks_x"], nc.variables["pks_qa"]
+                vtx, vtqa = nc.variables["trgs_x"], nc.variables["trgs_qa"]
+
+                # restrict to pixels inside the 1 km-inset lake boundary (self.valid_idx_prep),
+                # matching metric_map/time_map/lake_bloom_kde/qa_boxplot_lake, instead of the
+                # full raw grid which includes border/mixed pixels. Read per-pixel
+                # (nc.variables[var][i, j, :]) rather than a bulk [:, :, :] read - netCDF4 1.7.4
+                # misattributes data between pixels when read that way for files with an
+                # unlimited 'record' dimension, which would corrupt this restriction
+                pks_x_parts, pks_qa_parts = [], []
+                trgs_x_parts, trgs_qa_parts = [], []
+                for i, j in self.valid_idx_prep:
+                    px_raw = np.asarray(vpx[i, j, :])
+                    pmask = ~np.isnan(px_raw)
+                    if pmask.any():
+                        pks_x_parts.append(px_raw[pmask])
+                        pks_qa_parts.append(np.asarray(vpqa[i, j, :])[pmask])
+
+                    tx_raw = np.asarray(vtx[i, j, :])
+                    tmask = ~np.isnan(tx_raw)
+                    if tmask.any():
+                        trgs_x_parts.append(tx_raw[tmask])
+                        trgs_qa_parts.append(np.asarray(vtqa[i, j, :])[tmask])
+
+                pks_x_raw = np.concatenate(pks_x_parts) if pks_x_parts else np.array([])
+                pks_qa_arr = np.concatenate(pks_qa_parts) if pks_qa_parts else np.array([])
+                trgs_x_raw = np.concatenate(trgs_x_parts) if trgs_x_parts else np.array([])
+                trgs_qa_arr = np.concatenate(trgs_qa_parts) if trgs_qa_parts else np.array([])
+
+                pks_x = f.unix_to_datetime(pks_x_raw)
+                trgs_x = f.unix_to_datetime(trgs_x_raw)
 
                 if qa is not None:
                     qa_set = set(qa)
-                    pks_qa_arr = np.array(nc.variables["pks_qa"][:, :, :]).ravel()[pk_mask]
-                    trgs_qa_arr = np.array(nc.variables["trgs_qa"][:, :, :]).ravel()[trg_mask]
                     pks_x = pks_x[np.isin(pks_qa_arr, list(qa_set))]
                     trgs_x = trgs_x[np.isin(trgs_qa_arr, list(qa_set))]
-        
+
                 for year in range(start_year, end_year + 1):
                     year_fractions = []
                     for (q_start, q_end) in quarters:
