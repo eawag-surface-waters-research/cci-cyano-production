@@ -51,6 +51,7 @@ def parse_args(args):
         "analysis": False,
         "maps": False,
         "pixel_plots": False,
+        "timing_plots": False,
         "comparison": False,
         "comparison_classes": ["chla21", "chla3", "phycocyanin3"],
         "comparison_plot_types": ["chla21 vs chla3", "chla21 vs phyco", "chla3 vs phyco", "triple"],

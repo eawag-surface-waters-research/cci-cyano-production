@@ -98,11 +98,14 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
                     logging.info(f"Starting pixel plots for lake {lake['id']}")
                     save_pixel_plots(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str, time_splits= args["time_splits"], aggregation=args["aggregation"])
                     create_summary(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str, time_splits= args["time_splits"])
-                    save_timing_plots(eda, lake_analysis_folder, lake_str, time_splits=args["time_splits"], kde_qa=args["kde_qa"])
                     logging.info(f"Pixel plots for lake {lake['id']} complete")
                 else:
                     logging.info(f"WARNING: lake {lake['id']} is not in the pixel dictionary")
-                    continue
+
+            if args["timing_plots"]:
+                logging.info(f"Starting timing plots for lake {lake['id']}")
+                save_timing_plots(eda, lake_analysis_folder, lake_str, time_splits=args["time_splits"], kde_qa=args["kde_qa"])
+                logging.info(f"Timing plots for lake {lake['id']} complete")
 
             if args["comparison"]:
                 logging.info("Starting Comparison Plots")
