@@ -17,7 +17,7 @@ import seaborn as sns
 from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib.patches import Rectangle, Patch
 from sklearn.metrics import mean_squared_error, r2_score
-from scipy.stats import pearsonr, gaussian_kde
+from scipy.stats import pearsonr, gaussian_kde, mannwhitneyu
 from csaps import csaps
 import functions as f
 import multiprocessing
@@ -2025,6 +2025,10 @@ class PhenologyVisualization:
     def _boxplot_by_qa(self, ax, values, qa_values, title, ylabel):
         """Draw a QA-grouped boxplot of `values` on `ax`. Shared by qa_boxplot and qa_boxplot_ratio.
 
+        Also annotates every pair of QA groups with a two-sided Mann-Whitney U
+        test (non-parametric, no normality assumption), drawn as a significance
+        bracket above the boxes: '***' p<0.001, '**' p<0.01, '*' p<0.05, 'ns' otherwise.
+
         Parameters
         ----------
         ax : matplotlib.axes.Axes
@@ -2066,7 +2070,57 @@ class PhenologyVisualization:
         ax.set_xlabel("QA")
         ax.set_ylabel(ylabel)
 
+        self._annotate_pairwise_significance(ax, groups)
+
         return box
+
+
+    @staticmethod
+    def _annotate_pairwise_significance(ax, groups):
+        """Draw pairwise Mann-Whitney U significance brackets above a boxplot.
+
+        Compares every pair of groups (by their 1-indexed boxplot position) with
+        a two-sided Mann-Whitney U test. Brackets are stacked bottom-to-top by
+        increasing span (adjacent groups first) so they don't overlap. Pairs with
+        fewer than 2 samples in either group are skipped (test undefined).
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes
+            Axes already containing the boxplot to annotate.
+        groups : list of array-like
+            The same group arrays passed to ax.boxplot, in boxplot position order.
+        """
+        pairs = [(a, b) for a in range(len(groups)) for b in range(a + 1, len(groups))]
+        pairs = [p for p in pairs if len(groups[p[0]]) >= 2 and len(groups[p[1]]) >= 2]
+        if not pairs:
+            return
+
+        pairs.sort(key=lambda p: p[1] - p[0])
+
+        y_max = max(g.max() for g in groups if len(g))
+        y_min = min(g.min() for g in groups if len(g))
+        y_range = (y_max - y_min) or abs(y_max) or 1.0
+        step = y_range * 0.08
+
+        for level, (a, b) in enumerate(pairs):
+            _, p_value = mannwhitneyu(groups[a], groups[b], alternative="two-sided")
+            if p_value < 0.001:
+                sig = "***"
+            elif p_value < 0.01:
+                sig = "**"
+            elif p_value < 0.05:
+                sig = "*"
+            else:
+                sig = "ns"
+
+            y = y_max + step * (1 + level * 1.6)
+            x1, x2 = a + 1, b + 1
+            ax.plot([x1, x1, x2, x2], [y, y + step * 0.2, y + step * 0.2, y],
+                    color="black", linewidth=1)
+            ax.text((x1 + x2) / 2, y + step * 0.25, sig, ha="center", va="bottom", fontsize=10)
+
+        ax.set_ylim(top=y_max + step * (1 + len(pairs) * 1.6) + step)
 
 
     def extrema_comparison(self, other1,  latitude_idx, longitude_idx, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = True, other2= None, purple_chla21= False, show_legend= False):
