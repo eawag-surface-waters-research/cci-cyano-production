@@ -1701,7 +1701,7 @@ class PhenologyVisualization:
 
             combined_style = {
                 **var_style,            # color
-                **qa_style,             # marker
+                "marker": qa_style["marker"],
                 "s": 50,
                 "edgecolors": var_style['color'],
                 "linewidths": 2,
