@@ -708,15 +708,17 @@ def save_timing_plots(eda_instance, lake_analysis_folder, lake_str, time_splits,
     fig.savefig(os.path.join(timing_plots_path, heatmap_file_name), dpi=600, bbox_inches="tight")
     plt.close(fig)
 
-    # Lake-wide KDE - one plot per requested QA filter, e.g. kde_qa=[None, {0}, {0,1}]
+    # Lake-wide KDE - one plot per requested QA filter x time split, e.g. kde_qa=[None, {0}, {0,1}]
     for qa_spec in kde_qa:
         qa_set = set(qa_spec) if qa_spec is not None else None
         qa_suffix = "all" if qa_set is None else "".join(str(q) for q in sorted(qa_set))
-        fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-        eda_instance.lake_bloom_kde(ax, qa_value=qa_set)
-        kde_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_kde_qa{qa_suffix}.png"
-        fig.savefig(os.path.join(timing_plots_path, kde_file_name), dpi=600, bbox_inches="tight")
-        plt.close(fig)
+        for start, end in time_splits:
+            ts_suffix = "full_ts" if (start == 0 and end == 9999) else f"{_year(start)}_to_{_year(end)}"
+            fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+            eda_instance.lake_bloom_kde(ax, qa_value=qa_set, start_year=start, end_year=end)
+            kde_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_kde_qa{qa_suffix}_{ts_suffix}.png"
+            fig.savefig(os.path.join(timing_plots_path, kde_file_name), dpi=600, bbox_inches="tight")
+            plt.close(fig)
 
     # Lake-wide QA boxplots (peaks and troughs), one panel per configured time split
     for metric_key, metric_name in (("pks", "peaks"), ("trgs", "troughs")):
