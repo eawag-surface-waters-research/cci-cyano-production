@@ -63,6 +63,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
     if args["analysis"]:
         logging.info("Starting Analysis")
         PhenologyVisualization.set_shapefile_path(args["shapefile"])
+        PhenologyVisualization.set_aggregation_format(args["aggregation_format"])
         lake_analysis_folder = os.path.join(os.path.dirname(os.path.dirname(args["out_folder"])), "lake_analysis")
         if args["provenance"]:
             write_provenance(args["out_folder"], "analysis", args, args_file=args_file,

@@ -146,6 +146,7 @@ color_sets_4x4 = {
 
 class PhenologyVisualization:
     shapefile_path = None
+    aggregation_format = "csv"  # "csv" or "netcdf" -- see set_aggregation_format()
     QA_LEVELS = (0, 1, 2)
     
     QA_CONFIG = {
@@ -259,6 +260,8 @@ class PhenologyVisualization:
         self.valid_coords = self.valid_index_pairs()
         self.out_folder = Path(self.p_path).parents[2]
         self.aggregation_df = None
+        self.aggregation_ds = None
+        self._aggregation_pixel_index = None
         self.geom_shrunk = None
         self._extracted_globals = None
         self._pixel_cache = {}
@@ -325,6 +328,24 @@ class PhenologyVisualization:
             Absolute or relative path to the CCI lake shapefile (.shp).
         """
         cls.shapefile_path = path
+
+
+    @classmethod
+    def set_aggregation_format(cls, fmt: str):
+        """Set the on-disk cache format used by spatial_aggregation() for all instances.
+
+        Parameters
+        ----------
+        fmt : str
+            "csv" (default): long-format table, one row per timestep x pixel,
+            with lat/lon repeated on every row.
+            "netcdf": compressed (time, pixel) array, lat/lon stored once per
+            pixel, chunked for fast single-pixel reads. Much smaller on disk
+            and faster to load for large lakes.
+        """
+        if fmt not in ("csv", "netcdf"):
+            raise ValueError(f"aggregation_format must be 'csv' or 'netcdf', got {fmt!r}")
+        cls.aggregation_format = fmt
 
 
     def valid_index_pairs(self):
@@ -836,15 +857,24 @@ class PhenologyVisualization:
         stride-trick windowing. Border pixels are excluded as they cannot form a
         complete 3×3 window.
 
-        The result is stored in self.aggregation_df and written to a CSV for reuse.
-        If the CSV already exists, it is loaded directly without recomputation.
+        The result is cached to disk as either CSV or NetCDF, selected via
+        self.aggregation_format ("csv" or "netcdf"; see set_aggregation_format()
+        / the "aggregation_format" config key). If the cache file already
+        exists, it is loaded directly without recomputation.
 
         Returns
         -------
         None
-            Result is stored in self.aggregation_df as a pandas.DataFrame with
-            columns: time, i, j, lat, lon, MA_value.
+            csv format: result is stored in self.aggregation_df as a
+            pandas.DataFrame with columns: time, i, j, lat, lon, MA_value.
+            netcdf format: result is stored in self.aggregation_ds as an open
+            netCDF4.Dataset with dims (time, pixel), data variable
+            MA_value(time, pixel), and coordinate variables time, pixel_i,
+            pixel_j, lat(pixel), lon(pixel). A {(i, j): pixel_index} lookup
+            is cached in self._aggregation_pixel_index.
         """
+
+        is_netcdf = self.aggregation_format == "netcdf"
 
         out_dir = os.path.join(
             self.out_folder,
@@ -853,9 +883,13 @@ class PhenologyVisualization:
         )
         os.makedirs(out_dir, exist_ok=True)
 
-        file_path = os.path.join(out_dir, "aggregation_background_values.csv")
+        ext = "nc" if is_netcdf else "csv"
+        file_path = os.path.join(out_dir, f"aggregation_background_values.{ext}")
         if os.path.isfile(file_path):
-            self.aggregation_df = pd.read_csv(file_path)
+            if is_netcdf:
+                self._load_aggregation_netcdf(file_path)
+            else:
+                self.aggregation_df = pd.read_csv(file_path)
             return
 
         warnings.warn("spatial aggregation needs to be calculated. Depending on lake size this could take a while.")
@@ -883,11 +917,19 @@ class PhenologyVisualization:
             coords = coords[interior_mask]
 
             if coords.size == 0:
-                aggregation_df = pd.DataFrame(
-                        columns=["time", "i", "j", "lat", "lon", "MA_value"]
-                )
-                aggregation_df.to_csv(file_path, index=False)
-                self.aggregation_df = aggregation_df
+                if is_netcdf:
+                    self._write_aggregation_netcdf(
+                        file_path, t_all,
+                        np.empty(0, dtype=int), np.empty(0, dtype=int),
+                        np.empty(0), np.empty(0),
+                        np.empty((ntime, 0), dtype=np.float32),
+                    )
+                else:
+                    aggregation_df = pd.DataFrame(
+                            columns=["time", "i", "j", "lat", "lon", "MA_value"]
+                    )
+                    aggregation_df.to_csv(file_path, index=False)
+                    self.aggregation_df = aggregation_df
                 return
 
             i_idx = coords[:, 0]
@@ -900,7 +942,13 @@ class PhenologyVisualization:
             lat_vals = lat[i_idx]
             lon_vals = lon[j_idx]
 
-            frames = []   # <- this must exist before the loop
+            n_pixels = len(coords)
+            # netcdf path accumulates a (ntime, n_pixels) array and writes it in one
+            # bulk call: writing timestep-by-timestep into chunks that span the full
+            # time dimension would force a decompress/recompress of every chunk on
+            # every iteration.
+            frames = [] if not is_netcdf else None
+            values = np.full((ntime, n_pixels), np.nan, dtype=np.float32) if is_netcdf else None
 
             for n in range(ntime):
                 data_n = np.asarray(data_var[n], dtype=np.float32)
@@ -920,20 +968,64 @@ class PhenologyVisualization:
 
                 ma_values = median_grid[ii, jj]
 
-                frames.append(
-                    pd.DataFrame({
-                    "time": np.full(len(coords), t_all[n]),
-                    "i": i_idx,
-                    "j": j_idx,
-                    "lat": lat_vals,
-                    "lon": lon_vals,
-                    "MA_value": ma_values,
-                    })
-                )
+                if is_netcdf:
+                    values[n, :] = ma_values
+                else:
+                    frames.append(
+                        pd.DataFrame({
+                        "time": np.full(len(coords), t_all[n]),
+                        "i": i_idx,
+                        "j": j_idx,
+                        "lat": lat_vals,
+                        "lon": lon_vals,
+                        "MA_value": ma_values,
+                        })
+                    )
 
-        aggregation_df = pd.concat(frames, ignore_index=True)
-        aggregation_df.to_csv(file_path, index=False)
-        self.aggregation_df = aggregation_df
+        if is_netcdf:
+            self._write_aggregation_netcdf(file_path, t_all, i_idx, j_idx, lat_vals, lon_vals, values)
+        else:
+            aggregation_df = pd.concat(frames, ignore_index=True)
+            aggregation_df.to_csv(file_path, index=False)
+            self.aggregation_df = aggregation_df
+
+
+    def _write_aggregation_netcdf(self, file_path, t_all, i_idx, j_idx, lat_vals, lon_vals, values):
+        """Write spatial_aggregation() results to a compressed (time, pixel) NetCDF cache.
+
+        lat/lon are stored once per pixel rather than once per row (the CSV's main
+        source of bloat), and MA_value is chunked as (ntime, 1) so a per-pixel read
+        - the only access pattern plot_background_pts uses - pulls exactly one
+        contiguous chunk instead of scanning the whole file.
+        """
+        n_pixels = len(i_idx)
+        with netCDF4.Dataset(file_path, "w") as ds:
+            ds.createDimension("time", len(t_all))
+            ds.createDimension("pixel", n_pixels)
+
+            ds.createVariable("time", "f8", ("time",))[:] = t_all
+            ds.createVariable("pixel_i", "i4", ("pixel",))[:] = i_idx
+            ds.createVariable("pixel_j", "i4", ("pixel",))[:] = j_idx
+            ds.createVariable("lat", "f8", ("pixel",))[:] = lat_vals
+            ds.createVariable("lon", "f8", ("pixel",))[:] = lon_vals
+
+            chunksizes = (len(t_all), 1) if n_pixels > 0 else None
+            ma_var = ds.createVariable(
+                "MA_value", "f4", ("time", "pixel"),
+                fill_value=np.nan, zlib=True, complevel=4,
+                chunksizes=chunksizes,
+            )
+            ma_var[:, :] = values
+
+        self._load_aggregation_netcdf(file_path)
+
+
+    def _load_aggregation_netcdf(self, file_path):
+        """Open a cached aggregation NetCDF file and rebuild the pixel lookup index."""
+        self.aggregation_ds = netCDF4.Dataset(file_path, "r")
+        pixel_i = np.asarray(self.aggregation_ds.variables["pixel_i"][:]).tolist()
+        pixel_j = np.asarray(self.aggregation_ds.variables["pixel_j"][:]).tolist()
+        self._aggregation_pixel_index = dict(zip(zip(pixel_i, pixel_j), range(len(pixel_i))))
 
 
     def pixel_map(self, latitude_idx, longitude_idx, ax):
@@ -2898,12 +2990,24 @@ class PhenologyVisualization:
         style = {**base_style,**style_kwargs}
 
         if aggregation:
-            if self.aggregation_df is None:
-                self.spatial_aggregation()
+            if self.aggregation_format == "netcdf":
+                if self.aggregation_ds is None:
+                    self.spatial_aggregation()
 
-            background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude_idx) & (self.aggregation_df["j"]==longitude_idx)]
-            background_time = background_sub["time"].to_numpy()
-            background_values = background_sub["MA_value"]
+                pixel_idx = self._aggregation_pixel_index.get((latitude_idx, longitude_idx))
+                if pixel_idx is None:
+                    background_time = np.array([])
+                    background_values = np.array([])
+                else:
+                    background_time = np.asarray(self.aggregation_ds.variables["time"][:])
+                    background_values = np.asarray(self.aggregation_ds.variables["MA_value"][:, pixel_idx])
+            else:
+                if self.aggregation_df is None:
+                    self.spatial_aggregation()
+
+                background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude_idx) & (self.aggregation_df["j"]==longitude_idx)]
+                background_time = background_sub["time"].to_numpy()
+                background_values = background_sub["MA_value"]
 
             x = f.datenum_to_datetime(background_time)
             y = background_values

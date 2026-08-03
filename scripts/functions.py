@@ -66,6 +66,7 @@ def parse_args(args):
         # "split_end": 2012,
         "provenance": False,
         "aggregation": True,
+        "aggregation_format": "csv", # cache format for spatial_aggregation(): "csv" or "netcdf"
         "qa_filter": True, # Only accept qa_flag = 0
         "spline_min_phase_length": 14,
         "spline_min_relative_amplitude": 0,
