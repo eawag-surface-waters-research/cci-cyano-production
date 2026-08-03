@@ -4023,13 +4023,17 @@ class PhenologyVisualization:
         return df[mask]
 
 
-    def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999, plt_kwargs = None):
-        print(f"plotting started at: {datetime.datetime.now()}")
-        if plt_kwargs is None:
-            plt_kwargs = {'cmap':'ocean_r',
-                          'levels':20,
-                          'cbar':True}
+    def _fit_bloom_kde(self, qa_value = None, start_year = 0, end_year = 9999):
+        """
+        Load/filter cached bloom events and fit a 2D gaussian_kde on
+        (green-up advance DOY, green-down onset DOY).
 
+        Returns
+        -------
+        tuple or None
+            (kde, start, end, qa_filtered_set), or None if there isn't
+            enough data to fit a KDE.
+        """
         dir_path, file_path = self.build_kde_path()
         # the cached CSV doesn't retain per-pixel (i, j) identity (only pooled
         # primary/qa_column/secondary event columns), so unlike compute_and_cache_metric
@@ -4062,8 +4066,8 @@ class PhenologyVisualization:
 
         if len(compressed_df) < 2:
             warnings.warn("Not enough data to plot kde")
-            return
-        
+            return None
+
         years_all = np.unique(list(compressed_df["primary"].astype(int) ) + list(compressed_df["secondary"].astype(int) ))
         start, end = f.define_year_range(start_year, end_year, years_all)
         plot_df = self.sort_by_year(compressed_df, start_year=start, end_year=end)
@@ -4074,39 +4078,155 @@ class PhenologyVisualization:
 
         try:
             kde = gaussian_kde(np.vstack([x, y]))
-            xi = np.linspace(0, 400, 100)
-            yi = np.linspace(0, 730, 100)
-            Xi, Yi = np.meshgrid(xi, yi)
-            Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape)
-            Zi_norm = Zi / Zi.max()
         except np.linalg.LinAlgError:
             # too few / too degenerate (collinear or duplicate) points for a 2D KDE -
             # e.g. can happen with a restrictive qa_value filter that leaves very few events
             warnings.warn(f"Not enough distinct {self.variable} events to plot KDE for lake ID {self.lakeID}.")
-            return
-        # cf = ax.contourf(Xi, Yi, Zi_norm, **plt_kwargs)
-        sns.kdeplot(x=x, y=y, ax = ax, fill=True,**plt_kwargs)
-        # plt.colorbar(cf, ax=ax)
-        ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
-        ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")
+            return None
 
-        ax.set_xlim(0, 400)
-        ax.set_ylim(0, 730)
-        ax.set_xlabel("Green-up Advanced (DOY)")
-        ax.set_ylabel("Green-down Onset (DOY)")
+        return kde, start, end, qa_filtered_set
 
-        var_label = self.get_plot_config("var", self.variable)["label"]
-        if qa_filtered_set is None:
-            qa_label = "All QA"
+    def calculate_bloom_probabilities_from_kde(self, qa_value = None, start_year = 0, end_year = 9999,
+                                     interval = 21, x_max = 400, y_max = 730, resolution = 1):
+        """
+        Probability of a `interval`-day bloom window under the fitted KDE, for
+        a window starting at every `resolution`-day offset spanning
+        [-interval, x_max+interval] x [-interval, y_max+interval] (green-up
+        advance DOY x green-down onset DOY). Windows overlap (a 1-day step
+        with a 21-day window means neighbors share 20 days), so `probability`
+        values do NOT sum to 1 - each is its own "P(bloom falls in *this*
+        21-day window)", not a share of a disjoint partition.
+
+        Computed as a Riemann-sum approximation: the KDE density is evaluated
+        once on the full `resolution`-day grid (a single vectorized call),
+        then every window's integral is read off a 2D summed-area table
+        (prefix sums), rather than calling the exact but expensive
+        kde.integrate_box() per window - that brute-force approach means
+        ~316k individual calls at interval=21/resolution=1, on the order of
+        an hour or more; this is seconds, at the cost of a small
+        discretization error from the finite `resolution` (~0.1% in testing
+        at resolution=1).
+
+        Returns
+        -------
+        pandas.DataFrame or None
+            One row per window with x_low/x_high/y_low/y_high/probability
+            columns. None if there isn't enough data to fit a KDE.
+        """
+        fit = self._fit_bloom_kde(qa_value=qa_value, start_year=start_year, end_year=end_year)
+        if fit is None:
+            return None
+        kde, start, end, qa_filtered_set = fit
+
+        xi = np.arange(-interval, x_max + interval, resolution)
+        yi = np.arange(-interval, y_max + interval, resolution)
+        Xi, Yi = np.meshgrid(xi, yi)
+        # density x cell area ~= probability mass in that resolution x resolution cell
+        Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape) * resolution ** 2
+
+        # 2D summed-area table (prefix sums), zero-padded on the low edge so
+        # window_sum below can read every window's total with 4 lookups
+        cumsum = np.cumsum(np.cumsum(Zi, axis=0), axis=1)
+        cumsum = np.pad(cumsum, ((1, 0), (1, 0)))
+
+        n_cells = interval // resolution
+        window_sum = (cumsum[n_cells:, n_cells:] - cumsum[:-n_cells, n_cells:]
+                      - cumsum[n_cells:, :-n_cells] + cumsum[:-n_cells, :-n_cells])
+        # subtracting nearly-equal cumulative sums can leave float noise like
+        # -1e-18 where the true probability is 0 - clip it, since a probability
+        # can't legitimately be negative
+        window_sum = np.clip(window_sum, 0, None)
+
+        n_y, n_x = window_sum.shape
+        x_low, y_low = np.meshgrid(xi[:n_x], yi[:n_y])
+        return pd.DataFrame({
+            "x_low": x_low.ravel(), "x_high": x_low.ravel() + interval,
+            "y_low": y_low.ravel(), "y_high": y_low.ravel() + interval,
+            "probability": window_sum.ravel(),
+        })
+
+    
+
+    
+
+    def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999, plt_kwargs = None, probability= False, interval = 21, resolution= 1, x_max = 400, y_max = 730):
+        print(f"plotting started at: {datetime.datetime.now()}")
+        if probability:
+            plt_kwargs = {'cmap':'ocean_r',
+                            'levels':50,
+                            'cbar':True}
+
+        if plt_kwargs is None:
+            plt_kwargs = {'cmap':'ocean_r',
+                          'levels':20,
+                          'cbar':True}
+            
+        plt_kwargs = dict(plt_kwargs)
+        show_cbar = plt_kwargs.pop('cbar', False)
+
+        if probability:
+            probs = self.calculate_bloom_probabilities_from_kde(
+            qa_value=qa_value, start_year=start_year, end_year=end_year,
+            interval=interval, x_max=x_max, y_max=y_max, resolution=resolution,
+            )
+            if probs is None:
+                return None
+
+            grid = probs.pivot(index="y_low", columns="x_low", values="probability")
+            x_centers = grid.columns.values + interval / 2
+            y_centers = grid.index.values + interval / 2
+
+            cf = ax.contourf(x_centers, y_centers, grid.values, **plt_kwargs, vmax = 0.05)
+            # Add a contour line at probability = 0.05
+            ax.contour(x_centers, y_centers, grid.values, levels=[0.05], colors="red", linewidths=2)
+            if show_cbar:
+                cbar = plt.colorbar(cf, ax=ax, label="Probability")
+                cbar.ax.axhline(0.05, color="red", linewidth=2)
+
+            ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
+            ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")
+            ax.set_xlim(0, x_max)
+            ax.set_ylim(0, y_max)
+            ax.set_xlabel("Green-up Advanced (DOY)")
+            ax.set_ylabel("Green-down Onset (DOY)")
+            ax.set_title(f"Bloom event probability per {interval}-day interval\nLake ID: {self.lakeID}")
+
+            return ax
         else:
-            qa_label = "QA: " + ", ".join(self.get_plot_config("qa", q)["label"] for q in sorted(qa_filtered_set))
-        ax.set_title(
-            f"{var_label} - Green-up Advanced vs Green-down Onset\n"
-            f"Lake ID: {self.lakeID} | {start} - {end} | {qa_label}"
-        )
-        print(f"plotting ended at: {datetime.datetime.now()}")
 
-        return ax
+            fit = self._fit_bloom_kde(qa_value=qa_value, start_year=start_year, end_year=end_year)
+            if fit is None:
+                return
+            kde, start, end, qa_filtered_set = fit
+
+            xi = np.linspace(0, 400, 100)
+            yi = np.linspace(0, 730, 100)
+            Xi, Yi = np.meshgrid(xi, yi)
+            Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape)
+
+            cf = ax.contourf(Xi, Yi, Zi, **plt_kwargs)
+            if show_cbar:
+                plt.colorbar(cf, ax=ax)
+            ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
+            ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")
+
+            ax.set_xlim(0, 400)
+            ax.set_ylim(0, 730)
+            ax.set_xlabel("Green-up Advanced (DOY)")
+            ax.set_ylabel("Green-down Onset (DOY)")
+
+            var_label = self.get_plot_config("var", self.variable)["label"]
+            if qa_filtered_set is None:
+                qa_label = "All QA"
+            else:
+                qa_label = "QA: " + ", ".join(self.get_plot_config("qa", q)["label"] for q in sorted(qa_filtered_set))
+            ax.set_title(
+                f"{var_label} - Green-up Advanced vs Green-down Onset\n"
+                f"Lake ID: {self.lakeID} | {start} - {end} | {qa_label}"
+            )
+            print(f"plotting ended at: {datetime.datetime.now()}")
+
+            return ax
             
 
 
