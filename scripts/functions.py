@@ -579,7 +579,7 @@ def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_
 
         # QA boxplots (peaks and troughs)
         for metric_key, metric_name in (("pks", "peaks"), ("trgs", "troughs")):
-            fig, axs = plt.subplots(rows, cols, constrained_layout=True, figsize=(10, 5))
+            fig, axs = plt.subplots(rows, cols, constrained_layout=True, figsize=(8,8))
             for num, (start, end) in enumerate(time_splits):
                 ax = axs if num_splits == 1 else np.atleast_1d(axs).flatten()[num]
                 eda_instance.qa_boxplot(ax=ax, latitude_idx=i, longitude_idx=j, metric=metric_key, start=start, end=end)
