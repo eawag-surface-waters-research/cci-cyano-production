@@ -4087,7 +4087,7 @@ class PhenologyVisualization:
         return kde, start, end, qa_filtered_set
 
     def calculate_bloom_probabilities_from_kde(self, qa_value = None, start_year = 0, end_year = 9999,
-                                     interval = 21, x_max = 400, y_max = 730, resolution = 1):
+                                     interval = 21, x_max = 400, y_max = 730, resolution = 1, save_path = None):
         """
         Probability of a `interval`-day bloom window under the fitted KDE, for
         a window starting at every `resolution`-day offset spanning
@@ -4139,11 +4139,59 @@ class PhenologyVisualization:
 
         n_y, n_x = window_sum.shape
         x_low, y_low = np.meshgrid(xi[:n_x], yi[:n_y])
+        
+        if save_path:
+            file_name = f"bloom_prob_DOY_{self.variable}.nc"
+            file_path = os.path.join(save_path, file_name)
+
+            with netCDF4.Dataset(file_path, "w") as nc:
+
+                # Dimensions
+                nc.createDimension("greenup_doy", n_x)
+                nc.createDimension("greendown_doy", n_y)
+
+                # Coordinates
+                greenup = nc.createVariable("greenup_doy", "i4", ("greenup_doy",))
+                greendown = nc.createVariable("greendown_doy", "i4", ("greendown_doy",))
+
+                greenup[:] = xi[:n_x]
+                greendown[:] = yi[:n_y]
+
+                greenup.units = "day_of_year"
+                greenup.long_name = "Green-up window start day"
+                greendown.units = "day_of_year"
+                greendown.long_name = "Green-down window start day"
+
+                # Probability matrix
+                prob = nc.createVariable(
+                    "probability",
+                    "f4",
+                    ("greendown_doy", "greenup_doy"),
+                    zlib=True,
+                    complevel=4,
+                    fill_value=np.nan,
+                )
+
+                prob[:, :] = window_sum
+
+                prob.long_name = f"Probability of {interval}-day bloom window"
+                prob.units = "1"
+
+                # Global metadata
+                nc.description = "Bloom window probabilities derived from KDE"
+                nc.window_length_days = interval
+                nc.grid_resolution_days = resolution
+
+                prob.interval_days = interval
+                prob.resolution_days = resolution
+                prob.method = "Gaussian KDE integrated over moving windows"
+                prob.window_definition = "Window defined by lower-left corner coordinates"
+
         return pd.DataFrame({
-            "x_low": x_low.ravel(), "x_high": x_low.ravel() + interval,
-            "y_low": y_low.ravel(), "y_high": y_low.ravel() + interval,
-            "probability": window_sum.ravel(),
-        })
+                    "x_low": x_low.ravel(), "x_high": x_low.ravel() + interval,
+                    "y_low": y_low.ravel(), "y_high": y_low.ravel() + interval,
+                    "probability": window_sum.ravel(),
+                })
 
     
 
