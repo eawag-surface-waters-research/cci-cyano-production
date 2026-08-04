@@ -146,7 +146,7 @@ color_sets_4x4 = {
 
 class PhenologyVisualization:
     shapefile_path = None
-    aggregation_format = "csv"  # "csv" or "netcdf" -- see set_aggregation_format()
+    save_format = "csv"  # "csv" or "netcdf" -- see set_save_format(); applies to spatial_aggregation() and the metric caches
     QA_LEVELS = (0, 1, 2)
     
     QA_CONFIG = {
@@ -331,21 +331,25 @@ class PhenologyVisualization:
 
 
     @classmethod
-    def set_aggregation_format(cls, fmt: str):
-        """Set the on-disk cache format used by spatial_aggregation() for all instances.
+    def set_save_format(cls, fmt: str):
+        """Set the on-disk cache format used by spatial_aggregation() and the
+        per-pixel metric caches (r2, MAD, RMSE, correlation, values_per_pixel)
+        for all instances.
 
         Parameters
         ----------
         fmt : str
-            "csv" (default): long-format table, one row per timestep x pixel,
-            with lat/lon repeated on every row.
-            "netcdf": compressed (time, pixel) array, lat/lon stored once per
-            pixel, chunked for fast single-pixel reads. Much smaller on disk
-            and faster to load for large lakes.
+            "csv" (default): spatial_aggregation() writes a long-format table,
+            one row per timestep x pixel, with lat/lon repeated on every row;
+            metric caches write one row per pixel.
+            "netcdf": spatial_aggregation() writes a compressed (time, pixel)
+            array, lat/lon stored once per pixel, chunked for fast single-pixel
+            reads; metric caches write a dense (lat, lon) grid. Much smaller on
+            disk and faster to load for large lakes.
         """
         if fmt not in ("csv", "netcdf"):
-            raise ValueError(f"aggregation_format must be 'csv' or 'netcdf', got {fmt!r}")
-        cls.aggregation_format = fmt
+            raise ValueError(f"save_format must be 'csv' or 'netcdf', got {fmt!r}")
+        cls.save_format = fmt
 
 
     def valid_index_pairs(self):
@@ -641,11 +645,12 @@ class PhenologyVisualization:
 
 
     def build_metric_path(self, metric_name, start=0, end=9999):
-        """Return the output directory and file path for a cached metric CSV.
+        """Return the output directory and file path for a cached metric file.
 
-        The filename encodes the year range: full_ts.csv for the complete series,
-        ts_{start}_to_{end}.csv otherwise. Sentinel values 0 and 9999 are replaced
-        by 2002 and 2024 respectively in the filename.
+        The filename encodes the year range: full_ts for the complete series,
+        ts_{start}_to_{end} otherwise. Sentinel values 0 and 9999 are replaced
+        by 2002 and 2024 respectively in the filename. The extension follows
+        self.save_format ("csv" or "netcdf").
 
         Parameters
         ----------
@@ -660,20 +665,21 @@ class PhenologyVisualization:
         Returns
         -------
         base : str
-            Directory path where the CSV will be written.
+            Directory path where the cache file will be written.
         file_path : str
-            Full path to the CSV file.
+            Full path to the cache file.
         """
+        ext = "nc" if self.save_format == "netcdf" else "csv"
         base = os.path.join(self.out_folder, "calculated_values", "metrics", metric_name, f"v{self.version}", self.variable)
         if start == 0 and end == 9999:
-            fname = "full_ts.csv"
+            fname = f"full_ts.{ext}"
         elif start == 0:
-            fname = f"ts_{2002}_to_{end}.csv"
+            fname = f"ts_{2002}_to_{end}.{ext}"
         elif end == 9999:
-            fname = f"ts_{start}_to_{2024}.csv"
+            fname = f"ts_{start}_to_{2024}.{ext}"
         else:
-            fname = f"ts_{start}_to_{end}.csv"
-        
+            fname = f"ts_{start}_to_{end}.{ext}"
+
         return base, os.path.join(base, fname)
 
     def build_kde_path(self):
@@ -697,18 +703,19 @@ class PhenologyVisualization:
         return base, path
 
     def compute_and_cache_metric(self, metric_name, col_name, compute_fn, start=0, end=9999):
-        """Compute a metric for all valid pixels in parallel and cache to CSV.
+        """Compute a metric for all valid pixels in parallel and cache to disk.
 
         On the first call the metric is computed using a multiprocessing pool
-        (3 workers) and written to CSV. Subsequent calls with the same metric
-        and year range load directly from the cached file.
+        (3 workers) and written to the cache (CSV or NetCDF, per
+        self.save_format). Subsequent calls with the same metric and
+        year range load directly from the cached file.
 
         Parameters
         ----------
         metric_name : str
             Name of the metric, passed to build_metric_path and compute_fn.
         col_name : str
-            Column name used when reading or writing the CSV cache.
+            Column/variable name used when reading or writing the cache.
         compute_fn : callable
             Worker function (typically compute_metric_score) executed by each
             pool worker.
@@ -722,16 +729,20 @@ class PhenologyVisualization:
         dict
             Mapping of (i, j) tuples to metric values for all valid pixels.
         """
+        is_netcdf = self.save_format == "netcdf"
         dir_path, file_path = self.build_metric_path(metric_name, start, end)
         os.makedirs(dir_path, exist_ok=True)
         if os.path.isfile(file_path):
-            df = pd.read_csv(file_path)
-            data = dict(zip(zip(df["i"], df["j"]), df[col_name]))
+            if is_netcdf:
+                data = self._read_metric_netcdf(file_path, col_name)
+            else:
+                df = pd.read_csv(file_path)
+                data = dict(zip(zip(df["i"], df["j"]), df[col_name]))
             missing = [coord for coord in self.valid_coords if coord not in data]
             if not missing:
                 return data
             # the cache predates a pixel that is now valid (e.g. extract/phenology
-            # was regenerated since the CSV was written) - it's stale, not just slow,
+            # was regenerated since the cache was written) - it's stale, not just slow,
             # so recompute the full metric rather than silently KeyError-ing later
             warnings.warn(
                 f"Cached {metric_name} for lake ID {self.lakeID} is missing "
@@ -744,9 +755,54 @@ class PhenologyVisualization:
         with multiprocessing.Pool(initializer=_init_worker, initargs=(self.p_path, self.e_path), processes=3) as pool:
             result = pool.map(workers, self.valid_coords)
         data = dict(result)
-        t_df = pd.DataFrame([(i, j, v) for (i, j), v in data.items()], columns=["i", "j", col_name])
-        t_df.to_csv(file_path, index=False)
+        if is_netcdf:
+            self._write_metric_netcdf(file_path, col_name, data)
+        else:
+            t_df = pd.DataFrame([(i, j, v) for (i, j), v in data.items()], columns=["i", "j", col_name])
+            t_df.to_csv(file_path, index=False)
         return data
+
+
+    def _write_metric_netcdf(self, file_path, col_name, data):
+        """Write a compute_and_cache_metric() result to a dense (lat, lon) NetCDF grid.
+
+        Pixels absent from `data` (never computed) are left at the -9999 fill
+        sentinel already used throughout this codebase for missing satellite
+        data. That sentinel is distinguishable from a legitimately-computed NaN
+        metric (e.g. from insufficient data in that pixel's window), which is
+        what lets the staleness check in compute_and_cache_metric() detect
+        pixels that became valid after this cache was written.
+        """
+        with netCDF4.Dataset(self.e_path) as src:
+            lat = np.asarray(src.variables["lat"][:])
+            lon = np.asarray(src.variables["lon"][:])
+
+        grid = np.full((len(lat), len(lon)), -9999.0, dtype=np.float32)
+        for (i, j), value in data.items():
+            grid[i, j] = value
+
+        with netCDF4.Dataset(file_path, "w") as ds:
+            ds.createDimension("lat", len(lat))
+            ds.createDimension("lon", len(lon))
+            ds.createVariable("lat", "f8", ("lat",))[:] = lat
+            ds.createVariable("lon", "f8", ("lon",))[:] = lon
+            var = ds.createVariable(col_name, "f4", ("lat", "lon"),
+                                     fill_value=-9999.0, zlib=True, complevel=4)
+            var[:, :] = grid
+
+
+    def _read_metric_netcdf(self, file_path, col_name):
+        """Load a cached metric grid back into a {(i, j): value} dict.
+
+        Only cells not equal to the -9999 fill sentinel are included, mirroring
+        the CSV path where the cached rows are exactly the pixels that were
+        valid at cache time.
+        """
+        with netCDF4.Dataset(file_path, "r") as ds:
+            ds.set_auto_mask(False)
+            grid = np.asarray(ds.variables[col_name][:, :])
+        computed = np.argwhere(grid != -9999.0)
+        return {(int(i), int(j)): grid[i, j] for i, j in computed}
 
 
     def r2_scores(self, time_split=None):
@@ -858,8 +914,8 @@ class PhenologyVisualization:
         complete 3×3 window.
 
         The result is cached to disk as either CSV or NetCDF, selected via
-        self.aggregation_format ("csv" or "netcdf"; see set_aggregation_format()
-        / the "aggregation_format" config key). If the cache file already
+        self.save_format ("csv" or "netcdf"; see set_save_format()
+        / the "save_format" config key). If the cache file already
         exists, it is loaded directly without recomputation.
 
         Returns
@@ -874,7 +930,7 @@ class PhenologyVisualization:
             is cached in self._aggregation_pixel_index.
         """
 
-        is_netcdf = self.aggregation_format == "netcdf"
+        is_netcdf = self.save_format == "netcdf"
 
         out_dir = os.path.join(
             self.out_folder,
@@ -2990,7 +3046,7 @@ class PhenologyVisualization:
         style = {**base_style,**style_kwargs}
 
         if aggregation:
-            if self.aggregation_format == "netcdf":
+            if self.save_format == "netcdf":
                 if self.aggregation_ds is None:
                     self.spatial_aggregation()
 

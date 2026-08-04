@@ -93,7 +93,7 @@ Each JSON file in `args/` controls one run. All keys except `variable`, `qa`, `s
   "time_splits": [[0, 9999]],
   "provenance": false,
   "aggregation": true,
-  "aggregation_format": "csv",
+  "save_format": "csv",
   "qa_filter": true,
   "spline_min_phase_length": 14,
   "spline_min_relative_amplitude": 0,
@@ -144,7 +144,7 @@ Each JSON file in `args/` controls one run. All keys except `variable`, `qa`, `s
 | `kde_qa` | `null` | List of QA filters, one KDE plot per entry, e.g. `[[0], [0,1], null]` (`null` = all QA levels). `null`/unset produces a single all-levels plot. Only used by the `timing_plots` stage |
 | `time_splits` | `[[0, 9999]]` | List of `[start, end]` year ranges to compute metrics and generate plots for. `0` means the earliest available year; `9999` means the latest. A single entry produces one panel per output; two entries produce a side-by-side split layout; more entries create a grid. |
 | `aggregation` | `true` | Use 3×3 neighbourhood median values as the scatter background instead of the raw pixel time series |
-| `aggregation_format` | `"csv"` | On-disk cache format for `spatial_aggregation()`: `"csv"` (long-format table, one row per timestep × pixel) or `"netcdf"` (compressed `(time, pixel)` array, chunked for fast single-pixel reads — smaller and faster for large lakes). Set globally via `PhenologyVisualization.set_aggregation_format()` when not going through `main.py` |
+| `save_format` | `"csv"` | On-disk cache format for `spatial_aggregation()` and the per-pixel metric caches (`r2_scores`, `MAD_scores`, `RMSE_scores`, `correlation_scores`, `values_per_pixel`): `"csv"` (long-format tables) or `"netcdf"` (compressed arrays — a `(time, pixel)` array for aggregation, a dense `(lat, lon)` grid per metric — chunked/compressed for fast reads and much smaller on disk for large lakes). Set globally via `PhenologyVisualization.set_save_format()` when not going through `main.py` |
 | `provenance` | `false` | Append a record of this run to `provenance_logs/` (see [Provenance](#provenance)) |
 
 #### Pixel dictionary format
@@ -207,19 +207,19 @@ vis = PhenologyVisualization(
 | `time_map(fig, ax, year, peaks, max)` | Map of peak or green-up day-of-year for a given year; pixels outside the 1 km-inset boundary are masked |
 | `time_map_panel(years, nrow, ncol, peaks, max)` | Grid of `time_map` panels, one per year, with a shared colorbar and lake-outline legend |
 | `single_day_map(date)` | Spatial map of the target variable for a single observation date; pixels outside the 1 km-inset boundary are masked. `date` must be a UTC-aware `datetime` matching an entry in the extract time axis — use `series.idxmax()` or another index value from `load_pixel_data` |
-| `r2_scores(time_split)` | `{(i,j): R²}` for all valid pixels; cached to CSV |
-| `MAD_scores(time_split)` | `{(i,j): MAD}` for all valid pixels; cached to CSV |
-| `RMSE_scores(time_split)` | `{(i,j): RMSE}` for all valid pixels; cached to CSV |
-| `correlation_scores(time_split)` | `{(i,j): Pearson r}` for all valid pixels; cached to CSV |
-| `values_per_pixel(time_split)` | `{(i,j): count}` of valid observations; cached to CSV |
-| `spatial_aggregation()` | Compute 3×3 neighbourhood medians for all pixels and timesteps; cached to CSV or NetCDF depending on `aggregation_format` (see below) |
-| `set_aggregation_format(fmt)` *(classmethod)* | Set the on-disk cache format used by `spatial_aggregation()` for all instances: `"csv"` or `"netcdf"` |
+| `r2_scores(time_split)` | `{(i,j): R²}` for all valid pixels; cached per `save_format` |
+| `MAD_scores(time_split)` | `{(i,j): MAD}` for all valid pixels; cached per `save_format` |
+| `RMSE_scores(time_split)` | `{(i,j): RMSE}` for all valid pixels; cached per `save_format` |
+| `correlation_scores(time_split)` | `{(i,j): Pearson r}` for all valid pixels; cached per `save_format` |
+| `values_per_pixel(time_split)` | `{(i,j): count}` of valid observations; cached per `save_format` |
+| `spatial_aggregation()` | Compute 3×3 neighbourhood medians for all pixels and timesteps; cached to CSV or NetCDF depending on `save_format` (see below) |
+| `set_save_format(fmt)` *(classmethod)* | Set the on-disk cache format used by `spatial_aggregation()` and the metric caches for all instances: `"csv"` or `"netcdf"` |
 | `lake_bloom_kde(ax, qa_value, start_year, end_year, plt_kwargs, probability, interval, resolution, x_max, y_max)` | Lake-wide 2D KDE of bloom timing (green-up advance DOY vs. green-down onset DOY), or — with `probability=True` — a bloom-window probability contour. See [Bloom-timing KDE](#bloom-timing-kde) |
 | `calculate_bloom_probabilities_from_kde(qa_value, start_year, end_year, interval, x_max, y_max, resolution, save_path)` | Probability of an `interval`-day bloom window under the fitted KDE, evaluated on a `resolution`-day grid; returns a DataFrame and optionally caches the grid to NetCDF via `save_path` |
 
-The metric methods (`r2_scores`, `MAD_scores`, `RMSE_scores`, `correlation_scores`, `values_per_pixel`) each accept a `time_split` argument: a single-element list containing one `[start, end]` year pair, e.g. `[[2003, 2012]]` or `[[0, 9999]]` for the full series. Results are cached to CSV; the cache filename encodes the time window so different windows are stored independently.
+The metric methods (`r2_scores`, `MAD_scores`, `RMSE_scores`, `correlation_scores`, `values_per_pixel`) each accept a `time_split` argument: a single-element list containing one `[start, end]` year pair, e.g. `[[2003, 2012]]` or `[[0, 9999]]` for the full series. Results are cached to CSV or NetCDF depending on `save_format`; the cache filename encodes the time window so different windows are stored independently.
 
-All metric and aggregation computations are cached to CSV on first call and loaded from cache on subsequent calls. Interactive plot methods require an interactive Matplotlib backend (`%matplotlib widget`).
+All metric and aggregation computations are cached (CSV or NetCDF, per `save_format`) on first call and loaded from cache on subsequent calls. Interactive plot methods require an interactive Matplotlib backend (`%matplotlib widget`).
 
 ### Bloom-timing KDE
 
@@ -289,14 +289,14 @@ This applies whenever `out_folder` is reassigned to the lake analysis path, whic
         │   │   └── {metric_name}/             # r2 | MAD | RMSE | correlation | values_per_pixel
         │   │       └── v{version}/
         │   │           └── {variable}/
-        │   │               ├── full_ts.csv                       # time_split [0, 9999]
-        │   │               ├── ts_2002_to_{end}.csv               # time_split [0, end]
-        │   │               ├── ts_{start}_to_2024.csv             # time_split [start, 9999]
-        │   │               └── ts_{start}_to_{end}.csv            # time_split [start, end]
+        │   │               ├── full_ts.{csv|nc}                       # time_split [0, 9999]
+        │   │               ├── ts_2002_to_{end}.{csv|nc}               # time_split [0, end]
+        │   │               ├── ts_{start}_to_2024.{csv|nc}             # time_split [start, 9999]
+        │   │               └── ts_{start}_to_{end}.{csv|nc}            # time_split [start, end]; format set by save_format
         │   ├── spatial_aggregation_values/
         │   │   └── v{version}/
         │   │       └── {variable}/
-        │   │           └── aggregation_background_values.{csv|nc} # format set by aggregation_format
+        │   │           └── aggregation_background_values.{csv|nc} # format set by save_format
         │   └── kde_data/
         │       └── v{version}/
         │           └── {variable}/
