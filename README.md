@@ -268,8 +268,8 @@ This applies whenever `out_folder` is reassigned to the lake analysis path, whic
 
 ```
 {parent}/                                # shared parent of all version folders
-├── {data_folder}/                       # typically 'merged_product'
-│   ├── v3.0/                            # = out_folder for a run
+├── {data_folder}/                       # typically 'merged_product' or 'phenology_data'
+│   ├── v3.0/                            # = out_folder for a run, should be a version
 │   │   ├── extract/
 │   │   │   └── {variable}/
 │   │   │       └── {lake_id}.nc
