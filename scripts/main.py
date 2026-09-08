@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from datetime import datetime, timezone
 
-from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, save_special_plots, write_provenance, sanitize_filename
+from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, save_timing_plots, write_provenance, sanitize_filename
 from extract import extract
 from phenology import phenology
 from visualization import PhenologyVisualization
@@ -63,6 +63,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
     if args["analysis"]:
         logging.info("Starting Analysis")
         PhenologyVisualization.set_shapefile_path(args["shapefile"])
+        PhenologyVisualization.set_save_format(args["save_format"])
         lake_analysis_folder = os.path.join(os.path.dirname(os.path.dirname(args["out_folder"])), "lake_analysis")
         if args["provenance"]:
             write_provenance(args["out_folder"], "analysis", args, args_file=args_file,
@@ -98,11 +99,14 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
                     logging.info(f"Starting pixel plots for lake {lake['id']}")
                     save_pixel_plots(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str, time_splits= args["time_splits"], aggregation=args["aggregation"])
                     create_summary(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str, time_splits= args["time_splits"])
-                    save_special_plots(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str)
                     logging.info(f"Pixel plots for lake {lake['id']} complete")
                 else:
                     logging.info(f"WARNING: lake {lake['id']} is not in the pixel dictionary")
-                    continue
+
+            if args["timing_plots"]:
+                logging.info(f"Starting timing plots for lake {lake['id']}")
+                save_timing_plots(eda, lake_analysis_folder, lake_str, time_splits=args["time_splits"], kde_qa=args["kde_qa"])
+                logging.info(f"Timing plots for lake {lake['id']} complete")
 
             if args["comparison"]:
                 logging.info("Starting Comparison Plots")
@@ -136,7 +140,8 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
                             comparison_plot_types=args["comparison_plot_types"],
                             aggregation=args["aggregation"],
                             background_pts=args["background_pts"],
-                            purple_chla21=args["purple_chla21"]
+                            purple_chla21=args["purple_chla21"],
+                            ratio_qa_source=args["ratio_qa_source"]
                         )
                         logging.info(f"Comparison plots for lake {lake['id']} complete")
                 

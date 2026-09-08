@@ -17,7 +17,7 @@ import seaborn as sns
 from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib.patches import Rectangle, Patch
 from sklearn.metrics import mean_squared_error, r2_score
-from scipy.stats import pearsonr, gaussian_kde
+from scipy.stats import pearsonr, gaussian_kde, mannwhitneyu
 from csaps import csaps
 import functions as f
 import multiprocessing
@@ -100,7 +100,17 @@ def _init_kde_worker(p_path, var_names):
     """
     with netCDF4.Dataset(p_path) as nc:
         for var in var_names:
-            _GLOBALS[f"kde_{var}"] = np.asarray(nc.variables[var][:])
+            v = nc.variables[var]
+            nlat, nlon, nrec = v.shape
+            arr = np.empty((nlat, nlon, nrec), dtype=v.dtype)
+            # read pixel by pixel (v[i, j, :]) rather than a bulk v[:] read - netCDF4
+            # 1.7.4 silently misattributes data between pixels when read this way for
+            # files with an unlimited 'record' dimension, verified against the trusted
+            # per-pixel access pattern used elsewhere in this class (e.g. _load_pixel_data)
+            for i in range(nlat):
+                for j in range(nlon):
+                    arr[i, j, :] = v[i, j, :]
+            _GLOBALS[f"kde_{var}"] = arr
 
 
 # color_sets_4x4: bivariate color palettes for the 4×4 heatmap legend.
@@ -136,6 +146,7 @@ color_sets_4x4 = {
 
 class PhenologyVisualization:
     shapefile_path = None
+    save_format = "csv"  # "csv" or "netcdf" -- see set_save_format(); applies to spatial_aggregation() and the metric caches
     QA_LEVELS = (0, 1, 2)
     
     QA_CONFIG = {
@@ -249,6 +260,8 @@ class PhenologyVisualization:
         self.valid_coords = self.valid_index_pairs()
         self.out_folder = Path(self.p_path).parents[2]
         self.aggregation_df = None
+        self.aggregation_ds = None
+        self._aggregation_pixel_index = None
         self.geom_shrunk = None
         self._extracted_globals = None
         self._pixel_cache = {}
@@ -315,6 +328,28 @@ class PhenologyVisualization:
             Absolute or relative path to the CCI lake shapefile (.shp).
         """
         cls.shapefile_path = path
+
+
+    @classmethod
+    def set_save_format(cls, fmt: str):
+        """Set the on-disk cache format used by spatial_aggregation() and the
+        per-pixel metric caches (r2, MAD, RMSE, correlation, values_per_pixel)
+        for all instances.
+
+        Parameters
+        ----------
+        fmt : str
+            "csv" (default): spatial_aggregation() writes a long-format table,
+            one row per timestep x pixel, with lat/lon repeated on every row;
+            metric caches write one row per pixel.
+            "netcdf": spatial_aggregation() writes a compressed (time, pixel)
+            array, lat/lon stored once per pixel, chunked for fast single-pixel
+            reads; metric caches write a dense (lat, lon) grid. Much smaller on
+            disk and faster to load for large lakes.
+        """
+        if fmt not in ("csv", "netcdf"):
+            raise ValueError(f"save_format must be 'csv' or 'netcdf', got {fmt!r}")
+        cls.save_format = fmt
 
 
     def valid_index_pairs(self):
@@ -610,11 +645,12 @@ class PhenologyVisualization:
 
 
     def build_metric_path(self, metric_name, start=0, end=9999):
-        """Return the output directory and file path for a cached metric CSV.
+        """Return the output directory and file path for a cached metric file.
 
-        The filename encodes the year range: full_ts.csv for the complete series,
-        ts_{start}_to_{end}.csv otherwise. Sentinel values 0 and 9999 are replaced
-        by 2002 and 2024 respectively in the filename.
+        The filename encodes the year range: full_ts for the complete series,
+        ts_{start}_to_{end} otherwise. Sentinel values 0 and 9999 are replaced
+        by 2002 and 2024 respectively in the filename. The extension follows
+        self.save_format ("csv" or "netcdf").
 
         Parameters
         ----------
@@ -629,20 +665,21 @@ class PhenologyVisualization:
         Returns
         -------
         base : str
-            Directory path where the CSV will be written.
+            Directory path where the cache file will be written.
         file_path : str
-            Full path to the CSV file.
+            Full path to the cache file.
         """
+        ext = "nc" if self.save_format == "netcdf" else "csv"
         base = os.path.join(self.out_folder, "calculated_values", "metrics", metric_name, f"v{self.version}", self.variable)
         if start == 0 and end == 9999:
-            fname = "full_ts.csv"
+            fname = f"full_ts.{ext}"
         elif start == 0:
-            fname = f"ts_{2002}_to_{end}.csv"
+            fname = f"ts_{2002}_to_{end}.{ext}"
         elif end == 9999:
-            fname = f"ts_{start}_to_{2024}.csv"
+            fname = f"ts_{start}_to_{2024}.{ext}"
         else:
-            fname = f"ts_{start}_to_{end}.csv"
-        
+            fname = f"ts_{start}_to_{end}.{ext}"
+
         return base, os.path.join(base, fname)
 
     def build_kde_path(self):
@@ -666,18 +703,19 @@ class PhenologyVisualization:
         return base, path
 
     def compute_and_cache_metric(self, metric_name, col_name, compute_fn, start=0, end=9999):
-        """Compute a metric for all valid pixels in parallel and cache to CSV.
+        """Compute a metric for all valid pixels in parallel and cache to disk.
 
         On the first call the metric is computed using a multiprocessing pool
-        (3 workers) and written to CSV. Subsequent calls with the same metric
-        and year range load directly from the cached file.
+        (3 workers) and written to the cache (CSV or NetCDF, per
+        self.save_format). Subsequent calls with the same metric and
+        year range load directly from the cached file.
 
         Parameters
         ----------
         metric_name : str
             Name of the metric, passed to build_metric_path and compute_fn.
         col_name : str
-            Column name used when reading or writing the CSV cache.
+            Column/variable name used when reading or writing the cache.
         compute_fn : callable
             Worker function (typically compute_metric_score) executed by each
             pool worker.
@@ -691,19 +729,80 @@ class PhenologyVisualization:
         dict
             Mapping of (i, j) tuples to metric values for all valid pixels.
         """
+        is_netcdf = self.save_format == "netcdf"
         dir_path, file_path = self.build_metric_path(metric_name, start, end)
         os.makedirs(dir_path, exist_ok=True)
         if os.path.isfile(file_path):
-            df = pd.read_csv(file_path)
-            return dict(zip(zip(df["i"], df["j"]), df[col_name]))
-        warnings.warn(f"{metric_name} need to be calculated. Depending on the lake size this may take a while.")
+            if is_netcdf:
+                data = self._read_metric_netcdf(file_path, col_name)
+            else:
+                df = pd.read_csv(file_path)
+                data = dict(zip(zip(df["i"], df["j"]), df[col_name]))
+            missing = [coord for coord in self.valid_coords if coord not in data]
+            if not missing:
+                return data
+            # the cache predates a pixel that is now valid (e.g. extract/phenology
+            # was regenerated since the cache was written) - it's stale, not just slow,
+            # so recompute the full metric rather than silently KeyError-ing later
+            warnings.warn(
+                f"Cached {metric_name} for lake ID {self.lakeID} is missing "
+                f"{len(missing)} currently-valid pixel(s) (e.g. {missing[0]}); "
+                f"the cache is stale and will be recomputed."
+            )
+        else:
+            warnings.warn(f"{metric_name} need to be calculated. Depending on the lake size this may take a while.")
         workers = partial(compute_fn, start=start, end=end, metrics_to_compute = [metric_name])
         with multiprocessing.Pool(initializer=_init_worker, initargs=(self.p_path, self.e_path), processes=3) as pool:
             result = pool.map(workers, self.valid_coords)
         data = dict(result)
-        t_df = pd.DataFrame([(i, j, v) for (i, j), v in data.items()], columns=["i", "j", col_name])
-        t_df.to_csv(file_path, index=False)
+        if is_netcdf:
+            self._write_metric_netcdf(file_path, col_name, data)
+        else:
+            t_df = pd.DataFrame([(i, j, v) for (i, j), v in data.items()], columns=["i", "j", col_name])
+            t_df.to_csv(file_path, index=False)
         return data
+
+
+    def _write_metric_netcdf(self, file_path, col_name, data):
+        """Write a compute_and_cache_metric() result to a dense (lat, lon) NetCDF grid.
+
+        Pixels absent from `data` (never computed) are left at the -9999 fill
+        sentinel already used throughout this codebase for missing satellite
+        data. That sentinel is distinguishable from a legitimately-computed NaN
+        metric (e.g. from insufficient data in that pixel's window), which is
+        what lets the staleness check in compute_and_cache_metric() detect
+        pixels that became valid after this cache was written.
+        """
+        with netCDF4.Dataset(self.e_path) as src:
+            lat = np.asarray(src.variables["lat"][:])
+            lon = np.asarray(src.variables["lon"][:])
+
+        grid = np.full((len(lat), len(lon)), -9999.0, dtype=np.float32)
+        for (i, j), value in data.items():
+            grid[i, j] = value
+
+        with netCDF4.Dataset(file_path, "w") as ds:
+            ds.createDimension("lat", len(lat))
+            ds.createDimension("lon", len(lon))
+            ds.createVariable("lat", "f8", ("lat",))[:] = lat
+            ds.createVariable("lon", "f8", ("lon",))[:] = lon
+            var = ds.createVariable(col_name, "f4", ("lat", "lon"),
+                                     fill_value=-9999.0, zlib=True, complevel=4)
+            var[:, :] = grid
+
+
+    def _read_metric_netcdf(self, file_path, col_name):
+        """Load a cached metric grid back into a {(i, j): value} dict.
+
+        Only cells not equal to the -9999 fill sentinel are included, mirroring
+        the CSV path where the cached rows are exactly the pixels that were
+        valid at cache time.
+        """
+        with netCDF4.Dataset(file_path, "r") as ds:
+            ds.set_auto_mask(False)
+            grid = np.asarray(ds.variables[col_name][:, :])
+        computed = np.argwhere(grid != -9999.0)
+        return {(int(i), int(j)): grid[i, j] for i, j in computed}
 
 
     def r2_scores(self, time_split=None):
@@ -814,15 +913,24 @@ class PhenologyVisualization:
         stride-trick windowing. Border pixels are excluded as they cannot form a
         complete 3×3 window.
 
-        The result is stored in self.aggregation_df and written to a CSV for reuse.
-        If the CSV already exists, it is loaded directly without recomputation.
+        The result is cached to disk as either CSV or NetCDF, selected via
+        self.save_format ("csv" or "netcdf"; see set_save_format()
+        / the "save_format" config key). If the cache file already
+        exists, it is loaded directly without recomputation.
 
         Returns
         -------
         None
-            Result is stored in self.aggregation_df as a pandas.DataFrame with
-            columns: time, i, j, lat, lon, MA_value.
+            csv format: result is stored in self.aggregation_df as a
+            pandas.DataFrame with columns: time, i, j, lat, lon, MA_value.
+            netcdf format: result is stored in self.aggregation_ds as an open
+            netCDF4.Dataset with dims (time, pixel), data variable
+            MA_value(time, pixel), and coordinate variables time, pixel_i,
+            pixel_j, lat(pixel), lon(pixel). A {(i, j): pixel_index} lookup
+            is cached in self._aggregation_pixel_index.
         """
+
+        is_netcdf = self.save_format == "netcdf"
 
         out_dir = os.path.join(
             self.out_folder,
@@ -831,9 +939,13 @@ class PhenologyVisualization:
         )
         os.makedirs(out_dir, exist_ok=True)
 
-        file_path = os.path.join(out_dir, "aggregation_background_values.csv")
+        ext = "nc" if is_netcdf else "csv"
+        file_path = os.path.join(out_dir, f"aggregation_background_values.{ext}")
         if os.path.isfile(file_path):
-            self.aggregation_df = pd.read_csv(file_path)
+            if is_netcdf:
+                self._load_aggregation_netcdf(file_path)
+            else:
+                self.aggregation_df = pd.read_csv(file_path)
             return
 
         warnings.warn("spatial aggregation needs to be calculated. Depending on lake size this could take a while.")
@@ -861,11 +973,19 @@ class PhenologyVisualization:
             coords = coords[interior_mask]
 
             if coords.size == 0:
-                aggregation_df = pd.DataFrame(
-                        columns=["time", "i", "j", "lat", "lon", "MA_value"]
-                )
-                aggregation_df.to_csv(file_path, index=False)
-                self.aggregation_df = aggregation_df
+                if is_netcdf:
+                    self._write_aggregation_netcdf(
+                        file_path, t_all,
+                        np.empty(0, dtype=int), np.empty(0, dtype=int),
+                        np.empty(0), np.empty(0),
+                        np.empty((ntime, 0), dtype=np.float32),
+                    )
+                else:
+                    aggregation_df = pd.DataFrame(
+                            columns=["time", "i", "j", "lat", "lon", "MA_value"]
+                    )
+                    aggregation_df.to_csv(file_path, index=False)
+                    self.aggregation_df = aggregation_df
                 return
 
             i_idx = coords[:, 0]
@@ -878,7 +998,13 @@ class PhenologyVisualization:
             lat_vals = lat[i_idx]
             lon_vals = lon[j_idx]
 
-            frames = []   # <- this must exist before the loop
+            n_pixels = len(coords)
+            # netcdf path accumulates a (ntime, n_pixels) array and writes it in one
+            # bulk call: writing timestep-by-timestep into chunks that span the full
+            # time dimension would force a decompress/recompress of every chunk on
+            # every iteration.
+            frames = [] if not is_netcdf else None
+            values = np.full((ntime, n_pixels), np.nan, dtype=np.float32) if is_netcdf else None
 
             for n in range(ntime):
                 data_n = np.asarray(data_var[n], dtype=np.float32)
@@ -898,20 +1024,64 @@ class PhenologyVisualization:
 
                 ma_values = median_grid[ii, jj]
 
-                frames.append(
-                    pd.DataFrame({
-                    "time": np.full(len(coords), t_all[n]),
-                    "i": i_idx,
-                    "j": j_idx,
-                    "lat": lat_vals,
-                    "lon": lon_vals,
-                    "MA_value": ma_values,
-                    })
-                )
+                if is_netcdf:
+                    values[n, :] = ma_values
+                else:
+                    frames.append(
+                        pd.DataFrame({
+                        "time": np.full(len(coords), t_all[n]),
+                        "i": i_idx,
+                        "j": j_idx,
+                        "lat": lat_vals,
+                        "lon": lon_vals,
+                        "MA_value": ma_values,
+                        })
+                    )
 
-        aggregation_df = pd.concat(frames, ignore_index=True)
-        aggregation_df.to_csv(file_path, index=False)
-        self.aggregation_df = aggregation_df
+        if is_netcdf:
+            self._write_aggregation_netcdf(file_path, t_all, i_idx, j_idx, lat_vals, lon_vals, values)
+        else:
+            aggregation_df = pd.concat(frames, ignore_index=True)
+            aggregation_df.to_csv(file_path, index=False)
+            self.aggregation_df = aggregation_df
+
+
+    def _write_aggregation_netcdf(self, file_path, t_all, i_idx, j_idx, lat_vals, lon_vals, values):
+        """Write spatial_aggregation() results to a compressed (time, pixel) NetCDF cache.
+
+        lat/lon are stored once per pixel rather than once per row (the CSV's main
+        source of bloat), and MA_value is chunked as (ntime, 1) so a per-pixel read
+        - the only access pattern plot_background_pts uses - pulls exactly one
+        contiguous chunk instead of scanning the whole file.
+        """
+        n_pixels = len(i_idx)
+        with netCDF4.Dataset(file_path, "w") as ds:
+            ds.createDimension("time", len(t_all))
+            ds.createDimension("pixel", n_pixels)
+
+            ds.createVariable("time", "f8", ("time",))[:] = t_all
+            ds.createVariable("pixel_i", "i4", ("pixel",))[:] = i_idx
+            ds.createVariable("pixel_j", "i4", ("pixel",))[:] = j_idx
+            ds.createVariable("lat", "f8", ("pixel",))[:] = lat_vals
+            ds.createVariable("lon", "f8", ("pixel",))[:] = lon_vals
+
+            chunksizes = (len(t_all), 1) if n_pixels > 0 else None
+            ma_var = ds.createVariable(
+                "MA_value", "f4", ("time", "pixel"),
+                fill_value=np.nan, zlib=True, complevel=4,
+                chunksizes=chunksizes,
+            )
+            ma_var[:, :] = values
+
+        self._load_aggregation_netcdf(file_path)
+
+
+    def _load_aggregation_netcdf(self, file_path):
+        """Open a cached aggregation NetCDF file and rebuild the pixel lookup index."""
+        self.aggregation_ds = netCDF4.Dataset(file_path, "r")
+        pixel_i = np.asarray(self.aggregation_ds.variables["pixel_i"][:]).tolist()
+        pixel_j = np.asarray(self.aggregation_ds.variables["pixel_j"][:]).tolist()
+        self._aggregation_pixel_index = dict(zip(zip(pixel_i, pixel_j), range(len(pixel_i))))
 
 
     def pixel_map(self, latitude_idx, longitude_idx, ax):
@@ -1205,7 +1375,6 @@ class PhenologyVisualization:
             ax.set_title(f"{extrema_label} Day of Year\n Lake ID: {lake_id}\n Year: {year}")
             ax.set_xlabel("Lon index")
             ax.set_ylabel("Lat index")
-            ax.legend()
         return im
     
 
@@ -1213,8 +1382,13 @@ class PhenologyVisualization:
         extrema_label = "Peak" if peaks else "Green Mid Up"
         fig, axs = plt.subplots(nrow, ncol, constrained_layout=True, squeeze=False, figsize=(ncol * 5, nrow * 4))
         im = None
+        outline_handle, outline_label = None, None
         for year, ax in zip(years, axs.flatten()):
             im = self.time_map(fig=fig, ax=ax, year=year, peaks=peaks, max=max, colorbar=False)
+            if outline_handle is None:
+                handles, labels = ax.get_legend_handles_labels()
+                if handles:
+                    outline_handle, outline_label = handles[0], labels[0]
             ax.set_title(str(year), fontsize=20)
             ax.set_ylabel("Lat index", fontsize=15)
             ax.set_xlabel("Lon index", fontsize=15)
@@ -1229,8 +1403,15 @@ class PhenologyVisualization:
             cbar.set_ticks([160, 185, 215, 250])
             cbar.ax.tick_params(labelsize=15)
 
+        # single shared legend for the lake outline, placed next to the colorbar
+        # instead of repeating it inside every subplot
+        if outline_handle is not None:
+            fig.legend([outline_handle], [outline_label], loc="upper left",
+                       bbox_to_anchor=(1.0, 1.0), fontsize=15, frameon=False)
+
         fig.suptitle(f"{extrema_label} Day of Year", fontsize=25)
         plt.show()
+        return fig
 
 
     def single_day_map(self, date):
@@ -1426,6 +1607,136 @@ class PhenologyVisualization:
         return pd.Series(index=time_dt,data=values_m)
 
 
+    def pair_phenology_events(self, other, latitude_idx, longitude_idx, metric="pks", tolerance_days=4):
+        """Pair phenology metric events between self and another phenology product/version.
+
+        Each event may be used in at most one pair. Candidate pairs (any self/other
+        event within `tolerance_days`) are ranked by how close they are in time and
+        claimed greedily closest-first, so once an event is paired it is removed from
+        contention - no event is ever paired twice. Everything is done with an all-pairs
+        distance matrix and pandas/numpy set ops (drop_duplicates, boolean masks), so no
+        Python loop is used over the (typically ragged, variable-length) per-pixel event
+        arrays.
+
+        Parameters
+        ----------
+        other : PhenologyVisualization
+            Second instance to pair against (e.g. phycocyanin vs chla, or v2.1 vs v3.0),
+            for the same lake/pixel.
+        latitude_idx : int
+            Row (lat) index of the pixel.
+        longitude_idx : int
+            Column (lon) index of the pixel.
+        metric : str, optional
+            One of 'pks', 'trgs', 'midUP', 'midDOWN', 'onsetUP', 'onsetDOWN', 'advUP',
+            'advDOWN'. Defaults to 'pks' (summer peaks).
+        tolerance_days : int, optional
+            Maximum gap in days between two events for them to count as a pair.
+            Defaults to 4.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per paired event, with columns time_<label>/value_<label> for
+            each side plus 'day_diff' (absolute gap in days). Unpaired events are
+            not included, and no event appears in more than one row.
+
+        Raises
+        ------
+        ValueError
+            If `metric` is not a recognised phenology metric key.
+        """
+        x_key, y_key, qa_key = f"{metric}_x", f"{metric}_y", f"{metric}_qa"
+
+        px_self = self._load_pixel_data(latitude_idx, longitude_idx)
+        px_other = other._load_pixel_data(latitude_idx, longitude_idx)
+
+        if x_key not in px_self or x_key not in px_other:
+            raise ValueError(f"'{metric}' is not a valid phenology metric.")
+
+        self_label, other_label = self.variable, other.variable
+        # if self_label == other_label:
+        #     self_label, other_label = f"{self_label}_v{self.version}", f"{other_label}_v{other.version}"
+
+        has_qa = qa_key in px_self and qa_key in px_other
+
+        columns = [f"time_{self_label}", f"value_{self_label}",
+                   f"time_{other_label}", f"value_{other_label}", "day_diff"]
+        if has_qa:
+            columns += [f"qa_{self_label}", f"qa_{other_label}"]
+
+        time_self = pd.to_datetime(px_self[x_key]).values
+        time_other = pd.to_datetime(px_other[x_key]).values
+
+        self_idx_matched, other_idx_matched, day_diff_matched = self._greedy_match_within_tolerance(
+            time_self, time_other, tolerance_days
+        )
+        if len(self_idx_matched) == 0:
+            return pd.DataFrame(columns=columns)
+
+        paired_dict = {
+            f"time_{self_label}": time_self[self_idx_matched],
+            f"value_{self_label}": px_self[y_key][self_idx_matched],
+            f"time_{other_label}": time_other[other_idx_matched],
+            f"value_{other_label}": px_other[y_key][other_idx_matched],
+            "day_diff": day_diff_matched,
+        }
+        if has_qa:
+            paired_dict[f"qa_{self_label}"] = px_self[qa_key][self_idx_matched]
+            paired_dict[f"qa_{other_label}"] = px_other[qa_key][other_idx_matched]
+
+        paired = pd.DataFrame(paired_dict)
+
+        return paired.sort_values(f"time_{self_label}").reset_index(drop=True)
+
+
+    @staticmethod
+    def _greedy_match_within_tolerance(time_self, time_other, tolerance_days):
+        """Match each self event to at most one other event within tolerance_days.
+
+        Core matching logic shared by pair_phenology_events (single pixel) and
+        qa_boxplot_lake's ratio mode (bulk, all lake pixels). Candidate pairs are
+        ranked by time gap and claimed closest-first, so no event is ever paired
+        twice - see pair_phenology_events's docstring for the full rationale.
+
+        Parameters
+        ----------
+        time_self, time_other : numpy.ndarray of numpy.datetime64
+            Event timestamps to match against each other.
+        tolerance_days : int
+            Maximum gap in days between two events for them to count as a pair.
+
+        Returns
+        -------
+        self_idx, other_idx : numpy.ndarray of int
+            Index arrays into time_self/time_other for matched pairs.
+        day_diff : numpy.ndarray of float
+            Matching day gap for each pair, same length as self_idx/other_idx.
+        """
+        empty = np.array([], dtype=int)
+        if len(time_self) == 0 or len(time_other) == 0:
+            return empty, empty, np.array([], dtype=float)
+
+        day_diff = np.abs(time_self[:, None] - time_other[None, :]) / np.timedelta64(1, "D")
+        self_idx, other_idx = np.where(day_diff <= tolerance_days)
+        if len(self_idx) == 0:
+            return empty, empty, np.array([], dtype=float)
+
+        candidates = pd.DataFrame({
+            "self_idx": self_idx,
+            "other_idx": other_idx,
+            "day_diff": day_diff[self_idx, other_idx],
+        }).sort_values("day_diff", kind="stable")
+
+        # claim closest pairs first; once an event is claimed on either side,
+        # drop_duplicates removes every other candidate row that reuses it
+        candidates = candidates.drop_duplicates(subset="self_idx", keep="first")
+        candidates = candidates.drop_duplicates(subset="other_idx", keep="first")
+
+        return (candidates["self_idx"].to_numpy(), candidates["other_idx"].to_numpy(),
+                candidates["day_diff"].to_numpy())
+
+
     def extrema_plot(self, latitude_idx, longitude_idx, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False, show_legend = True):
         """Plot detected peaks or troughs as a stem plot with optional background scatter.
 
@@ -1538,7 +1849,7 @@ class PhenologyVisualization:
 
             combined_style = {
                 **var_style,            # color
-                **qa_style,             # marker
+                "marker": qa_style["marker"],
                 "s": 50,
                 "edgecolors": var_style['color'],
                 "linewidths": 2,
@@ -1582,7 +1893,383 @@ class PhenologyVisualization:
             ymax = pks_lim_sub[-1]+0.5
             ax.set_ylim(-0.5, ymax)
         return ymax
-                    
+
+
+    def qa_boxplot(self, latitude_idx, longitude_idx, ax, metric="pks", start=0, end=9999, other=None, tolerance_days=4, qa_source="self"):
+        """Boxplot of a phenology metric's values grouped by QA level, for one pixel.
+
+        X-axis groups are QA levels (Good/Fair/Poor). If `other` is None, the
+        y-axis is the metric value itself (e.g. summer peak chla or phycocyanin).
+        If `other` is given, self's and other's events are paired one-to-one
+        (within `tolerance_days`, see pair_phenology_events) and the y-axis becomes
+        the ratio value_self / value_other instead - e.g. pass other=chla_v3 on a
+        phycocyanin instance to get a Phycocyanin/chla ratio boxplot. Only 'pks'
+        and 'trgs' carry a QA flag per event, so those are the only supported
+        metrics either way.
+
+        Parameters
+        ----------
+        latitude_idx : int
+            Row (lat) index of the pixel.
+        longitude_idx : int
+            Column (lon) index of the pixel.
+        ax : matplotlib.axes.Axes
+            Axes on which to draw the boxplot.
+        metric : str, optional
+            'pks' (summer peaks, default) or 'trgs' (winter troughs).
+        start : int, optional
+            First year to include (inclusive; keyed on self's event time when
+            `other` is given). 0 = earliest in the series.
+        end : int, optional
+            Last year to include (inclusive). 9999 = latest in the series.
+        other : PhenologyVisualization, optional
+            If given, plot the value_self / value_other ratio of paired events
+            instead of self's raw metric values (e.g. self=phycocyanin,
+            other=chla gives Phyco/chla).
+        tolerance_days : int, optional
+            Only used when `other` is given: maximum gap in days for two events
+            to count as a pair. Default 4.
+        qa_source : {'self', 'other', 'matched'}, optional
+            Only used when `other` is given: which side's QA flag to group by.
+            'matched' keeps only pairs where both sides have the same QA level
+            (dropping e.g. a Good self event paired with a Poor other event)
+            and groups by that shared QA value. Default 'self'.
+
+        Returns
+        -------
+        dict or None
+            The dict returned by ax.boxplot (boxes/medians/whiskers/...), or None
+            if there is no QA-labelled data to plot for this pixel/year range.
+
+        Raises
+        ------
+        ValueError
+            If `metric` is not 'pks' or 'trgs', or `qa_source` is not 'self'/'other'.
+        """
+        if metric not in ("pks", "trgs"):
+            raise ValueError("qa_boxplot only supports metrics with a QA flag: 'pks' or 'trgs'.")
+
+        metric_label = "Peak" if metric == "pks" else "Trough"
+
+        if other is None:
+            px = self._load_pixel_data(latitude_idx, longitude_idx)
+            plotting_data = f.grab_plotting_variables(start=start, end=end, pixel_data=px, variables=[metric])
+
+            if metric not in plotting_data:
+                warnings.warn(f"No {metric} data to plot for lake ID {self.lakeID}.")
+                return None
+
+            _, values, qa_values = plotting_data[metric]
+            var_label = self.get_plot_config("var", self.variable)["label"]
+            title = f"{var_label} {metric_label} Values by QA\n Lake ID: {self.lakeID}"
+            ylabel = f"{var_label} [ug/L]"
+        else:
+            if qa_source not in ("self", "other", "matched"):
+                raise ValueError("qa_source must be 'self', 'other', or 'matched'.")
+
+            self_label, other_label = self.variable, other.variable
+            self_pretty = self.get_plot_config("var", self.variable)["label"]
+            other_pretty = other.get_plot_config("var", other.variable)["label"]
+
+            paired = self.pair_phenology_events(other, latitude_idx, longitude_idx, metric=metric, tolerance_days=tolerance_days)
+            if len(paired) == 0:
+                warnings.warn(f"No paired {metric} events to plot for lake ID {self.lakeID}.")
+                return None
+
+            time_col = f"time_{self_label}"
+            if start != 0:
+                paired = paired[paired[time_col].dt.year >= start]
+            if end != 9999:
+                paired = paired[paired[time_col].dt.year <= end]
+            if len(paired) == 0:
+                warnings.warn(f"No paired {metric} events in {start}-{end} for lake ID {self.lakeID}.")
+                return None
+
+            if qa_source == "matched":
+                # only keep pairs where both sides agree on QA - so the ratio is
+                # never computed from a Good event divided by a Poor one, say
+                paired = paired[paired[f"qa_{self_label}"] == paired[f"qa_{other_label}"]]
+                if len(paired) == 0:
+                    warnings.warn(f"No {metric} pairs with matching QA on both sides for lake ID {self.lakeID}.")
+                    return None
+                qa_values = paired[f"qa_{self_label}"].to_numpy()
+            else:
+                qa_label = self_label if qa_source == "self" else other_label
+                qa_values = paired[f"qa_{qa_label}"].to_numpy()
+
+            values = (paired[f"value_{self_label}"] / paired[f"value_{other_label}"]).to_numpy()
+            title = f"{metric_label} {self_pretty}/{other_pretty} Ratio by QA\n Lake ID: {self.lakeID}"
+            ylabel = f"{self_label}/{other_label} ratio"
+
+        return self._boxplot_by_qa(ax, values, qa_values, title=title, ylabel=ylabel)
+
+
+    def qa_boxplot_lake(self, ax, metric="pks", start=0, end=9999, other=None, tolerance_days=4, qa_source="self"):
+        """Boxplot of a phenology metric's values grouped by QA level, pooled across the whole lake.
+
+        Same idea as qa_boxplot, but instead of a single pixel it pools events from
+        every pixel in the lake. If `other` is None, this reads the raw pks/trgs
+        arrays directly (like create_heatmap_output/yearly_heatmap_lake) rather than
+        looping pixel by pixel, since no per-pixel correspondence is needed. If
+        `other` is given, a peak must be paired against the *same pixel's* peak in
+        `other` (not any pixel), so pair_phenology_events is run per valid pixel
+        (self.valid_idx_prep) and the results are pooled - this is slower for large
+        lakes.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes
+            Axes on which to draw the boxplot.
+        metric : str, optional
+            'pks' (summer peaks, default) or 'trgs' (winter troughs).
+        start : int, optional
+            First year to include (inclusive). 0 = earliest in the series.
+        end : int, optional
+            Last year to include (inclusive). 9999 = latest in the series.
+        other : PhenologyVisualization, optional
+            If given, plot the value_self / value_other ratio of paired events
+            instead of self's raw metric values (e.g. self=phycocyanin,
+            other=chla gives Phyco/chla), pooled across all lake pixels.
+        tolerance_days : int, optional
+            Only used when `other` is given: maximum gap in days for two events
+            at the same pixel to count as a pair. Default 4.
+        qa_source : {'self', 'other', 'matched'}, optional
+            Only used when `other` is given: which side's QA flag to group by.
+            'matched' keeps only pairs where both sides have the same QA level.
+            Default 'self'.
+
+        Returns
+        -------
+        dict or None
+            The dict returned by ax.boxplot, or None if there is no QA-labelled
+            data to plot.
+
+        Raises
+        ------
+        ValueError
+            If `metric` is not 'pks' or 'trgs', or `qa_source` is not recognised.
+        """
+        if metric not in ("pks", "trgs"):
+            raise ValueError("qa_boxplot_lake only supports metrics with a QA flag: 'pks' or 'trgs'.")
+
+        metric_label = "Peak" if metric == "pks" else "Trough"
+
+        x_key, y_key, qa_key = f"{metric}_x", f"{metric}_y", f"{metric}_qa"
+
+        if other is None:
+            values_parts, qa_parts, times_parts = [], [], []
+            with netCDF4.Dataset(self.p_path) as nc:
+                vx, vy, vqa = nc.variables[x_key], nc.variables[y_key], nc.variables[qa_key]
+                for i, j in self.valid_idx_prep:
+                    # read one pixel at a time (nc.variables[var][i, j, :]) rather than
+                    # a bulk nc.variables[var][:, :, :] read - netCDF4 1.7.4 silently
+                    # misaligns data read this way for files with an unlimited 'record'
+                    # dimension, verified by comparing against the trusted per-pixel reads
+                    # used everywhere else in this class (e.g. _load_pixel_data)
+                    x_raw = np.asarray(vx[i, j, :])
+                    mask = ~np.isnan(x_raw)
+                    if not mask.any():
+                        continue
+                    values_parts.append(np.asarray(vy[i, j, :])[mask])
+                    qa_parts.append(np.asarray(vqa[i, j, :])[mask])
+                    times_parts.append(x_raw[mask])
+
+            if not values_parts:
+                warnings.warn(f"No {metric} data to plot for lake ID {self.lakeID}.")
+                return None
+
+            values, qa_values = np.concatenate(values_parts), np.concatenate(qa_parts)
+            years = pd.to_datetime(np.concatenate(times_parts), unit="s", utc=True).year.to_numpy()
+
+            year_mask = np.ones(len(values), dtype=bool)
+            if start != 0:
+                year_mask &= years >= start
+            if end != 9999:
+                year_mask &= years <= end
+            values, qa_values = values[year_mask], qa_values[year_mask]
+
+            if len(values) == 0:
+                warnings.warn(f"No {metric} data to plot for lake ID {self.lakeID}.")
+                return None
+
+            var_label = self.get_plot_config("var", self.variable)["label"]
+            title = f"{var_label} {metric_label} Values by QA\n Lake ID: {self.lakeID} (lake-wide)"
+            ylabel = f"{var_label} [ug/L]"
+        else:
+            if qa_source not in ("self", "other", "matched"):
+                raise ValueError("qa_source must be 'self', 'other', or 'matched'.")
+
+            self_label, other_label = self.variable, other.variable
+            self_pretty = self.get_plot_config("var", self.variable)["label"]
+            other_pretty = other.get_plot_config("var", other.variable)["label"]
+
+            self_vals, other_vals, self_qa_vals, other_qa_vals, self_times = [], [], [], [], []
+            with netCDF4.Dataset(self.p_path) as nc_self, netCDF4.Dataset(other.p_path) as nc_other:
+                svx, svy, svqa = nc_self.variables[x_key], nc_self.variables[y_key], nc_self.variables[qa_key]
+                ovx, ovy, ovqa = nc_other.variables[x_key], nc_other.variables[y_key], nc_other.variables[qa_key]
+
+                for i, j in self.valid_idx_prep:
+                    # per-pixel reads only (see note above) - each file is opened
+                    # once, then indexed pixel by pixel, avoiding both the bulk-read
+                    # correctness bug and _load_pixel_data's per-pixel full-file cost
+                    s_x_raw = np.asarray(svx[i, j, :])
+                    s_mask = ~np.isnan(s_x_raw)
+                    o_x_raw = np.asarray(ovx[i, j, :])
+                    o_mask = ~np.isnan(o_x_raw)
+                    if not s_mask.any() or not o_mask.any():
+                        continue
+
+                    s_time = pd.to_datetime(s_x_raw[s_mask], unit="s", utc=True).values
+                    o_time = pd.to_datetime(o_x_raw[o_mask], unit="s", utc=True).values
+
+                    s_idx, o_idx, _ = self._greedy_match_within_tolerance(s_time, o_time, tolerance_days)
+                    if len(s_idx) == 0:
+                        continue
+
+                    self_vals.append(np.asarray(svy[i, j, :])[s_mask][s_idx])
+                    other_vals.append(np.asarray(ovy[i, j, :])[o_mask][o_idx])
+                    self_qa_vals.append(np.asarray(svqa[i, j, :])[s_mask][s_idx])
+                    other_qa_vals.append(np.asarray(ovqa[i, j, :])[o_mask][o_idx])
+                    self_times.append(s_time[s_idx])
+
+            if not self_vals:
+                warnings.warn(f"No paired {metric} events to plot for lake ID {self.lakeID}.")
+                return None
+
+            self_vals, other_vals = np.concatenate(self_vals), np.concatenate(other_vals)
+            self_qa_vals, other_qa_vals = np.concatenate(self_qa_vals), np.concatenate(other_qa_vals)
+            years = pd.DatetimeIndex(np.concatenate(self_times)).year.to_numpy()
+
+            year_mask = np.ones(len(self_vals), dtype=bool)
+            if start != 0:
+                year_mask &= years >= start
+            if end != 9999:
+                year_mask &= years <= end
+            self_vals, other_vals = self_vals[year_mask], other_vals[year_mask]
+            self_qa_vals, other_qa_vals = self_qa_vals[year_mask], other_qa_vals[year_mask]
+
+            if len(self_vals) == 0:
+                warnings.warn(f"No paired {metric} events in {start}-{end} for lake ID {self.lakeID}.")
+                return None
+
+            if qa_source == "matched":
+                match_mask = self_qa_vals == other_qa_vals
+                self_vals, other_vals = self_vals[match_mask], other_vals[match_mask]
+                self_qa_vals = self_qa_vals[match_mask]
+                if len(self_vals) == 0:
+                    warnings.warn(f"No {metric} pairs with matching QA on both sides for lake ID {self.lakeID}.")
+                    return None
+                qa_values = self_qa_vals
+            else:
+                qa_values = self_qa_vals if qa_source == "self" else other_qa_vals
+
+            values = self_vals / other_vals
+            title = f"{metric_label} {self_pretty}/{other_pretty} Ratio by QA\n Lake ID: {self.lakeID} (lake-wide)"
+            ylabel = f"{self_label}/{other_label} ratio"
+
+        return self._boxplot_by_qa(ax, values, qa_values, title=title, ylabel=ylabel)
+
+
+    def _boxplot_by_qa(self, ax, values, qa_values, title, ylabel):
+        """Draw a QA-grouped boxplot of `values` on `ax`. Shared by qa_boxplot and qa_boxplot_ratio.
+
+        Also annotates every pair of QA groups with a two-sided Mann-Whitney U
+        test (non-parametric, no normality assumption), drawn as a significance
+        bracket above the boxes: '***' p<0.001, '**' p<0.01, '*' p<0.05, 'ns' otherwise.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes
+            Axes on which to draw the boxplot.
+        values : array-like
+            Values to group and plot (one entry per event).
+        qa_values : array-like
+            QA level (0/1/2) for each entry in `values`, same length.
+        title : str
+            Plot title.
+        ylabel : str
+            Y-axis label.
+
+        Returns
+        -------
+        dict or None
+            The dict returned by ax.boxplot, or None if no QA level has data.
+        """
+        values = np.asarray(values)
+        qa_values = np.asarray(qa_values)
+
+        present_levels = [q for q in self.QA_LEVELS if (qa_values == q).any()]
+        if not present_levels:
+            warnings.warn(f"No QA-labelled data to plot for lake ID {self.lakeID}.")
+            return None
+
+        groups = [values[qa_values == q] for q in present_levels]
+        labels = [self.get_plot_config("qa", q)["label"] for q in present_levels]
+        colors = [self.get_plot_config("qa", q)["style"]["color"] for q in present_levels]
+
+        box = ax.boxplot(groups, tick_labels=labels, patch_artist=True)
+        for patch, color in zip(box["boxes"], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.5)
+        for median in box["medians"]:
+            median.set_color("black")
+
+        ax.set_title(title)
+        ax.set_xlabel("QA")
+        ax.set_ylabel(ylabel)
+
+        self._annotate_pairwise_significance(ax, groups)
+
+        return box
+
+
+    @staticmethod
+    def _annotate_pairwise_significance(ax, groups):
+        """Draw pairwise Mann-Whitney U significance brackets above a boxplot.
+
+        Compares every pair of groups (by their 1-indexed boxplot position) with
+        a two-sided Mann-Whitney U test. Brackets are stacked bottom-to-top by
+        increasing span (adjacent groups first) so they don't overlap. Pairs with
+        fewer than 2 samples in either group are skipped (test undefined).
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes
+            Axes already containing the boxplot to annotate.
+        groups : list of array-like
+            The same group arrays passed to ax.boxplot, in boxplot position order.
+        """
+        pairs = [(a, b) for a in range(len(groups)) for b in range(a + 1, len(groups))]
+        pairs = [p for p in pairs if len(groups[p[0]]) >= 2 and len(groups[p[1]]) >= 2]
+        if not pairs:
+            return
+
+        pairs.sort(key=lambda p: p[1] - p[0])
+
+        y_max = max(g.max() for g in groups if len(g))
+        y_min = min(g.min() for g in groups if len(g))
+        y_range = (y_max - y_min) or abs(y_max) or 1.0
+        step = y_range * 0.08
+
+        for level, (a, b) in enumerate(pairs):
+            _, p_value = mannwhitneyu(groups[a], groups[b], alternative="two-sided")
+            if p_value < 0.001:
+                sig = "***"
+            elif p_value < 0.01:
+                sig = "**"
+            elif p_value < 0.05:
+                sig = "*"
+            else:
+                sig = "ns"
+
+            y = y_max + step * (1 + level * 1.6)
+            x1, x2 = a + 1, b + 1
+            ax.plot([x1, x1, x2, x2], [y, y + step * 0.2, y + step * 0.2, y],
+                    color="black", linewidth=1)
+            ax.text((x1 + x2) / 2, y + step * 0.25, sig, ha="center", va="bottom", fontsize=10)
+
+        ax.set_ylim(top=y_max + step * (1 + len(pairs) * 1.6) + step)
+
 
     def extrema_comparison(self, other1,  latitude_idx, longitude_idx, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = True, other2= None, purple_chla21= False, show_legend= False):
         """Overlay extrema plots from two or three PhenologyVisualization instances on one axis.
@@ -1956,20 +2643,43 @@ class PhenologyVisualization:
                     result[year] = year_counts
         else:
             with netCDF4.Dataset(self.p_path) as nc:
-                pks_x_raw = np.array(nc.variables["pks_x"][:, :, :]).ravel()
-                pk_mask = ~np.isnan(pks_x_raw)
-                pks_x = f.unix_to_datetime(pks_x_raw[pk_mask])
-                trgs_x_raw = np.array(nc.variables["trgs_x"][:, :, :]).ravel()
-                trg_mask = ~np.isnan(trgs_x_raw)
-                trgs_x = f.unix_to_datetime(trgs_x_raw[trg_mask])
+                vpx, vpqa = nc.variables["pks_x"], nc.variables["pks_qa"]
+                vtx, vtqa = nc.variables["trgs_x"], nc.variables["trgs_qa"]
+
+                # restrict to pixels inside the 1 km-inset lake boundary (self.valid_idx_prep),
+                # matching metric_map/time_map/lake_bloom_kde/qa_boxplot_lake, instead of the
+                # full raw grid which includes border/mixed pixels. Read per-pixel
+                # (nc.variables[var][i, j, :]) rather than a bulk [:, :, :] read - netCDF4 1.7.4
+                # misattributes data between pixels when read that way for files with an
+                # unlimited 'record' dimension, which would corrupt this restriction
+                pks_x_parts, pks_qa_parts = [], []
+                trgs_x_parts, trgs_qa_parts = [], []
+                for i, j in self.valid_idx_prep:
+                    px_raw = np.asarray(vpx[i, j, :])
+                    pmask = ~np.isnan(px_raw)
+                    if pmask.any():
+                        pks_x_parts.append(px_raw[pmask])
+                        pks_qa_parts.append(np.asarray(vpqa[i, j, :])[pmask])
+
+                    tx_raw = np.asarray(vtx[i, j, :])
+                    tmask = ~np.isnan(tx_raw)
+                    if tmask.any():
+                        trgs_x_parts.append(tx_raw[tmask])
+                        trgs_qa_parts.append(np.asarray(vtqa[i, j, :])[tmask])
+
+                pks_x_raw = np.concatenate(pks_x_parts) if pks_x_parts else np.array([])
+                pks_qa_arr = np.concatenate(pks_qa_parts) if pks_qa_parts else np.array([])
+                trgs_x_raw = np.concatenate(trgs_x_parts) if trgs_x_parts else np.array([])
+                trgs_qa_arr = np.concatenate(trgs_qa_parts) if trgs_qa_parts else np.array([])
+
+                pks_x = f.unix_to_datetime(pks_x_raw)
+                trgs_x = f.unix_to_datetime(trgs_x_raw)
 
                 if qa is not None:
                     qa_set = set(qa)
-                    pks_qa_arr = np.array(nc.variables["pks_qa"][:, :, :]).ravel()[pk_mask]
-                    trgs_qa_arr = np.array(nc.variables["trgs_qa"][:, :, :]).ravel()[trg_mask]
                     pks_x = pks_x[np.isin(pks_qa_arr, list(qa_set))]
                     trgs_x = trgs_x[np.isin(trgs_qa_arr, list(qa_set))]
-        
+
                 for year in range(start_year, end_year + 1):
                     year_fractions = []
                     for (q_start, q_end) in quarters:
@@ -2336,12 +3046,24 @@ class PhenologyVisualization:
         style = {**base_style,**style_kwargs}
 
         if aggregation:
-            if self.aggregation_df is None:
-                self.spatial_aggregation()
+            if self.save_format == "netcdf":
+                if self.aggregation_ds is None:
+                    self.spatial_aggregation()
 
-            background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude_idx) & (self.aggregation_df["j"]==longitude_idx)]
-            background_time = background_sub["time"].to_numpy()
-            background_values = background_sub["MA_value"]
+                pixel_idx = self._aggregation_pixel_index.get((latitude_idx, longitude_idx))
+                if pixel_idx is None:
+                    background_time = np.array([])
+                    background_values = np.array([])
+                else:
+                    background_time = np.asarray(self.aggregation_ds.variables["time"][:])
+                    background_values = np.asarray(self.aggregation_ds.variables["MA_value"][:, pixel_idx])
+            else:
+                if self.aggregation_df is None:
+                    self.spatial_aggregation()
+
+                background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude_idx) & (self.aggregation_df["j"]==longitude_idx)]
+                background_time = background_sub["time"].to_numpy()
+                background_values = background_sub["MA_value"]
 
             x = f.datenum_to_datetime(background_time)
             y = background_values
@@ -2449,7 +3171,7 @@ class PhenologyVisualization:
                     transform=ax.transAxes, ha="right", va="top", zorder = 10)
 
 
-    def single_plot(self, latitude_idx, longitude_idx, ax, aggregation = False, start= 0, end= 9999, annotation = None,variables = None):
+    def single_plot(self, latitude_idx, longitude_idx, ax, aggregation = False, start= 0, end= 9999, annotation = None,variables = None, check_buffer = False):
         """Plot raw observations, the smoothed spline, and all phenological events for a pixel.
 
         Displays a scatter of valid (QA==0) observations or 3×3 aggregated values,
@@ -2473,6 +3195,10 @@ class PhenologyVisualization:
             First year to display (inclusive). 0 = earliest in the series.
         end : int, optional
             Last year to display (inclusive). 9999 = latest in the series.
+        check_buffer : bool, optional
+            If True, warn when the requested pixel falls outside the lake's 1 km
+            inward-shrunk boundary (self.prepped_geom). Default False - the pixel
+            is not checked against the buffer.
 
         Returns
         -------
@@ -2484,6 +3210,12 @@ class PhenologyVisualization:
         lat_val = float(lat[latitude_idx])
         lon_val = float(lon[longitude_idx])
         smoothing = pixel_data["smoothing"]
+
+        if check_buffer and not self.prepped_geom.contains(Point(lon_val, lat_val)):
+            warnings.warn(
+                f"Pixel ({latitude_idx}, {longitude_idx}) is outside the 1 km lake buffer "
+                f"for lake ID {self.lakeID}."
+            )
 
         plotting_data = f.grab_plotting_variables(start = start, end = end, pixel_data=pixel_data, variables=variables)
 
@@ -3347,35 +4079,51 @@ class PhenologyVisualization:
         return df[mask]
 
 
-    def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999, plt_kwargs = None):
-        print(f"plotting started at: {datetime.datetime.now()}")
-        if plt_kwargs is None:
-            plt_kwargs = {'cmap':'ocean_r',
-                          'levels':20,
-                          'cbar':True}
+    def _fit_bloom_kde(self, qa_value = None, start_year = 0, end_year = 9999):
+        """
+        Load/filter cached bloom events and fit a 2D gaussian_kde on
+        (green-up advance DOY, green-down onset DOY).
 
+        Returns
+        -------
+        tuple or None
+            (kde, start, end, qa_filtered_set), or None if there isn't
+            enough data to fit a KDE.
+        """
         dir_path, file_path = self.build_kde_path()
-        if os.path.isfile(file_path):
+        # the cached CSV doesn't retain per-pixel (i, j) identity (only pooled
+        # primary/qa_column/secondary event columns), so unlike compute_and_cache_metric
+        # we can't detect staleness by checking pixel coverage - fall back to comparing
+        # against the source NetCDFs' modification time instead
+        source_mtime = max(os.path.getmtime(self.p_path), os.path.getmtime(self.e_path))
+        cache_is_stale = os.path.isfile(file_path) and os.path.getmtime(file_path) < source_mtime
+
+        if os.path.isfile(file_path) and not cache_is_stale:
             compressed_df = pd.read_csv(file_path)
             print(file_path)
         else:
-            warnings.warn("KDE events need to be calculated. Depending on the lake size this may take a while.")
+            if cache_is_stale:
+                warnings.warn(f"Cached KDE events for lake ID {self.lakeID} predate the source data; recomputing.")
+            else:
+                warnings.warn("KDE events need to be calculated. Depending on the lake size this may take a while.")
             os.makedirs(dir_path, exist_ok=True)
             df = self.assemble_kde_data()
             compressed_df = self.prep_kde_data(df)
             compressed_df.to_csv(file_path, index=False)
 
+        qa_filtered_set = None
         if qa_value is not None:
             if type(qa_value) != set:
                 warnings.warn("qa_value needs to be a set")
             else:
                 compressed_df = compressed_df[compressed_df['qa_column'].isin(qa_value)]
+                qa_filtered_set = qa_value
                 print(len(compressed_df))
 
         if len(compressed_df) < 2:
             warnings.warn("Not enough data to plot kde")
-            return
-        
+            return None
+
         years_all = np.unique(list(compressed_df["primary"].astype(int) ) + list(compressed_df["secondary"].astype(int) ))
         start, end = f.define_year_range(start_year, end_year, years_all)
         plot_df = self.sort_by_year(compressed_df, start_year=start, end_year=end)
@@ -3384,26 +4132,205 @@ class PhenologyVisualization:
         y = np.round((plot_df["secondary"].values % 1) * 1000).astype(int)
         y[y< x] += 365
 
-        kde = gaussian_kde(np.vstack([x, y]))
-        xi = np.linspace(0, 400, 100)
-        yi = np.linspace(0, 730, 100)
+        try:
+            kde = gaussian_kde(np.vstack([x, y]))
+        except np.linalg.LinAlgError:
+            # too few / too degenerate (collinear or duplicate) points for a 2D KDE -
+            # e.g. can happen with a restrictive qa_value filter that leaves very few events
+            warnings.warn(f"Not enough distinct {self.variable} events to plot KDE for lake ID {self.lakeID}.")
+            return None
+
+        return kde, start, end, qa_filtered_set
+
+    def calculate_bloom_probabilities_from_kde(self, qa_value = None, start_year = 0, end_year = 9999,
+                                     interval = 21, x_max = 400, y_max = 730, resolution = 1, save_path = None):
+        """
+        Probability of a `interval`-day bloom window under the fitted KDE, for
+        a window starting at every `resolution`-day offset spanning
+        [-interval, x_max+interval] x [-interval, y_max+interval] (green-up
+        advance DOY x green-down onset DOY). Windows overlap (a 1-day step
+        with a 21-day window means neighbors share 20 days), so `probability`
+        values do NOT sum to 1 - each is its own "P(bloom falls in *this*
+        21-day window)", not a share of a disjoint partition.
+
+        Computed as a Riemann-sum approximation: the KDE density is evaluated
+        once on the full `resolution`-day grid (a single vectorized call),
+        then every window's integral is read off a 2D summed-area table
+        (prefix sums), rather than calling the exact but expensive
+        kde.integrate_box() per window - that brute-force approach means
+        ~316k individual calls at interval=21/resolution=1, on the order of
+        an hour or more; this is seconds, at the cost of a small
+        discretization error from the finite `resolution` (~0.1% in testing
+        at resolution=1).
+
+        Returns
+        -------
+        pandas.DataFrame or None
+            One row per window with x_low/x_high/y_low/y_high/probability
+            columns. None if there isn't enough data to fit a KDE.
+        """
+        fit = self._fit_bloom_kde(qa_value=qa_value, start_year=start_year, end_year=end_year)
+        if fit is None:
+            return None
+        kde, start, end, qa_filtered_set = fit
+
+        xi = np.arange(-interval, x_max + interval, resolution)
+        yi = np.arange(-interval, y_max + interval, resolution)
         Xi, Yi = np.meshgrid(xi, yi)
-        Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape)
-        Zi_norm = Zi / Zi.max()
-        # cf = ax.contourf(Xi, Yi, Zi_norm, **plt_kwargs)
-        sns.kdeplot(x=x, y=y, ax = ax, fill=True,**plt_kwargs)
-        # plt.colorbar(cf, ax=ax)
-        ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
-        ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")
+        # density x cell area ~= probability mass in that resolution x resolution cell
+        Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape) * resolution ** 2
 
-        ax.set_xlim(0, 400)
-        ax.set_ylim(0, 730)
-        ax.set_xlabel("Green-up Advanced (DOY)")
-        ax.set_ylabel("Green-down Onset (DOY)")
-        ax.set_title(f"Green-up Advanced vs Green-down Onset\nLake ID: {self.lakeID} | {start} - {end}")
-        print(f"plotting ended at: {datetime.datetime.now()}")
+        # 2D summed-area table (prefix sums), zero-padded on the low edge so
+        # window_sum below can read every window's total with 4 lookups
+        cumsum = np.cumsum(np.cumsum(Zi, axis=0), axis=1)
+        cumsum = np.pad(cumsum, ((1, 0), (1, 0)))
 
-        return ax
+        n_cells = interval // resolution
+        window_sum = (cumsum[n_cells:, n_cells:] - cumsum[:-n_cells, n_cells:]
+                      - cumsum[n_cells:, :-n_cells] + cumsum[:-n_cells, :-n_cells])
+        # subtracting nearly-equal cumulative sums can leave float noise like
+        # -1e-18 where the true probability is 0 - clip it, since a probability
+        # can't legitimately be negative
+        window_sum = np.clip(window_sum, 0, None)
+
+        n_y, n_x = window_sum.shape
+        x_low, y_low = np.meshgrid(xi[:n_x], yi[:n_y])
+        
+        if save_path:
+            file_name = f"bloom_prob_DOY_{self.variable}.nc"
+            file_path = os.path.join(save_path, file_name)
+
+            with netCDF4.Dataset(file_path, "w") as nc:
+
+                # Dimensions
+                nc.createDimension("greenup_doy", n_x)
+                nc.createDimension("greendown_doy", n_y)
+
+                # Coordinates
+                greenup = nc.createVariable("greenup_doy", "i4", ("greenup_doy",))
+                greendown = nc.createVariable("greendown_doy", "i4", ("greendown_doy",))
+
+                greenup[:] = xi[:n_x]
+                greendown[:] = yi[:n_y]
+
+                greenup.units = "day_of_year"
+                greenup.long_name = "Green-up window start day"
+                greendown.units = "day_of_year"
+                greendown.long_name = "Green-down window start day"
+
+                # Probability matrix
+                prob = nc.createVariable(
+                    "probability",
+                    "f4",
+                    ("greendown_doy", "greenup_doy"),
+                    zlib=True,
+                    complevel=4,
+                    fill_value=np.nan,
+                )
+
+                prob[:, :] = window_sum
+
+                prob.long_name = f"Probability of {interval}-day bloom window"
+                prob.units = "1"
+
+                # Global metadata
+                nc.description = "Bloom window probabilities derived from KDE"
+                nc.window_length_days = interval
+                nc.grid_resolution_days = resolution
+
+                prob.interval_days = interval
+                prob.resolution_days = resolution
+                prob.method = "Gaussian KDE integrated over moving windows"
+                prob.window_definition = "Window defined by lower-left corner coordinates"
+
+        return pd.DataFrame({
+                    "x_low": x_low.ravel(), "x_high": x_low.ravel() + interval,
+                    "y_low": y_low.ravel(), "y_high": y_low.ravel() + interval,
+                    "probability": window_sum.ravel(),
+                })
+
+    
+
+    
+
+    def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999, plt_kwargs = None, probability= False, interval = 21, resolution= 1, x_max = 400, y_max = 730):
+        print(f"plotting started at: {datetime.datetime.now()}")
+        if probability:
+            plt_kwargs = {'cmap':'ocean_r',
+                            'levels':50,
+                            'cbar':True}
+
+        if plt_kwargs is None:
+            plt_kwargs = {'cmap':'ocean_r',
+                          'levels':20,
+                          'cbar':True}
+            
+        plt_kwargs = dict(plt_kwargs)
+        show_cbar = plt_kwargs.pop('cbar', False)
+
+        if probability:
+            probs = self.calculate_bloom_probabilities_from_kde(
+            qa_value=qa_value, start_year=start_year, end_year=end_year,
+            interval=interval, x_max=x_max, y_max=y_max, resolution=resolution,
+            )
+            if probs is None:
+                return None
+
+            grid = probs.pivot(index="y_low", columns="x_low", values="probability")
+            x_centers = grid.columns.values + interval / 2
+            y_centers = grid.index.values + interval / 2
+
+            cf = ax.contourf(x_centers, y_centers, grid.values, **plt_kwargs, vmax = 0.05)
+            # Add a contour line at probability = 0.05
+            ax.contour(x_centers, y_centers, grid.values, levels=[0.05], colors="red", linewidths=2)
+            if show_cbar:
+                cbar = plt.colorbar(cf, ax=ax, label="Probability")
+                cbar.ax.axhline(0.05, color="red", linewidth=2)
+
+            ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
+            ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")
+            ax.set_xlim(0, x_max)
+            ax.set_ylim(0, y_max)
+            ax.set_xlabel("Green-up Advanced (DOY)")
+            ax.set_ylabel("Green-down Onset (DOY)")
+            ax.set_title(f"Bloom event probability per {interval}-day interval\nLake ID: {self.lakeID}")
+
+            return ax
+        else:
+
+            fit = self._fit_bloom_kde(qa_value=qa_value, start_year=start_year, end_year=end_year)
+            if fit is None:
+                return
+            kde, start, end, qa_filtered_set = fit
+
+            xi = np.linspace(0, 400, 100)
+            yi = np.linspace(0, 730, 100)
+            Xi, Yi = np.meshgrid(xi, yi)
+            Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape)
+
+            cf = ax.contourf(Xi, Yi, Zi, **plt_kwargs)
+            if show_cbar:
+                plt.colorbar(cf, ax=ax)
+            ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
+            ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")
+
+            ax.set_xlim(0, 400)
+            ax.set_ylim(0, 730)
+            ax.set_xlabel("Green-up Advanced (DOY)")
+            ax.set_ylabel("Green-down Onset (DOY)")
+
+            var_label = self.get_plot_config("var", self.variable)["label"]
+            if qa_filtered_set is None:
+                qa_label = "All QA"
+            else:
+                qa_label = "QA: " + ", ".join(self.get_plot_config("qa", q)["label"] for q in sorted(qa_filtered_set))
+            ax.set_title(
+                f"{var_label} - Green-up Advanced vs Green-down Onset\n"
+                f"Lake ID: {self.lakeID} | {start} - {end} | {qa_label}"
+            )
+            print(f"plotting ended at: {datetime.datetime.now()}")
+
+            return ax
             
 
 
