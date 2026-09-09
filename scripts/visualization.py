@@ -259,6 +259,8 @@ class PhenologyVisualization:
         self.methods = [method for method in dir(PhenologyVisualization) if callable(getattr(PhenologyVisualization, method)) and not method.startswith("__")]
         self.valid_coords = self.valid_index_pairs()
         self.out_folder = Path(self.p_path).parents[2]
+        self.data_folder = Path(self.p_path).parents[2]
+        self.start_year , self.end_year = self.get_year_edges()
         self.aggregation_df = None
         self.aggregation_ds = None
         self._aggregation_pixel_index = None
@@ -314,6 +316,22 @@ class PhenologyVisualization:
             lat = lats[lat_index]
             lon = lons[lon_index]
         return f"Lat, Lon: {lat}, {lon}"
+
+
+    def get_year_edges(self):
+        """Return the first and last year of the extract time series.
+
+        Returns
+        -------
+        tuple of int
+            (first_year, last_year) in the extract NetCDF.
+        """
+        with netCDF4.Dataset(self.e_path) as nc:
+            time_raw = nc.variables["time"][:]
+            t_all = f.unix_to_datenum(time_raw)
+            time_dt = np.array(f.datenum_to_datetime(t_all))
+            years_all = np.array([d.year for d in time_dt])
+            return years_all.min(), years_all.max()
 
     
     @classmethod
@@ -648,18 +666,17 @@ class PhenologyVisualization:
         """Return the cache path for one lake and one time window."""
         ext = "nc" if self.save_format == "netcdf" else "csv"
 
-        start_label = 2002 if start == 0 else start
-        end_label = 2024 if end == 9999 else end
+        start_label = self.start_year if start == 0 else start
+        end_label = self.end_year if end == 9999 else end
 
 
         base = os.path.join(
-            self.out_folder,
+            self.data_folder,
             "calculated_values",
             "metrics",
-            f"v{self.version}",
             self.variable,
         )
-        filename = f"{self.lakeID}_{start_label}_{end_label}.{ext}"
+        filename = f"ID{self.lakeID}_{start_label}_{end_label}.{ext}"
 
         return base, os.path.join(base, filename)
 
@@ -674,15 +691,62 @@ class PhenologyVisualization:
         file_path : str
             Full path to the CSV file.
         """
-        lake_name = f.sanitize_filename(self.ID_to_name(int(self.lakeID)).replace(" ", ""))
+        ext = "nc" if self.save_format == "netcdf" else "csv"
+
+        start_label = self.start_year
+        end_label = self.end_year
+        # lake_name = f.sanitize_filename(self.ID_to_name(int(self.lakeID)).replace(" ", ""))
         base = os.path.join(
-            self.out_folder.parents[1], "lake_analysis",
-             f"ID{self.lakeID}_{lake_name}", "calculated_values", "kde_data",
-            f"v{self.version}", self.variable,
+            self.data_folder,
+            "calculated_values",
+            "kde_data",
+            self.variable,
         )
-        base, path =  base, os.path.join(base, "kde_events.csv")
+        filename = f"ID{self.lakeID}_{start_label}_{end_label}.{ext}"
+        base, path =  base, os.path.join(base, filename)
         print(path)
         return base, path
+
+
+    def _write_kde_netcdf(self, file_path, kde_df):
+        """Write cached KDE event data to NetCDF."""
+        columns = ["primary", "qa_column", "secondary"]
+
+        with netCDF4.Dataset(file_path, "w") as ds:
+            ds.createDimension("event", len(kde_df))
+
+            for column in columns:
+                values = kde_df[column].to_numpy()
+
+                if column == "qa_column":
+                    variable = ds.createVariable(column, "f4", ("event",))
+                    variable[:] = values
+                else:
+                    variable = ds.createVariable(column, "f8", ("event",))
+                    variable[:] = values
+
+            ds.lake_id = str(self.lakeID)
+            ds.version = str(self.version)
+            ds.variable = str(self.variable)
+
+
+    def _read_kde_nc(self, file_path):
+        """Read cached KDE event data from NetCDF."""
+        with netCDF4.Dataset(file_path, "r") as ds:
+            required = {"primary", "qa_column", "secondary"}
+            missing = required.difference(ds.variables)
+
+            if missing:
+                raise ValueError(
+                    f"KDE cache {file_path} is missing variables: {sorted(missing)}"
+                )
+
+            return pd.DataFrame({
+                "primary": np.asarray(ds.variables["primary"][:]),
+                "qa_column": np.asarray(ds.variables["qa_column"][:]),
+                "secondary": np.asarray(ds.variables["secondary"][:]),
+            })
+
 
     def compute_and_cache_metric(self, metric_name, col_name, compute_fn,
                              start=0, end=9999):
@@ -939,14 +1003,15 @@ class PhenologyVisualization:
         is_netcdf = self.save_format == "netcdf"
 
         out_dir = os.path.join(
-            self.out_folder,
-            "calculated_values", "spatial_aggregation_values",
-            f"v{self.version}", self.variable,
+            self.data_folder,
+            "calculated_values",
+            "spatial_aggregation_values",
+            self.variable,
         )
         os.makedirs(out_dir, exist_ok=True)
 
         ext = "nc" if is_netcdf else "csv"
-        file_path = os.path.join(out_dir, f"aggregation_background_values.{ext}")
+        file_path = os.path.join(out_dir, f"ID{self.lakeID}_background_agg.{ext}")
         if os.path.isfile(file_path):
             if is_netcdf:
                 self._load_aggregation_netcdf(file_path)
@@ -4103,7 +4168,10 @@ class PhenologyVisualization:
         cache_is_stale = os.path.isfile(file_path) and os.path.getmtime(file_path) < source_mtime
 
         if os.path.isfile(file_path) and not cache_is_stale:
-            compressed_df = pd.read_csv(file_path)
+            if self.save_format == "netcdf":
+                compressed_df = self._read_kde_nc(file_path)
+            else:
+                compressed_df = pd.read_csv(file_path)
             print(file_path)
         else:
             if cache_is_stale:
@@ -4113,7 +4181,10 @@ class PhenologyVisualization:
             os.makedirs(dir_path, exist_ok=True)
             df = self.assemble_kde_data()
             compressed_df = self.prep_kde_data(df)
-            compressed_df.to_csv(file_path, index=False)
+            if self.save_format == "netcdf":
+                self._write_kde_netcdf(file_path, compressed_df)
+            else:
+                compressed_df.to_csv(file_path, index=False)
 
         qa_filtered_set = None
         if qa_value is not None:
