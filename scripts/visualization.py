@@ -146,7 +146,7 @@ color_sets_4x4 = {
 
 class PhenologyVisualization:
     shapefile_path = None
-    save_format = "csv"  # "csv" or "netcdf" -- see set_save_format(); applies to spatial_aggregation() and the metric caches
+    save_format = "netcdf"  # "csv" or "netcdf" -- see set_save_format(); applies to spatial_aggregation() and the metric caches
     QA_LEVELS = (0, 1, 2)
     
     QA_CONFIG = {
