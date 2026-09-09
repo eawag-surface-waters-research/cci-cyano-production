@@ -645,42 +645,24 @@ class PhenologyVisualization:
 
 
     def build_metric_path(self, metric_name, start=0, end=9999):
-        """Return the output directory and file path for a cached metric file.
-
-        The filename encodes the year range: full_ts for the complete series,
-        ts_{start}_to_{end} otherwise. Sentinel values 0 and 9999 are replaced
-        by 2002 and 2024 respectively in the filename. The extension follows
-        self.save_format ("csv" or "netcdf").
-
-        Parameters
-        ----------
-        metric_name : str
-            Name of the metric (e.g. 'r2', 'MAD', 'RMSE', 'correlation',
-            'values_per_pixel').
-        start : int
-            First year of the evaluation window (0 = full series start).
-        end : int
-            Last year of the evaluation window (9999 = full series end).
-
-        Returns
-        -------
-        base : str
-            Directory path where the cache file will be written.
-        file_path : str
-            Full path to the cache file.
-        """
+        """Return the cache path for one lake and one time window."""
         ext = "nc" if self.save_format == "netcdf" else "csv"
-        base = os.path.join(self.out_folder, "calculated_values", "metrics", metric_name, f"v{self.version}", self.variable)
-        if start == 0 and end == 9999:
-            fname = f"full_ts.{ext}"
-        elif start == 0:
-            fname = f"ts_{2002}_to_{end}.{ext}"
-        elif end == 9999:
-            fname = f"ts_{start}_to_{2024}.{ext}"
-        else:
-            fname = f"ts_{start}_to_{end}.{ext}"
 
-        return base, os.path.join(base, fname)
+        start_label = 2002 if start == 0 else start
+        end_label = 2024 if end == 9999 else end
+
+
+        base = os.path.join(
+            self.out_folder,
+            "calculated_values",
+            "metrics",
+            f"v{self.version}",
+            self.variable,
+        )
+        filename = f"{self.lakeID}_{start_label}_{end_label}.{ext}"
+
+        return base, os.path.join(base, filename)
+
 
     def build_kde_path(self):
         """Return the output directory and file path for the cached KDE events CSV.
@@ -702,106 +684,130 @@ class PhenologyVisualization:
         print(path)
         return base, path
 
-    def compute_and_cache_metric(self, metric_name, col_name, compute_fn, start=0, end=9999):
-        """Compute a metric for all valid pixels in parallel and cache to disk.
-
-        On the first call the metric is computed using a multiprocessing pool
-        (3 workers) and written to the cache (CSV or NetCDF, per
-        self.save_format). Subsequent calls with the same metric and
-        year range load directly from the cached file.
-
-        Parameters
-        ----------
-        metric_name : str
-            Name of the metric, passed to build_metric_path and compute_fn.
-        col_name : str
-            Column/variable name used when reading or writing the cache.
-        compute_fn : callable
-            Worker function (typically compute_metric_score) executed by each
-            pool worker.
-        start : int
-            First year of the evaluation window (0 = full series start).
-        end : int
-            Last year of the evaluation window (9999 = full series end).
-
-        Returns
-        -------
-        dict
-            Mapping of (i, j) tuples to metric values for all valid pixels.
-        """
+    def compute_and_cache_metric(self, metric_name, col_name, compute_fn,
+                             start=0, end=9999):
+        """Compute or load one metric for a lake and time window."""
         is_netcdf = self.save_format == "netcdf"
-        dir_path, file_path = self.build_metric_path(metric_name, start, end)
+        dir_path, file_path = self.build_metric_path(metric_name, start=start, end=end)
         os.makedirs(dir_path, exist_ok=True)
+
+        data = None
+
         if os.path.isfile(file_path):
             if is_netcdf:
-                data = self._read_metric_netcdf(file_path, col_name)
+                with netCDF4.Dataset(file_path, "r") as ds:
+                    metric_exists = col_name in ds.variables
+
+                if metric_exists:
+                    data = self._read_metric_netcdf(file_path, col_name)
             else:
                 df = pd.read_csv(file_path)
                 data = dict(zip(zip(df["i"], df["j"]), df[col_name]))
-            missing = [coord for coord in self.valid_coords if coord not in data]
-            if not missing:
-                return data
-            # the cache predates a pixel that is now valid (e.g. extract/phenology
-            # was regenerated since the cache was written) - it's stale, not just slow,
-            # so recompute the full metric rather than silently KeyError-ing later
-            warnings.warn(
-                f"Cached {metric_name} for lake ID {self.lakeID} is missing "
-                f"{len(missing)} currently-valid pixel(s) (e.g. {missing[0]}); "
-                f"the cache is stale and will be recomputed."
-            )
+
+            if data is not None:
+                missing = [coord for coord in self.valid_coords if coord not in data]
+
+                if not missing:
+                    return data
+
+                warnings.warn(
+                    f"Cached {metric_name} is missing {len(missing)} valid pixels; "
+                    "recomputing."
+                )
         else:
-            warnings.warn(f"{metric_name} need to be calculated. Depending on the lake size this may take a while.")
-        workers = partial(compute_fn, start=start, end=end, metrics_to_compute = [metric_name])
-        with multiprocessing.Pool(initializer=_init_worker, initargs=(self.p_path, self.e_path), processes=3) as pool:
+            warnings.warn(
+                f"{metric_name} needs to be calculated. "
+                "Depending on lake size, this may take a while."
+            )
+
+        workers = partial(
+            compute_fn,
+            start=start,
+            end=end,
+            metrics_to_compute=[metric_name],
+        )
+
+        with multiprocessing.Pool(
+            initializer=_init_worker,
+            initargs=(self.p_path, self.e_path),
+            processes=3,
+        ) as pool:
             result = pool.map(workers, self.valid_coords)
+
         data = dict(result)
+
         if is_netcdf:
             self._write_metric_netcdf(file_path, col_name, data)
         else:
-            t_df = pd.DataFrame([(i, j, v) for (i, j), v in data.items()], columns=["i", "j", col_name])
-            t_df.to_csv(file_path, index=False)
+            metric_df = pd.DataFrame(
+                [
+                    (i, j, value)
+                    for (i, j), value in data.items()
+                ],
+                columns=["i", "j", col_name],
+            )
+            metric_df.to_csv(file_path, index=False)
+
         return data
 
 
     def _write_metric_netcdf(self, file_path, col_name, data):
-        """Write a compute_and_cache_metric() result to a dense (lat, lon) NetCDF grid.
-
-        Pixels absent from `data` (never computed) are left at the -9999 fill
-        sentinel already used throughout this codebase for missing satellite
-        data. That sentinel is distinguishable from a legitimately-computed NaN
-        metric (e.g. from insufficient data in that pixel's window), which is
-        what lets the staleness check in compute_and_cache_metric() detect
-        pixels that became valid after this cache was written.
-        """
+        """Append one metric to a lake/window NetCDF cache."""
         with netCDF4.Dataset(self.e_path) as src:
             lat = np.asarray(src.variables["lat"][:])
             lon = np.asarray(src.variables["lon"][:])
 
-        grid = np.full((len(lat), len(lon)), -9999.0, dtype=np.float32)
-        for (i, j), value in data.items():
-            grid[i, j] = value
+        mode = "a" if os.path.isfile(file_path) else "w"
 
-        with netCDF4.Dataset(file_path, "w") as ds:
-            ds.createDimension("lat", len(lat))
-            ds.createDimension("lon", len(lon))
-            ds.createVariable("lat", "f8", ("lat",))[:] = lat
-            ds.createVariable("lon", "f8", ("lon",))[:] = lon
-            var = ds.createVariable(col_name, "f4", ("lat", "lon"),
-                                     fill_value=-9999.0, zlib=True, complevel=4)
-            var[:, :] = grid
+        with netCDF4.Dataset(file_path, mode) as ds:
+            if mode == "w":
+                ds.createDimension("lat", len(lat))
+                ds.createDimension("lon", len(lon))
+
+                ds.createVariable("lat", "f8", ("lat",))[:] = lat
+                ds.createVariable("lon", "f8", ("lon",))[:] = lon
+
+                ds.lake_id = str(self.lakeID)
+                ds.version = str(self.version)
+                ds.variable = str(self.variable)
+
+            grid = np.full(
+                (len(lat), len(lon)),
+                -9999.0,
+                dtype=np.float32,
+            )
+
+            for (i, j), value in data.items():
+                grid[i, j] = value
+
+            if col_name in ds.variables:
+                metric_var = ds.variables[col_name]
+            else:
+                metric_var = ds.createVariable(
+                    col_name,
+                    "f4",
+                    ("lat", "lon"),
+                    fill_value=-9999.0,
+                    zlib=True,
+                    complevel=4,
+                )
+
+            metric_var[:, :] = grid
 
 
     def _read_metric_netcdf(self, file_path, col_name):
-        """Load a cached metric grid back into a {(i, j): value} dict.
-
-        Only cells not equal to the -9999 fill sentinel are included, mirroring
-        the CSV path where the cached rows are exactly the pixels that were
-        valid at cache time.
-        """
+        """Read one metric from a lake/window NetCDF cache."""
         with netCDF4.Dataset(file_path, "r") as ds:
+            if col_name not in ds.variables:
+                raise KeyError(
+                    f"Metric {col_name!r} is not present in {file_path}"
+                )
+
             ds.set_auto_mask(False)
             grid = np.asarray(ds.variables[col_name][:, :])
+
         computed = np.argwhere(grid != -9999.0)
+
         return {(int(i), int(j)): grid[i, j] for i, j in computed}
 
 
@@ -1226,8 +1232,6 @@ class PhenologyVisualization:
         ValueError
             If the lake ID derived from p_path is not found in the shapefile.
         """
-        if colorbar_extent is None:
-            colorbar_extent = [0,1]
         lake_id = int(self.lakeID)
         lake_row = self.gdf[self.gdf["id"] == lake_id]
         if lake_row.empty:
