@@ -1,0 +1,23 @@
+{
+  "variable": "chla",
+  "qa": "lwlr_quality_flags",
+  "shapefile": "C:\\Users\\schelian\\cci-cyano-production\\shapefiles\\lakes_cci_v2.0.2_data_availability_shp\\lakescci_v2.0.2_data-availability.shp",
+  "images": "D:/lakecci_data/raw/v3.0/merged_product",
+  "out_folder": "D:/phenology_data/v3.0",
+  "lakes": [1564, 870, 2057, 2113, 2201, 3258, 3421, 3500,
+      300000138, 300001316, 300013258, 300013516, 300013529, 300013575, 300013582, 300013597, 300013647, 300013715, 300013751, 300013760, 300013778,
+      300014323, 300014331, 300014354, 300014360, 300014651, 300014660],
+  "extract": true,
+  "qa_filter": true,
+  "phenology": true,
+  "analysis": true,
+  "timing_plots": false,
+  "maps": false,
+  "comparison": false,
+  "pixel_plots": false,
+  "save_format": "netcdf",
+  "time_splits": [[0,9999]],
+  "purple_chla21": true,
+  "aggregation": false,
+  "background_pts": false
+}
