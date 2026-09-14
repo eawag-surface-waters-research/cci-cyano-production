@@ -1,5 +1,5 @@
 {
-  "variable": "chla",
+  "variable": "phycocyanin",
   "qa": "lwlr_quality_flags",
   "shapefile": "C:\\Users\\schelian\\cci-cyano-production\\shapefiles\\lakes_cci_v2.0.2_data_availability_shp\\lakescci_v2.0.2_data-availability.shp",
   "images": "D:/lakecci_data/raw/v3.0/merged_product",
@@ -18,5 +18,5 @@
   "comparison": false,
   "save_format": "netcdf",
   "time_splits": [[0,9999]], 
-  "pixel_plots": "C:\\Users\\schelian\\cci-cyano-production\\pixel_dicts\\v3_chla_pixels.json"
+  "pixel_plots": "C:\\Users\\schelian\\cci-cyano-production\\pixel_dicts\\v3_can_aggregate_pixels.json"
 }
