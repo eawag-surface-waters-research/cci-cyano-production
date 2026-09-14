@@ -716,7 +716,7 @@ def save_timing_plots(eda_instance, lake_analysis_folder, lake_str, time_splits,
         for start, end in time_splits:
             ts_suffix = "full_ts" if (start == 0 and end == 9999) else f"{_year(start)}_to_{_year(end)}"
             fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-            eda_instance.lake_bloom_kde(ax, qa_value=qa_set, start_year=start, end_year=end)
+            eda_instance.lake_bloom_kde(ax, qa_value=qa_set, start_year=start, end_year=end, probability=True)
             kde_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_kde_qa{qa_suffix}_{ts_suffix}.png"
             fig.savefig(os.path.join(timing_plots_path, kde_file_name), dpi=600, bbox_inches="tight")
             plt.close(fig)

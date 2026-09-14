@@ -4344,12 +4344,13 @@ class PhenologyVisualization:
         show_cbar = plt_kwargs.pop('cbar', False)
 
         if probability:
-            probs = self.calculate_bloom_probabilities_from_kde(
+            fit = self.calculate_bloom_probabilities_from_kde(
             qa_value=qa_value, start_year=start_year, end_year=end_year,
             interval=interval, x_max=x_max, y_max=y_max, resolution=resolution,
             )
-            if probs is None:
+            if fit is None:
                 return None
+            probs, start, end, qa_filtered_set = fit
 
             grid = probs.pivot(index="y_low", columns="x_low", values="probability")
             x_centers = grid.columns.values + interval / 2
@@ -4362,17 +4363,13 @@ class PhenologyVisualization:
                 cbar = plt.colorbar(cf, ax=ax, label="Probability")
                 cbar.ax.axhline(0.05, color="red", linewidth=2)
 
-            ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
-            ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")
-            ax.set_xlim(0, x_max)
-            ax.set_ylim(0, y_max)
-            ax.set_xlabel("Green-up Advanced (DOY)")
-            ax.set_ylabel("Green-down Onset (DOY)")
-            ax.set_title(f"Bloom event probability per {interval}-day interval\nLake ID: {self.lakeID}")
+            if qa_filtered_set is None:
+                qa_label = "All QA"
+            else:
+                qa_label = "QA: " + ", ".join(self.get_plot_config("qa", q)["label"] for q in sorted(qa_filtered_set))
+            title_str = f"Bloom event probability per {interval}-day interval\nLake ID: {self.lakeID} | {start} - {end} | {qa_label}"
 
-            return ax
         else:
-
             fit = self._fit_bloom_kde(qa_value=qa_value, start_year=start_year, end_year=end_year)
             if fit is None:
                 return
@@ -4386,26 +4383,22 @@ class PhenologyVisualization:
             cf = ax.contourf(Xi, Yi, Zi, **plt_kwargs)
             if show_cbar:
                 plt.colorbar(cf, ax=ax)
-            ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
-            ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")
-
-            ax.set_xlim(0, 400)
-            ax.set_ylim(0, 730)
-            ax.set_xlabel("Green-up Advanced (DOY)")
-            ax.set_ylabel("Green-down Onset (DOY)")
 
             var_label = self.get_plot_config("var", self.variable)["label"]
             if qa_filtered_set is None:
                 qa_label = "All QA"
             else:
                 qa_label = "QA: " + ", ".join(self.get_plot_config("qa", q)["label"] for q in sorted(qa_filtered_set))
-            ax.set_title(
-                f"{var_label} - Green-up Advanced vs Green-down Onset\n"
-                f"Lake ID: {self.lakeID} | {start} - {end} | {qa_label}"
-            )
-            print(f"plotting ended at: {datetime.datetime.now()}")
+            title_str = f"{var_label} - Green-up Advanced vs Green-down Onset\nLake ID: {self.lakeID} | {start} - {end} | {qa_label}"
 
-            return ax
+        ax.set_xlabel("Green-up Advanced (DOY)")
+        ax.set_ylabel("Green-down Onset (DOY)")
+        ax.set_xlim(0, x_max)
+        ax.set_ylim(0, y_max)
+        ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
+        ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")            
+        ax.set_title(title_str)
+        return ax
             
 
 

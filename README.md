@@ -273,34 +273,34 @@ This applies whenever `out_folder` is reassigned to the lake analysis path, whic
 │   │   ├── extract/
 │   │   │   └── {variable}/
 │   │   │       └── {lake_id}.nc
-│   │   └── phenology/
-│   │       └── {variable}/
-│   │           ├── {lake_id}.nc
-│   │           └── checkpoints/
-│   │               └── {lake_id}/
-│   │                   └── bs{batch_size}/
-│   │                       └── *.npy          # temporary; deleted after successful write
+│   │   ├── phenology/
+│   │   │   └── {variable}/
+│   │   │       ├── {lake_id}.nc
+│   │   │       └── checkpoints/
+│   │   │           └── {lake_id}/
+│   │   │               └── bs{batch_size}/
+│   │   │                   └── *.npy          # temporary; deleted after successful write
+│   │   └── calculated_values/
+│   │       ├── metrics/
+│   │       │   └── {metric_name}/             # r2 | MAD | RMSE | correlation | values_per_pixel
+│   │       │       └── v{version}/
+│   │       │           └── {variable}/
+│   │       │               ├── full_ts.{csv|nc}                       # time_split [0, 9999]
+│   │       │               ├── ts_2002_to_{end}.{csv|nc}               # time_split [0, end]
+│   │       │               ├── ts_{start}_to_2024.{csv|nc}             # time_split [start, 9999]
+│   │       │               └── ts_{start}_to_{end}.{csv|nc}            # time_split [start, end]; format set by save_format
+│   │       ├── spatial_aggregation_values/
+│   │       │   └── v{version}/
+│   │       │       └── {variable}/
+│   │       │           └── aggregation_background_values.{csv|nc} # format set by save_format
+│   │       └── kde_data/
+│   │           └── v{version}/
+│   │               └── {variable}/
+│   │                   └── kde_events.csv        # bracketed peak events cached by build_kde_path
 │   └── v2.1/                            # = out_folder for a v2.1 run; same layout as v3.0/
 │
 └── lake_analysis/                # = dirname(dirname(out_folder))/lake_analysis
     └── {lake_str}/                      #   lake_str = "ID{lake_id}_{lake_name}"
-        ├── calculated_values/
-        │   ├── metrics/
-        │   │   └── {metric_name}/             # r2 | MAD | RMSE | correlation | values_per_pixel
-        │   │       └── v{version}/
-        │   │           └── {variable}/
-        │   │               ├── full_ts.{csv|nc}                       # time_split [0, 9999]
-        │   │               ├── ts_2002_to_{end}.{csv|nc}               # time_split [0, end]
-        │   │               ├── ts_{start}_to_2024.{csv|nc}             # time_split [start, 9999]
-        │   │               └── ts_{start}_to_{end}.{csv|nc}            # time_split [start, end]; format set by save_format
-        │   ├── spatial_aggregation_values/
-        │   │   └── v{version}/
-        │   │       └── {variable}/
-        │   │           └── aggregation_background_values.{csv|nc} # format set by save_format
-        │   └── kde_data/
-        │       └── v{version}/
-        │           └── {variable}/
-        │               └── kde_events.csv        # bracketed peak events cached by build_kde_path
         └── plots/
             ├── metric_maps/
             │   ├── {variable}_v{version}_{metric}_full_ts.png      # single time_split [0, 9999]
