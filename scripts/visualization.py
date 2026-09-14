@@ -666,9 +666,8 @@ class PhenologyVisualization:
         """Return the cache path for one lake and one time window."""
         ext = "nc" if self.save_format == "netcdf" else "csv"
 
-        start_label = self.start_year if start == 0 else start
-        end_label = self.end_year if end == 9999 else end
-
+        start_label = self.start_year if start <= self.start_year else start
+        end_label = self.end_year if end >= self.end_year else end
 
         base = os.path.join(
             self.data_folder,
@@ -677,7 +676,6 @@ class PhenologyVisualization:
             self.variable,
         )
         filename = f"ID{self.lakeID}_{start_label}_{end_label}.{ext}"
-
         return base, os.path.join(base, filename)
 
 
@@ -892,7 +890,9 @@ class PhenologyVisualization:
         if time_split is None:
             time_split = [(0, 9999)]
         for start, end in time_split:
-            return self.compute_and_cache_metric(metric_name="r2", col_name="r2_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
+            return self.compute_and_cache_metric(metric_name="r2", col_name="r2_scores",
+                                                 compute_fn=PhenologyVisualization.compute_metric_score,
+                                                 start=start, end=end)
 
 
     def MAD_scores(self, time_split=None):
@@ -912,7 +912,9 @@ class PhenologyVisualization:
         if time_split is None:
             time_split = [(0, 9999)]
         for start, end in time_split:
-            return self.compute_and_cache_metric(metric_name="MAD", col_name="mad_scores",compute_fn= PhenologyVisualization.compute_metric_score,start= start,end= end)
+            return self.compute_and_cache_metric(metric_name="MAD", col_name="mad_scores",
+                                                 compute_fn= PhenologyVisualization.compute_metric_score,
+                                                 start= start,end= end)
 
 
     def RMSE_scores(self, time_split=None):
@@ -932,7 +934,9 @@ class PhenologyVisualization:
         if time_split is None:
             time_split = [(0, 9999)]
         for start, end in time_split:
-            return self.compute_and_cache_metric(metric_name="RMSE", col_name="rmse_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
+            return self.compute_and_cache_metric(metric_name="RMSE", col_name="rmse_scores",
+                                                 compute_fn=PhenologyVisualization.compute_metric_score,
+                                                 start=start, end=end)
 
 
     def correlation_scores(self, time_split=None):
@@ -952,7 +956,9 @@ class PhenologyVisualization:
         if time_split is None:
             time_split = [(0, 9999)]
         for start, end in time_split:
-            return self.compute_and_cache_metric(metric_name="correlation", col_name="correlation_scores", compute_fn=PhenologyVisualization.compute_metric_score, start=start, end=end)
+            return self.compute_and_cache_metric(metric_name="correlation", col_name="correlation_scores",
+                                                 compute_fn=PhenologyVisualization.compute_metric_score,
+                                                 start=start, end=end)
 
 
     def values_per_pixel(self, time_split=None):
@@ -972,7 +978,9 @@ class PhenologyVisualization:
         if time_split is None:
             time_split = [(0, 9999)]
         for start, end in time_split:
-            return self.compute_and_cache_metric(metric_name="values_per_pixel", col_name="number_of_values",compute_fn= PhenologyVisualization.compute_metric_score, start=start,end= end)
+            return self.compute_and_cache_metric(metric_name="values_per_pixel", col_name="number_of_values",
+                                                 compute_fn= PhenologyVisualization.compute_metric_score,
+                                                 start=start,end= end)
 
 
     def spatial_aggregation(self):
@@ -1179,7 +1187,6 @@ class PhenologyVisualization:
         with netCDF4.Dataset(self.e_path) as nc:
             summary = np.array(nc.variables["summary"][:, :])
 
-
         # mask invalid cells
         masked_summary = np.ma.masked_where(summary <= 2, summary)
 
@@ -1247,7 +1254,6 @@ class PhenologyVisualization:
             if summary[lat_idx, lon_idx] <= 2:
                     print("invalid cell")
                     return
-
 
             ax.text(
             lon_idx, lat_idx,
@@ -1389,9 +1395,6 @@ class PhenologyVisualization:
         cid = fig.canvas.mpl_connect("button_press_event", on_click)
         return cid
     
-
-    # def grab_DOY_data(self):
-    #     return map_data, extent
 
     def time_map(self, fig, ax, year, peaks=True, max = True, colorbar=True):
         """Map the day-of-year of a phenological event across all pixels for one year.
@@ -1581,6 +1584,7 @@ class PhenologyVisualization:
                     "qa":       getattr(nc, "qa"),
                     }
         return self._extracted_globals
+
     
     def _load_pixel_data(self, i,j):
         """Lazily load and cache all phenology arrays for a single pixel.
@@ -1806,7 +1810,8 @@ class PhenologyVisualization:
                 candidates["day_diff"].to_numpy())
 
 
-    def extrema_plot(self, latitude_idx, longitude_idx, ax,  peak = True, aggregation= False,  start = 0, end = 9999, background_pts = True, purple_chla21= False, show_legend = True):
+    def extrema_plot(self, latitude_idx, longitude_idx, ax,  peak = True, aggregation= False,
+                     start = 0, end = 9999, background_pts = True, purple_chla21= False, show_legend = True):
         """Plot detected peaks or troughs as a stem plot with optional background scatter.
 
         Displays summer peaks or winter troughs for the pixel at (latitude_idx, longitude_idx)
@@ -1869,8 +1874,8 @@ class PhenologyVisualization:
             return None
 
         limits = sorted(f.datenum_to_datetime(time_m))
-        function_start = min(limits).year if start == 0 else start
-        function_end= max(limits).year if end ==9999 else end
+        function_start = min(limits).year if start <= min(limits).year else start
+        function_end = max(limits).year if end >= max(limits).year else end
 
         phenology_name = self.variable
         
@@ -1964,7 +1969,8 @@ class PhenologyVisualization:
         return ymax
 
 
-    def qa_boxplot(self, latitude_idx, longitude_idx, ax, metric="pks", start=0, end=9999, other=None, tolerance_days=4, qa_source="self"):
+    def qa_boxplot(self, latitude_idx, longitude_idx, ax, metric="pks", start=0, end=9999,
+                   other=None, tolerance_days=4, qa_source="self"):
         """Boxplot of a phenology metric's values grouped by QA level, for one pixel.
 
         X-axis groups are QA levels (Good/Fair/Poor). If `other` is None, the
@@ -2040,7 +2046,8 @@ class PhenologyVisualization:
             self_pretty = self.get_plot_config("var", self.variable)["label"]
             other_pretty = other.get_plot_config("var", other.variable)["label"]
 
-            paired = self.pair_phenology_events(other, latitude_idx, longitude_idx, metric=metric, tolerance_days=tolerance_days)
+            paired = self.pair_phenology_events(other, latitude_idx, longitude_idx,
+                                                metric=metric, tolerance_days=tolerance_days)
             if len(paired) == 0:
                 warnings.warn(f"No paired {metric} events to plot for lake ID {self.lakeID}.")
                 return None
@@ -2340,7 +2347,9 @@ class PhenologyVisualization:
         ax.set_ylim(top=y_max + step * (1 + len(pairs) * 1.6) + step)
 
 
-    def extrema_comparison(self, other1,  latitude_idx, longitude_idx, ax,  peak = True, aggregation= False, start = 0, end = 9999, background_pts = True, other2= None, purple_chla21= False, show_legend= False):
+    def extrema_comparison(self, other1,  latitude_idx, longitude_idx, ax,  peak = True,
+                           aggregation= False, start = 0, end = 9999, background_pts = True, 
+                           other2= None, purple_chla21= False, show_legend= False):
         """Overlay extrema plots from two or three PhenologyVisualization instances on one axis.
 
         Calls extrema_plot for self and other1 (and optionally other2), sharing the
@@ -2591,16 +2600,6 @@ class PhenologyVisualization:
         norm = BoundaryNorm(bounds, cmap_new.N)
 
         sc = self.plot_background_pts(ax, latitude_idx, longitude_idx, values_m, time_m, aggregation = aggregation)
-
-        # if aggregation:
-        #     if self.aggregation_df is None:
-        #             self.spatial_aggregation()
-        #     background_sub    = self.aggregation_df[(self.aggregation_df["i"] == latitude_idx) & (self.aggregation_df["j"] == longitude_idx)]
-        #     background_time   = background_sub["time"].to_numpy()
-        #     background_values = background_sub["MA_value"]
-        #     sc = ax.scatter(datenum_to_datetime(background_time), background_values, c=qa_idx, cmap=cmap_new, norm=norm, alpha=1, s=10, label="Data")
-        # else:
-        #     sc = ax.scatter(datenum_to_datetime(time_m), values_m, c=qa_idx, cmap=cmap_new, norm=norm, alpha=1, s=10, label="Data")
 
         neg_values_sub = f.plot_variables(
             ax=ax, plotting_data=plotting_data, spline_x=smooth_x, spline_y=smooth_y,
