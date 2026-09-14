@@ -616,12 +616,15 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
         smoothing_arr = nc.variables["smoothing_parameter"][:]
 
     for i, j in pixels:
-        out_path = os.path.join(lake_analysis_folder, lake_str, "plots", "pixel_plots", "summaries", f"{i}_{j}")
+        out_path = os.path.join(lake_analysis_folder, lake_str, "summaries", f"{i}_{j}")
         os.makedirs(out_path, exist_ok=True)
         txt_path = os.path.join(out_path, f"summary_{eda_instance.variable}.txt")
-
+        lat, lon = eda_instance.index_to_lat_lon(i, j)
         with open(txt_path, "w") as file:
+            file.write(f"Pixel: ({i}, {j})\n")
+            file.write(f"Latitude: {lat:.6f}, Longitude: {lon:.6f}\n")
             file.write(f"{eda_instance.variable} {eda_instance.version}:\n")
+            
             file.write(f"    Smoothing Parameter: {float(smoothing_arr[i, j])}\n")
             for start, end in time_splits:
                 if start == 0 and end == 9999:

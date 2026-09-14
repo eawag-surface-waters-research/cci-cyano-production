@@ -267,9 +267,9 @@ This applies whenever `out_folder` is reassigned to the lake analysis path, whic
 > **Naming requirement:** `out_folder` itself must be a directory literally named `v{version}` (e.g. `v2.1`, `v3.1`), and it must sit alongside any other version folders under a shared parent directory. `PhenologyVisualization` derives `self.version` by reading the basename of `out_folder` from the `phenology_path` it is given (stripping the leading `v`), and `main.py`'s `comparison` stage locates other versions as siblings of `out_folder` (`os.path.join(os.path.dirname(out_folder), other_version)`). Renaming or nesting `out_folder` differently breaks both the version label shown in plots and the comparison stage.
 
 ```
-{parent}/                                # shared parent of all version folders
-├── {data_folder}/                       # typically 'merged_product' or 'phenology_data'
-│   ├── v3.0/                            # = out_folder for a run, should be a version
+{parent}/                               # shared parent of all version folders
+├── {data_folder}/                      # typically 'merged_product' or 'phenology_data'
+│   ├── v3.0/                           # = out_folder for a run, should be a version
 │   │   ├── extract/
 │   │   │   └── {variable}/
 │   │   │       └── {lake_id}.nc
@@ -279,56 +279,49 @@ This applies whenever `out_folder` is reassigned to the lake analysis path, whic
 │   │   │       └── checkpoints/
 │   │   │           └── {lake_id}/
 │   │   │               └── bs{batch_size}/
-│   │   │                   └── *.npy          # temporary; deleted after successful write
+│   │   │                   └── *.npy   # temporary; deleted after successful write
 │   │   └── calculated_values/
-│   │       ├── metrics/
-│   │       │   └── {metric_name}/             # r2 | MAD | RMSE | correlation | values_per_pixel
-│   │       │       └── v{version}/
-│   │       │           └── {variable}/
-│   │       │               ├── full_ts.{csv|nc}                       # time_split [0, 9999]
-│   │       │               ├── ts_2002_to_{end}.{csv|nc}               # time_split [0, end]
-│   │       │               ├── ts_{start}_to_2024.{csv|nc}             # time_split [start, 9999]
-│   │       │               └── ts_{start}_to_{end}.{csv|nc}            # time_split [start, end]; format set by save_format
+│   │       ├── metrics/                # r2 , MAD , RMSE , correlation , values_per_pixel
+│   │       │   └── {variable}/
+│   │       │       ├── ID{lakeID}_{start}_{end}.nc   # start and end years
 │   │       ├── spatial_aggregation_values/
-│   │       │   └── v{version}/
-│   │       │       └── {variable}/
-│   │       │           └── aggregation_background_values.{csv|nc} # format set by save_format
+│   │       │   └── {variable}/
+│   │       │       └── aggregation_background_values.{csv|nc} # format set by save_format
 │   │       └── kde_data/
-│   │           └── v{version}/
-│   │               └── {variable}/
-│   │                   └── kde_events.csv        # bracketed peak events cached by build_kde_path
-│   └── v2.1/                            # = out_folder for a v2.1 run; same layout as v3.0/
+│   │           └── {variable}/
+│   │               └── kde_events.csv  # bracketed peak events cached by build_kde_path
+│   └── v2.1/                           # = out_folder for a v2.1 run; same layout as v3.0/
 │
-└── lake_analysis/                # = dirname(dirname(out_folder))/lake_analysis
-    └── {lake_str}/                      #   lake_str = "ID{lake_id}_{lake_name}"
-        └── plots/
-            ├── metric_maps/
-            │   ├── {variable}_v{version}_{metric}_full_ts.png      # single time_split [0, 9999]
-            │   ├── {variable}_v{version}_{metric}_split_ts.png     # two time_splits
-            │   └── {variable}_v{version}_{metric}_{n}_split_ts.png # n > 2 time_splits
-            ├── pixel_plots/
-            │   ├── aggregated/
-            │   │   └── {i}_{j}/
-            │   │       ├── location.png
-            │   │       ├── {variable}_v{version}_full_ts.png
-            │   │       ├── {variable}_v{version}_split_ts.png
-            │   │       ├── {variable}_v{version}_peaks_*.png
-            │   │       ├── {variable}_v{version}_{peaks|troughs}_qa_boxplot_*.png
-            │   │       └── {variable}_v{version}_heatmap_{i}_{j}.png
-            │   ├── not_aggregated/
-            │   │   └── {i}_{j}/         # same structure as aggregated/
-            │   ├── comparisons/                 # only when comparison: true
-            │   │   └── {i}_{j}/
-            │   │       └── comparison_pks_{pair_label}_{ts_suffix}[_agg].png
-            │   └── summaries/
-            │       └── {i}_{j}/
-            │           └── summary_{variable}.txt
-            └── timing_plots/                    # only when timing_plots: true
-                ├── {variable}_v{version}_doy_peaks_*.png
-                ├── {variable}_v{version}_doy_green_up_mid_*.png
-                ├── {variable}_v{version}_lake_heatmap.png
-                ├── {variable}_v{version}_kde_qa{qa_suffix}_*.png
-                └── {variable}_v{version}_lake_{peaks|troughs}_qa_boxplot_*.png
+└── lake_analysis/                      # = dirname(dirname(out_folder))/lake_analysis
+    └── {lake_str}/                     #   lake_str = "ID{lake_id}_{lake_name}"
+        ├── plots/
+        │   ├── metric_maps/
+        │   │   ├── {variable}_v{version}_{metric}_full_ts.png      # single time_split [0, 9999]
+        │   │   ├── {variable}_v{version}_{metric}_split_ts.png     # two time_splits
+        │   │   └── {variable}_v{version}_{metric}_{n}_split_ts.png # n > 2 time_splits
+        │   ├── pixel_plots/            # i , j are pixel indices
+        │   │   ├── aggregated/
+        │   │   │   └── {i}_{j}/
+        │   │   │       ├── location.png
+        │   │   │       ├── {variable}_v{version}_full_ts.png
+        │   │   │       ├── {variable}_v{version}_split_ts.png
+        │   │   │       ├── {variable}_v{version}_peaks_*.png
+        │   │   │       ├── {variable}_v{version}_{peaks|troughs}_qa_boxplot_*.png
+        │   │   │       └── {variable}_v{version}_heatmap_{i}_{j}.png
+        │   │   ├── not_aggregated/
+        │   │   │   └── {i}_{j}/        # same structure as aggregated/
+        │   │   ├── comparisons/        # only when comparison: true
+        │   │   │   └── {i}_{j}/
+        │   │   │       └── comparison_pks_{pair_label}_{ts_suffix}[_agg].png
+        │   └── timing_plots/           # only when timing_plots: true
+        │       ├── {variable}_v{version}_doy_peaks_*.png
+        │       ├── {variable}_v{version}_doy_green_up_mid_*.png
+        │       ├── {variable}_v{version}_lake_heatmap.png
+        │       ├── {variable}_v{version}_kde_qa{qa_suffix}_*.png
+        │       └── {variable}_v{version}_lake_{peaks|troughs}_qa_boxplot_*.png
+        └── summaries/
+            └── {i}_{j}/                # i , j are pixel indices
+                └── summary_{variable}.txt
 ```
 
 ## Fault Tolerance and Restart

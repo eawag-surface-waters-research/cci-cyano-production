@@ -315,8 +315,8 @@ class PhenologyVisualization:
             lons = nc.variables["lon"][:]
             lat = lats[lat_index]
             lon = lons[lon_index]
-        return f"Lat, Lon: {lat}, {lon}"
-
+        return lat , lon
+    
 
     def get_year_edges(self):
         """Return the first and last year of the extract time series.
@@ -4322,7 +4322,7 @@ class PhenologyVisualization:
                     "x_low": x_low.ravel(), "x_high": x_low.ravel() + interval,
                     "y_low": y_low.ravel(), "y_high": y_low.ravel() + interval,
                     "probability": window_sum.ravel(),
-                })
+                }) , start, end, qa_filtered_set
 
     
 
