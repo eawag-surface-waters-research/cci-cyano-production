@@ -702,7 +702,6 @@ class PhenologyVisualization:
         )
         filename = f"ID{self.lakeID}_{start_label}_{end_label}.{ext}"
         base, path =  base, os.path.join(base, filename)
-        print(path)
         return base, path
 
 
@@ -4171,7 +4170,6 @@ class PhenologyVisualization:
                 compressed_df = self._read_kde_nc(file_path)
             else:
                 compressed_df = pd.read_csv(file_path)
-            print(file_path)
         else:
             if cache_is_stale:
                 warnings.warn(f"Cached KDE events for lake ID {self.lakeID} predate the source data; recomputing.")
@@ -4192,7 +4190,6 @@ class PhenologyVisualization:
             else:
                 compressed_df = compressed_df[compressed_df['qa_column'].isin(qa_value)]
                 qa_filtered_set = qa_value
-                print(len(compressed_df))
 
         if len(compressed_df) < 2:
             warnings.warn("Not enough data to plot kde")
