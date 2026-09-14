@@ -310,9 +310,9 @@ This applies whenever `out_folder` is reassigned to the lake analysis path, whic
         │   │   │       └── {variable}_v{version}_heatmap_{i}_{j}.png
         │   │   ├── not_aggregated/
         │   │   │   └── {i}_{j}/        # same structure as aggregated/
-        │   │   ├── comparisons/        # only when comparison: true
-        │   │   │   └── {i}_{j}/
-        │   │   │       └── comparison_pks_{pair_label}_{ts_suffix}[_agg].png
+        │   │   └── comparisons/        # only when comparison: true
+        │   │       └── {i}_{j}/
+        │   │           └── comparison_pks_{pair_label}_{ts_suffix}[_agg].png
         │   └── timing_plots/           # only when timing_plots: true
         │       ├── {variable}_v{version}_doy_peaks_*.png
         │       ├── {variable}_v{version}_doy_green_up_mid_*.png
