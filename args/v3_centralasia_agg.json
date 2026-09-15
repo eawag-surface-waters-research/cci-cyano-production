@@ -13,6 +13,7 @@
   "phenology": true,
   "analysis": true,
   "timing_plots": true,
+  "kde_qa": [[0,1],[0],[1],[2],null],
   "purple_chla21": true,
   "maps": true,
   "aggregation": true,

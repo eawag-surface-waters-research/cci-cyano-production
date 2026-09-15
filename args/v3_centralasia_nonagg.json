@@ -12,7 +12,7 @@
   "timing_plots": false,
   "maps": false,
   "comparison": false,
-  "pixel_plots": false,
+  "pixel_plots": "C:\\Users\\schelian\\cci-cyano-production\\pixel_dicts\\v3_non_aggregate_pixels.json",
   "save_format": "netcdf",
   "time_splits": [[0,9999]],
   "purple_chla21": true,
