@@ -4,7 +4,7 @@
   "shapefile": "C:\\Users\\schelian\\cci-cyano-production\\shapefiles\\lakes_cci_v2.0.2_data_availability_shp\\lakescci_v2.0.2_data-availability.shp",
   "images": "D:/lakecci_data/raw/v3.0/merged_product",
   "out_folder": "D:/phenology_data/v3.0",
-  "lakes": [327, 352, 893, 948],
+  "lakes": [21, 66, 310, 481],
   "extract": false,
   "qa_filter": true,
   "phenology": false,
@@ -17,6 +17,6 @@
   "background_pts": true,
   "comparison": false,
   "save_format": "netcdf",
-  "time_splits": [[0,9999]], 
+  "time_splits": [[0,9999],[2002,2012],[2012,2016],[2016,2023]], 
   "pixel_plots": "C:\\Users\\schelian\\cci-cyano-production\\pixel_dicts\\v3_can_aggregate_pixels.json"
 }

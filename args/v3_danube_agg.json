@@ -14,6 +14,7 @@
   "maps": true,
   "aggregation": true,
   "background_pts": true,
+  "kde_qa": [[0,1],[0],[1],[2],null],
   "comparison": false,
   "save_format": "netcdf",
   "time_splits": [[0,9999]], 
