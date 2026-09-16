@@ -146,7 +146,8 @@ color_sets_4x4 = {
 
 class PhenologyVisualization:
     shapefile_path = None
-    save_format = "netcdf"  # "csv" or "netcdf" -- see set_save_format(); applies to spatial_aggregation() and the metric caches
+    save_format = "netcdf"  # "csv" or "netcdf" -- see set_save_format();
+    # applies to spatial_aggregation() and the metric caches
     QA_LEVELS = (0, 1, 2)
     
     QA_CONFIG = {
@@ -704,6 +705,32 @@ class PhenologyVisualization:
         base, path =  base, os.path.join(base, filename)
         return base, path
 
+    
+    def build_bloom_prob_path(self):
+        """Return the output directory and file path for the cached bloom probability events netcdf.
+
+        Returns
+        -------
+        base : str
+            Directory path where the netcdf will be written.
+        file_path : str
+            Full path to the netcdf file.
+        """
+        ext = "nc" if self.save_format == "netcdf" else "csv"
+
+        start_label = self.start_year
+        end_label = self.end_year
+        # lake_name = f.sanitize_filename(self.ID_to_name(int(self.lakeID)).replace(" ", ""))
+        base = os.path.join(
+            self.data_folder,
+            "calculated_values",
+            "bloom_prob",
+            self.variable,
+        )
+        filename = f"ID{self.lakeID}_{start_label}_{end_label}.{ext}"
+        base, path =  base, os.path.join(base, filename)
+        return base, path
+    
 
     def _write_kde_netcdf(self, file_path, kde_df):
         """Write cached KDE event data to NetCDF."""
@@ -744,6 +771,42 @@ class PhenologyVisualization:
                 "secondary": np.asarray(ds.variables["secondary"][:]),
             })
 
+    def _write_bloom_prob_netcdf(self, file_path, bloom_prob_df):
+        """Write cached bloom probability data to NetCDF."""
+        columns = ['x_low', 'x_high','y_low','y_high','probability']
+
+        with netCDF4.Dataset(file_path, "w") as ds:
+            ds.createDimension("event", len(bloom_prob_df))
+
+            for column in columns:
+                values = bloom_prob_df[column].to_numpy()
+
+                if column == "qa_column":
+                    variable = ds.createVariable(column, "f4", ("event",))
+                    variable[:] = values
+                else:
+                    variable = ds.createVariable(column, "f8", ("event",))
+                    variable[:] = values
+
+            ds.lake_id = str(self.lakeID)
+            ds.version = str(self.version)
+            ds.variable = str(self.variable)
+
+
+    def _read_bloom_prob_nc(self, file_path):
+        """Read cached bloom proabability data from NetCDF."""
+        with netCDF4.Dataset(file_path, "r") as ds:
+            req_cols = ['x_low', 'x_high','y_low','y_high','probability'] # used to maintain order
+            required = set(req_cols)
+            missing = required.difference(ds.variables)
+
+            if missing:
+                raise ValueError(
+                    f"Bloom prob cache {file_path} is missing variables: {sorted(missing)}"
+                )
+
+            bloom_df = pd.DataFrame({req_var: np.asarray(ds.variables[req_var][:]) for req_var in required})
+            return bloom_df[req_cols]
 
     def compute_and_cache_metric(self, metric_name, col_name, compute_fn,
                              start=0, end=9999):
@@ -4212,6 +4275,7 @@ class PhenologyVisualization:
 
         return kde, start, end, qa_filtered_set
 
+
     def calculate_bloom_probabilities_from_kde(self, qa_value = None, start_year = 0, end_year = 9999,
                                      interval = 21, x_max = 400, y_max = 730, resolution = 1, save_path = None):
         """
@@ -4318,9 +4382,6 @@ class PhenologyVisualization:
                     "y_low": y_low.ravel(), "y_high": y_low.ravel() + interval,
                     "probability": window_sum.ravel(),
                 }) , start, end, qa_filtered_set
-
-    
-
     
 
     def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999, plt_kwargs = None, probability= False, interval = 21, resolution= 1, x_max = 400, y_max = 730):
