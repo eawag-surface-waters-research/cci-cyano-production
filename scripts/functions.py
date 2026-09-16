@@ -215,11 +215,11 @@ def close_factors(number):
 def plot_lake_outline(geometry, ax):
     if geometry.geom_type == "Polygon":
         x, y = geometry.exterior.xy
-        ax.plot(x, y, color="black", linewidth=1, label="Lake Outline")
+        ax.plot(x, y, color="black", linewidth=1, label=None)
     elif geometry.geom_type == "MultiPolygon":
         for i, poly in enumerate(geometry.geoms):
             x, y = poly.exterior.xy
-            ax.plot(x, y, color="black", linewidth=1, label="Lake Outline" if i == 0 else None)
+            ax.plot(x, y, color="black", linewidth=1, label= None)
 
 def grab_metrics(e_path, metric_scores, buffered_geom_prep):
     with netCDF4.Dataset(e_path) as nc:
@@ -477,7 +477,8 @@ def save_maps(eda_instance, lake_analysis_folder, lake_str,  time_splits, metric
 
         rows, cols = close_factors(num_splits)
         fig, axs = plt.subplots(rows, cols, constrained_layout=True)
-
+        if num_splits > 1:
+            axs = axs.ravel()
         for i, (start, end) in enumerate(time_splits):
             if start == 0 and end == 9999:
                 text_strings.append(f"{metric_str}-scores {eda_instance.variable} {eda_instance.version} full ts")
@@ -701,7 +702,8 @@ def save_timing_plots(eda_instance, lake_analysis_folder, lake_str, time_splits,
         ts_suffix = "full_ts" if (start == 0 and end == 9999) else f"{_year(start)}_to_{_year(end)}"
 
         for peaks, metric_name in ((True, "peaks"), (False, "green_up_mid")):
-            fig = eda_instance.time_map_panel(years=years, nrow=rows, ncol=cols, peaks=peaks)
+            fig , axs = eda_instance.time_map_panel(years=years, nrow=rows, ncol=cols, peaks=peaks)
+            print(type(fig))
             file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_doy_{metric_name}_{ts_suffix}.png"
             fig.savefig(os.path.join(timing_plots_path, file_name), dpi=600, bbox_inches="tight")
             plt.close(fig)

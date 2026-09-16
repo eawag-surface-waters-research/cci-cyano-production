@@ -1318,7 +1318,6 @@ class PhenologyVisualization:
         f.set_labels(ax, fig, im,
             title=f"{metric_str}-Scores for Lake: ID {lake_id}",
             colorbar_label=metric_str)
-
         return im
 
 
@@ -1481,8 +1480,8 @@ class PhenologyVisualization:
                        bbox_to_anchor=(1.0, 1.0), fontsize=15, frameon=False)
 
         fig.suptitle(f"{extrema_label} Day of Year", fontsize=25)
-        plt.show()
-        return fig
+
+        return fig , axs
 
 
     def single_day_map(self, date):
