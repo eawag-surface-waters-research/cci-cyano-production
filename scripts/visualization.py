@@ -9,6 +9,7 @@ import matplotlib.colors as mcolors
 import numpy as np
 import datetime
 import os
+import re
 from pathlib import Path
 import csv
 import statistics
@@ -112,6 +113,21 @@ def _init_kde_worker(p_path, var_names):
                     arr[i, j, :] = v[i, j, :]
             _GLOBALS[f"kde_{var}"] = arr
 
+def _init_bloom_probability_worker(kde):
+    _GLOBALS["bloom_kde"] = kde
+
+
+def _evaluate_bloom_probability_rows(args):
+    """Evaluate KDE density for a chunk of y-grid rows."""
+    y_rows, xi = args
+    kde = _GLOBALS["bloom_kde"]
+
+    Xi, Yi = np.meshgrid(xi, y_rows)
+    density = kde(
+        np.vstack([Xi.ravel(), Yi.ravel()])
+    ).reshape(Xi.shape)
+
+    return density
 
 # color_sets_4x4: bivariate color palettes for the 4×4 heatmap legend.
 # Color palettes are adapted from:
@@ -271,6 +287,7 @@ class PhenologyVisualization:
         self._lake_cache = {}
         self.prep_geometry_from_shapefile()
         self.extract_nonborder_coords()
+
 
     def ID_to_name(self, id):
         """Return the lake name for a given lake ID from the shapefile.
@@ -705,8 +722,17 @@ class PhenologyVisualization:
         base, path =  base, os.path.join(base, filename)
         return base, path
 
-    
-    def build_bloom_prob_path(self):
+
+    def build_bloom_prob_path(
+        self,
+        qa_value=None,
+        start_year=0,
+        end_year=9999,
+        interval=21,
+        resolution=1,
+        x_max=400,
+        y_max=730,
+    ):
         """Return the output directory and file path for the cached bloom probability events netcdf.
 
         Returns
@@ -718,19 +744,66 @@ class PhenologyVisualization:
         """
         ext = "nc" if self.save_format == "netcdf" else "csv"
 
-        start_label = self.start_year
-        end_label = self.end_year
-        # lake_name = f.sanitize_filename(self.ID_to_name(int(self.lakeID)).replace(" ", ""))
+        start_label = self.start_year if start_year <= self.start_year else start_year
+        end_label = self.end_year if end_year >= self.end_year else end_year
+
+        if qa_value is None:
+            qa_label = "all"
+        else:
+            qa_label = "qa" + "".join(map(str, sorted(qa_value)))
+
         base = os.path.join(
             self.data_folder,
             "calculated_values",
             "bloom_prob",
             self.variable,
         )
-        filename = f"ID{self.lakeID}_{start_label}_{end_label}.{ext}"
-        base, path =  base, os.path.join(base, filename)
-        return base, path
+
+        filename = (
+            f"ID{self.lakeID}_{start_label}_{end_label}_"
+            f"{qa_label}_i{interval}_r{resolution}_x{x_max}_y{y_max}.{ext}"
+        )
+
+        return base, os.path.join(base, filename)
+
     
+    def _bloom_prob_metadata_from_path(self, file_path):
+        """Extract bloom-probability metadata encoded in the cache filename."""
+        filename = Path(file_path).name
+
+        pattern = (
+            r"^ID(?P<lake_id>[^_]+)_"
+            r"(?P<start>[^_]+)_"
+            r"(?P<end>[^_]+)_"
+            r"(?P<qa>all|qa[0-9-]+)_"
+            r"i(?P<interval>[^_]+)_"
+            r"r(?P<resolution>[^_]+)_"
+            r"x(?P<x_max>[^_]+)_"
+            r"y(?P<y_max>[^.]+)\."
+            r"(?P<extension>csv|nc)$"
+        )
+
+        match = re.match(pattern, filename)
+        if match is None:
+            raise ValueError(f"Invalid bloom probability cache filename: {filename}")
+
+        values = match.groupdict()
+        qa_label = values["qa"]
+
+        return {
+            "lake_id": values["lake_id"],
+            "start_year": int(values["start"]),
+            "end_year": int(values["end"]),
+            "qa_value": (
+                None
+                if qa_label == "all"
+                else {int(value) for value in qa_label.removeprefix("qa")}
+            ),
+            "interval": int(values["interval"]),
+            "resolution": float(values["resolution"]),
+            "x_max": float(values["x_max"]),
+            "y_max": float(values["y_max"]),
+        }
 
     def _write_kde_netcdf(self, file_path, kde_df):
         """Write cached KDE event data to NetCDF."""
@@ -771,6 +844,7 @@ class PhenologyVisualization:
                 "secondary": np.asarray(ds.variables["secondary"][:]),
             })
 
+
     def _write_bloom_prob_netcdf(self, file_path, bloom_prob_df):
         """Write cached bloom probability data to NetCDF."""
         columns = ['x_low', 'x_high','y_low','y_high','probability']
@@ -807,6 +881,16 @@ class PhenologyVisualization:
 
             bloom_df = pd.DataFrame({req_var: np.asarray(ds.variables[req_var][:]) for req_var in required})
             return bloom_df[req_cols]
+
+    def _read_bloom_prob_cache(self, file_path):
+        """Read a bloom-probability cache and return its data and filename metadata."""
+        if Path(file_path).suffix == ".nc":
+            bloom_df = self._read_bloom_prob_nc(file_path)
+        else:
+            bloom_df = pd.read_csv(file_path)
+
+        metadata = self._bloom_prob_metadata_from_path(file_path)
+        return bloom_df, metadata
 
     def compute_and_cache_metric(self, metric_name, col_name, compute_fn,
                              start=0, end=9999):
@@ -1457,7 +1541,7 @@ class PhenologyVisualization:
         return cid
     
 
-    def time_map(self, fig, ax, year, peaks=True, max = True, colorbar=True):
+    def time_map(self, fig, ax, year, peaks=True, max = True, colorbar=True, DOY_range=None):
         """Map the day-of-year of a phenological event across all pixels for one year.
 
         For each valid pixel within the 1 km-inset lake boundary, extracts the
@@ -1484,6 +1568,10 @@ class PhenologyVisualization:
         matplotlib.image.AxesImage
             The imshow image object.
         """
+
+        if DOY_range is None:
+            DOY_range = [160,250]
+
         lake_id = int(self.lakeID)
 
         # lake_row = self.gdf[self.gdf["id"] == lake_id]
@@ -1496,14 +1584,15 @@ class PhenologyVisualization:
         extrema_label = "Peak" if peaks else "Green Mid Up"
 
         map_data, extent = f.grab_time_data(self.e_path, self.p_path, self.valid_coords,
-                                            buffered_geom_prepared, var_x, var_y, year, max)
-        im = f.plot_map_data("rainbow", map_data, extent, ax, cmap_extent=[160, 250])
+                                            buffered_geom_prepared, var_x, var_y, year, max, 
+                                            DOY_start = DOY_range[0], DOY_end = DOY_range[1])
+        im = f.plot_map_data("rainbow", map_data, extent, ax, cmap_extent=DOY_range)
         f.plot_lake_outline(geometry=geom, ax=ax)
         if colorbar:
             f.set_labels(ax, fig, im,
                 title=f"{extrema_label} Day of Year\n Lake ID: {lake_id}\n Year: {year}",
                 colorbar_label="Day of Year",
-                colorbar_ticks=[160, 185, 215, 250])
+                colorbar_ticks=np.arange(*DOY_range,30))
         else:
             ax.set_title(f"{extrema_label} Day of Year\n Lake ID: {lake_id}\n Year: {year}")
             ax.set_xlabel("Lon index")
@@ -1511,13 +1600,13 @@ class PhenologyVisualization:
         return im
     
 
-    def time_map_panel(self, years, nrow, ncol, peaks = True, max = True):
+    def time_map_panel(self, years, nrow, ncol, peaks = True, max = True,DOY_range=None):
         extrema_label = "Peak" if peaks else "Green Mid Up"
         fig, axs = plt.subplots(nrow, ncol, constrained_layout=True, squeeze=False, figsize=(ncol * 5, nrow * 4))
         im = None
         outline_handle, outline_label = None, None
         for year, ax in zip(years, axs.flatten()):
-            im = self.time_map(fig=fig, ax=ax, year=year, peaks=peaks, max=max, colorbar=False)
+            im = self.time_map(fig=fig, ax=ax, year=year, peaks=peaks, max=max, colorbar=False,DOY_range=DOY_range)
             if outline_handle is None:
                 handles, labels = ax.get_legend_handles_labels()
                 if handles:
@@ -4002,6 +4091,7 @@ class PhenologyVisualization:
             None, None, i, j, primary_vars, secondary_vars, qa_var, arrays=arrays
         )
 
+
     def assemble_kde_data(self, primary_vars=None, secondary_vars=None, qa_var="pks"):
         """Collect bracketing and peak events lake-wide into a DataFrame.
 
@@ -4277,7 +4367,7 @@ class PhenologyVisualization:
 
 
     def calculate_bloom_probabilities_from_kde(self, qa_value = None, start_year = 0, end_year = 9999,
-                                     interval = 21, x_max = 400, y_max = 730, resolution = 1, save_path = None):
+                                     interval = 21, x_max = 400, y_max = 730, resolution = 1):
         """
         Probability of a `interval`-day bloom window under the fitted KDE, for
         a window starting at every `resolution`-day offset spanning
@@ -4303,85 +4393,98 @@ class PhenologyVisualization:
             One row per window with x_low/x_high/y_low/y_high/probability
             columns. None if there isn't enough data to fit a KDE.
         """
+
+        start_label = (
+        self.start_year if start_year <= self.start_year else start_year
+        )
+        end_label = (
+        self.end_year if end_year >= self.end_year else end_year
+        )
+
+        dir_path, cache_path = self.build_bloom_prob_path(
+            qa_value=qa_value,
+            start_year=start_label,
+            end_year=end_label,
+            interval=interval,
+            resolution=resolution,
+            x_max=x_max,
+            y_max=y_max,
+        )
+        os.makedirs(dir_path, exist_ok=True)
+
+        source_mtime = max(
+            os.path.getmtime(self.p_path),
+            os.path.getmtime(self.e_path),
+        )
+
+        if (
+            os.path.isfile(cache_path)
+            and os.path.getmtime(cache_path) >= source_mtime
+        ):
+            cached, metadata = self._read_bloom_prob_cache(cache_path)
+
+            return (
+                cached,
+                metadata["start_year"],
+                metadata["end_year"],
+                metadata["qa_value"],
+            )
+
         fit = self._fit_bloom_kde(qa_value=qa_value, start_year=start_year, end_year=end_year)
         if fit is None:
             return None
         kde, start, end, qa_filtered_set = fit
 
+        warnings.warn("Bloom probabilities need to be calculated. Depending on the lake size this may take a while.")
+
         xi = np.arange(-interval, x_max + interval, resolution)
         yi = np.arange(-interval, y_max + interval, resolution)
-        Xi, Yi = np.meshgrid(xi, yi)
-        # density x cell area ~= probability mass in that resolution x resolution cell
-        Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape) * resolution ** 2
 
-        # 2D summed-area table (prefix sums), zero-padded on the low edge so
-        # window_sum below can read every window's total with 4 lookups
+        # Evaluate the KDE in parallel by chunks of y-grid rows.
+        n_workers = min(os.cpu_count() or 4, len(yi))
+        row_chunks = np.array_split(yi, n_workers)
+
+        with multiprocessing.Pool(
+            processes=n_workers,
+            initializer=_init_bloom_probability_worker,
+            initargs=(kde,),
+        ) as pool:
+            density_parts = pool.map(
+                _evaluate_bloom_probability_rows,
+                [(rows, xi) for rows in row_chunks],
+            )
+
+        Zi = np.vstack(density_parts) * resolution ** 2
+
         cumsum = np.cumsum(np.cumsum(Zi, axis=0), axis=1)
         cumsum = np.pad(cumsum, ((1, 0), (1, 0)))
 
         n_cells = interval // resolution
-        window_sum = (cumsum[n_cells:, n_cells:] - cumsum[:-n_cells, n_cells:]
-                      - cumsum[n_cells:, :-n_cells] + cumsum[:-n_cells, :-n_cells])
-        # subtracting nearly-equal cumulative sums can leave float noise like
-        # -1e-18 where the true probability is 0 - clip it, since a probability
-        # can't legitimately be negative
+        window_sum = (
+            cumsum[n_cells:, n_cells:]
+            - cumsum[:-n_cells, n_cells:]
+            - cumsum[n_cells:, :-n_cells]
+            + cumsum[:-n_cells, :-n_cells]
+        )
         window_sum = np.clip(window_sum, 0, None)
 
         n_y, n_x = window_sum.shape
         x_low, y_low = np.meshgrid(xi[:n_x], yi[:n_y])
-        
-        if save_path:
-            file_name = f"bloom_prob_DOY_{self.variable}.nc"
-            file_path = os.path.join(save_path, file_name)
 
-            with netCDF4.Dataset(file_path, "w") as nc:
+        probability_df = pd.DataFrame({
+            "x_low": x_low.ravel(),
+            "x_high": x_low.ravel() + interval,
+            "y_low": y_low.ravel(),
+            "y_high": y_low.ravel() + interval,
+            "probability": window_sum.ravel(),
+        })
 
-                # Dimensions
-                nc.createDimension("greenup_doy", n_x)
-                nc.createDimension("greendown_doy", n_y)
+        if self.save_format == "netcdf":
+            self._write_bloom_prob_netcdf(cache_path, probability_df)
+        else:
+            probability_df.to_csv(cache_path, index=False)
 
-                # Coordinates
-                greenup = nc.createVariable("greenup_doy", "i4", ("greenup_doy",))
-                greendown = nc.createVariable("greendown_doy", "i4", ("greendown_doy",))
-
-                greenup[:] = xi[:n_x]
-                greendown[:] = yi[:n_y]
-
-                greenup.units = "day_of_year"
-                greenup.long_name = "Green-up window start day"
-                greendown.units = "day_of_year"
-                greendown.long_name = "Green-down window start day"
-
-                # Probability matrix
-                prob = nc.createVariable(
-                    "probability",
-                    "f4",
-                    ("greendown_doy", "greenup_doy"),
-                    zlib=True,
-                    complevel=4,
-                    fill_value=np.nan,
-                )
-
-                prob[:, :] = window_sum
-
-                prob.long_name = f"Probability of {interval}-day bloom window"
-                prob.units = "1"
-
-                # Global metadata
-                nc.description = "Bloom window probabilities derived from KDE"
-                nc.window_length_days = interval
-                nc.grid_resolution_days = resolution
-
-                prob.interval_days = interval
-                prob.resolution_days = resolution
-                prob.method = "Gaussian KDE integrated over moving windows"
-                prob.window_definition = "Window defined by lower-left corner coordinates"
-
-        return pd.DataFrame({
-                    "x_low": x_low.ravel(), "x_high": x_low.ravel() + interval,
-                    "y_low": y_low.ravel(), "y_high": y_low.ravel() + interval,
-                    "probability": window_sum.ravel(),
-                }) , start, end, qa_filtered_set
+        return probability_df, start, end, qa_filtered_set
     
 
     def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999, plt_kwargs = None, probability= False, interval = 21, resolution= 1, x_max = 400, y_max = 730):
