@@ -160,7 +160,13 @@ color_sets_4x4 = {
 }
 
 
-class PhenologyVisualization:
+class PhenologyVisualizationBase:
+    """Shared data access and plotting primitives for phenology graphs.
+
+    The graph-family subclasses at the end of this module provide focused
+    entry points while this base owns the lake metadata, caches, and reusable
+    plotting helpers.
+    """
     shapefile_path = None
     save_format = "netcdf"  # "csv" or "netcdf" -- see set_save_format();
     # applies to spatial_aggregation() and the metric caches
@@ -273,7 +279,7 @@ class PhenologyVisualization:
         self.info = (f"Version: {self.version} \n",
                     f"Variable: {self.variable} \n" ,
                     f"Lake ID: {self.lakeID}")
-        self.methods = [method for method in dir(PhenologyVisualization) if callable(getattr(PhenologyVisualization, method)) and not method.startswith("__")]
+        self.methods = [method for method in dir(type(self)) if callable(getattr(type(self), method)) and not method.startswith("__")]
         self.valid_coords = self.valid_index_pairs()
         self.out_folder = Path(self.p_path).parents[2]
         self.data_folder = Path(self.p_path).parents[2]
@@ -1037,7 +1043,7 @@ class PhenologyVisualization:
             time_split = [(0, 9999)]
         for start, end in time_split:
             return self.compute_and_cache_metric(metric_name="r2", col_name="r2_scores",
-                                                 compute_fn=PhenologyVisualization.compute_metric_score,
+                                                 compute_fn=PhenologyVisualizationBase.compute_metric_score,
                                                  start=start, end=end)
 
 
@@ -1059,7 +1065,7 @@ class PhenologyVisualization:
             time_split = [(0, 9999)]
         for start, end in time_split:
             return self.compute_and_cache_metric(metric_name="MAD", col_name="mad_scores",
-                                                 compute_fn= PhenologyVisualization.compute_metric_score,
+                                                 compute_fn=PhenologyVisualizationBase.compute_metric_score,
                                                  start= start,end= end)
 
 
@@ -1081,7 +1087,7 @@ class PhenologyVisualization:
             time_split = [(0, 9999)]
         for start, end in time_split:
             return self.compute_and_cache_metric(metric_name="RMSE", col_name="rmse_scores",
-                                                 compute_fn=PhenologyVisualization.compute_metric_score,
+                                                 compute_fn=PhenologyVisualizationBase.compute_metric_score,
                                                  start=start, end=end)
 
 
@@ -1103,7 +1109,7 @@ class PhenologyVisualization:
             time_split = [(0, 9999)]
         for start, end in time_split:
             return self.compute_and_cache_metric(metric_name="correlation", col_name="correlation_scores",
-                                                 compute_fn=PhenologyVisualization.compute_metric_score,
+                                                 compute_fn=PhenologyVisualizationBase.compute_metric_score,
                                                  start=start, end=end)
 
 
@@ -1125,7 +1131,7 @@ class PhenologyVisualization:
             time_split = [(0, 9999)]
         for start, end in time_split:
             return self.compute_and_cache_metric(metric_name="values_per_pixel", col_name="number_of_values",
-                                                 compute_fn= PhenologyVisualization.compute_metric_score,
+                                                 compute_fn=PhenologyVisualizationBase.compute_metric_score,
                                                  start=start,end= end)
 
 
@@ -4558,6 +4564,87 @@ class PhenologyVisualization:
         ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")            
         ax.set_title(title_str)
         return ax
+
+class PixelVisualization(PhenologyVisualizationBase):
+    """Pixel-level phenology graphs.
+
+    This class groups the public methods that render or support graphs for a
+    single pixel.  It intentionally inherits the shared implementation so
+    existing callers can migrate incrementally.
+    """
+
+    graph_type = "pixel"
+    graph_methods = frozenset({
+        "pixel_map",
+        "single_plot",
+        "split_plot",
+        "full_plot",
+        "single_years_plot",
+        "single_plot_insitu",
+        "extrema_plot",
+        "qa_boxplot",
+        "yearly_heatmap_pixel",
+    })
+
+
+class MapVisualization(PhenologyVisualizationBase):
+    """Spatial and temporal map graphs."""
+
+    graph_type = "map"
+    graph_methods = frozenset({
+        "interactive_pixel_map",
+        "metric_map",
+        "interactive_metric_map",
+        "time_map",
+        "time_map_panel",
+        "single_day_map",
+        "yearly_heatmap_lake",
+    })
+
+
+class ComparisonVisualization(PhenologyVisualizationBase):
+    """Graphs comparing phenology products or variables."""
+
+    graph_type = "comparison"
+    graph_methods = frozenset({
+        "pair_phenology_events",
+        "extrema_comparison",
+        "plot_background_ratio_timeseries",
+        "plot_background_ratio_v_self",
+    })
+
+
+class TimingVisualization(PhenologyVisualizationBase):
+    """Graphs describing event timing distributions and probabilities."""
+
+    graph_type = "timing"
+    graph_methods = frozenset({
+        "yearly_cubic_spline",
+        "lake_bloom_kde",
+        "calculate_bloom_probabilities_from_kde",
+    })
+
+
+class PhenologyVisualization(
+    PixelVisualization,
+    MapVisualization,
+    ComparisonVisualization,
+    TimingVisualization,
+):
+    """Backward-compatible composite of all phenology graph families.
+
+    New code can use a focused subclass such as :class:`MapVisualization`.
+    The composite remains the default because the analysis pipeline creates
+    one object and passes it to several graph-producing helpers.
+    """
+
+    graph_type = "all"
+    graph_methods = frozenset().union(
+        PixelVisualization.graph_methods,
+        MapVisualization.graph_methods,
+        ComparisonVisualization.graph_methods,
+        TimingVisualization.graph_methods,
+    )
             
 
 
