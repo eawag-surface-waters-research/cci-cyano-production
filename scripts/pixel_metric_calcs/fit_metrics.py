@@ -8,10 +8,10 @@ import multiprocessing
 from functools import partial
 import warnings
 
-from base import MetricBase
+from base import PixelCalcBase
 import functions as f
 
-class SpatialAgg(MetricBase):
+class SpatialAgg(PixelCalcBase):
     def build_path(self):
         out_dir = os.path.join(
                 self.out_folder,
@@ -121,4 +121,79 @@ class SpatialAgg(MetricBase):
             ma_var[:, :] = values
 
     def read_cached_metric(self):
+        """Open a cached aggregation NetCDF file and rebuild the pixel lookup index."""
+        self.aggregation_ds = netCDF4.Dataset(self.save_fp, "r")
+        pixel_i = np.asarray(self.aggregation_ds.variables["pixel_i"][:]).tolist()
+        pixel_j = np.asarray(self.aggregation_ds.variables["pixel_j"][:]).tolist()
+        self._aggregation_pixel_index = dict(zip(zip(pixel_i, pixel_j), range(len(pixel_i))))
+
+
+class KDE(PixelCalcBase):
+
+    def build_path(self):
+        """Return the output directory and file path for the cached KDE events CSV.
+
+        Returns
+        -------
+        base : str
+            Directory path where the CSV will be written.
+        file_path : str
+            Full path to the CSV file.
+        """
+
+        start_label = self.start_year
+        end_label = self.end_year
+        # lake_name = f.sanitize_filename(self.ID_to_name(int(self.lakeID)).replace(" ", ""))
+        out_dir = os.path.join(
+            self.data_folder,
+            "calculated_values",
+            "kde_data",
+            self.variable,
+        )
+        filename = f"ID{self.lakeID}_{start_label}_{end_label}.nc"
+        os.makedirs(out_dir, exist_ok=True)
+        self.save_fp = os.path.join(out_dir, filename)
+
+    def read_input(self):
         pass
+
+    def calculate(self):
+        pass
+
+    def write_output(self):
+        """Write cached KDE event data to NetCDF."""
+        columns = ["primary", "qa_column", "secondary"]
+
+        with netCDF4.Dataset(self.save_fp, "w") as ds:
+            ds.createDimension("event", len(self.kde_df))
+
+            for column in columns:
+                values = self.kde_df[column].to_numpy()
+
+                if column == "qa_column":
+                    variable = ds.createVariable(column, "f4", ("event",))
+                    variable[:] = values
+                else:
+                    variable = ds.createVariable(column, "f8", ("event",))
+                    variable[:] = values
+
+            ds.lake_id = str(self.lakeID)
+            ds.version = str(self.version)
+            ds.variable = str(self.variable)
+
+    def read_cached_metric(self):
+        """Read cached KDE event data from NetCDF."""
+        with netCDF4.Dataset(self.save_fp, "r") as ds:
+            required = {"primary", "qa_column", "secondary"}
+            missing = required.difference(ds.variables)
+
+            if missing:
+                raise ValueError(
+                    f"KDE cache {self.save_fp} is missing variables: {sorted(missing)}"
+                )
+
+            return pd.DataFrame({
+                "primary": np.asarray(ds.variables["primary"][:]),
+                "qa_column": np.asarray(ds.variables["qa_column"][:]),
+                "secondary": np.asarray(ds.variables["secondary"][:]),
+            })

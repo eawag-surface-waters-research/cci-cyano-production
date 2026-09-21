@@ -10,7 +10,7 @@ import warnings
 
 import functions as f
 
-class MetricBase:
+class PixelCalcBase:
     def __init__(self, lakeID, out_folder, variable, version, metric_name, time_splits = None):
         self.out_folder = out_folder
         self.version = version
