@@ -48,6 +48,8 @@ def parse_args(args):
         "images": "",  #
         "extract": True,
         "phenology": True,
+        "postprocess" : True,
+        "plot" : True,
         "analysis": False,
         "maps": False,
         "pixel_plots": False,
