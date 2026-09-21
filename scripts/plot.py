@@ -1,142 +1,136 @@
-import netCDF4
+# -*- coding: utf-8 -*-
+import json
+import glob
 import argparse
-import numpy as np
-from csaps import csaps
-from matplotlib import pyplot as plt
-from functions import unix_to_datetime, unix_to_datenum, datenum_to_datetime, remove_nan
+import itertools
+import logging
+import geopandas as gpd
+from concurrent.futures import ProcessPoolExecutor
+import os
+from pathlib import Path
+from datetime import datetime, timezone
 
-def plot(e_file, p_file):
-    with netCDF4.Dataset(e_file) as nc:
-        summary = np.array(nc.variables["summary"][:, :])   # (lat=37, lon=95)
-        lat = np.array(nc.variables["lat"])
-        lon = np.array(nc.variables["lon"])
-        t_all = unix_to_datenum(nc.variables["time"])
+from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, save_timing_plots, write_provenance, sanitize_filename
+from extract import extract
+from phenology import phenology
+from postprocess import postprocess
+from plot import plot
+from visualization import PhenologyVisualization
 
-    valid_coords = np.argwhere(summary > 2)
-    selected = list(valid_coords[0])
+def plot(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=None):
+    set_logging(log)
+    args = parse_args(args)
+    run_id = datetime.now(timezone.utc).isoformat().replace(":", "-")
 
-    fig, (ax_grid, ax_ts) = plt.subplots(1, 2, figsize=(16, 6))
-    fig.suptitle("Click a cell on the left to view its time series", fontsize=11)
+    logging.info("Reading lake shapefile from: {}".format(args["shapefile"]))
+    gdf = gpd.read_file(args["shapefile"])
+    if args["start_index"] and args["end_index"]:
+        gdf = gdf.iloc[args["start_index"]:args["end_index"]]
+    elif args["lakes"]:
+        gdf = gdf[gdf['id'].isin(args["lakes"])]
 
-    masked_summary = np.ma.masked_where(summary <= 2, summary)
-    ax_grid.set_facecolor("#cccccc")
-    im = ax_grid.imshow(masked_summary, cmap="viridis", aspect="auto", origin="lower")
-    plt.colorbar(im, ax=ax_grid, label="Observation count")
-    ax_grid.set_title("Cell grid")
-    ax_grid.set_xlabel("Lon index")
-    ax_grid.set_ylabel("Lat index")
+    files = glob.glob(f"{args['images']}/**/*.nc", recursive=True)
+    files.sort()
 
-    sel_marker, = ax_grid.plot([], [], "r*", markersize=14, zorder=5, label="Selected")
-    ax_grid.legend(loc="upper right", fontsize=8)
+    lakes = [row for i, (_, row) in enumerate(gdf.iterrows())]
 
-    def update_time_series(x, y):
-        """Reload and redraw the right-hand time-series panel for cell (x=lat_idx, y=lon_idx)."""
-        ax_ts.clear()
-        try:
-            with netCDF4.Dataset(p_file) as nc:
-                smoothing = float(nc.variables["smoothing_parameter"][x, y])
+    logging.info("Plotting")
+    if parallel == "pixels" or threads == 1:
+        for lake in lakes:
+            plot(lake, args, threads=threads, batch_size=batch_size)
+    else:
+        with ProcessPoolExecutor(max_workers=threads) as executor:
+            executor.map(plot, lakes, itertools.repeat(args),
+                            itertools.repeat(1), itertools.repeat(batch_size))
+    PhenologyVisualization.set_shapefile_path(args["shapefile"])
+    PhenologyVisualization.set_save_format(args["save_format"])
+    lake_analysis_folder = os.path.join(os.path.dirname(os.path.dirname(args["out_folder"])), "lake_analysis")
+    if args["provenance"]:
+        write_provenance(args["out_folder"], "plot", args, args_file=args_file,
+                            extra={"lakes": [int(lake["id"]) for lake in lakes]}, run_id=run_id)
+    for lake in lakes:
+        e_path = os.path.join(args["out_folder"], "extract", args["variable"], f"{lake['id']}.nc")
+        p_path = os.path.join(args["out_folder"], "phenology", args["variable"], f"{lake['id']}.nc")
+        if not os.path.isfile(e_path) or not os.path.isfile(p_path):
+            logging.warning(f"Skipping lake {lake['id']}: extract or phenology file missing")
+            continue
+        logging.info(f"Analysing lake {lake['id']}")
+        eda = PhenologyVisualization(e_path, p_path)
+        lake_name = sanitize_filename(eda.ID_to_name(lake['id']).replace(" ", ""))
+        lake_str = f"ID{lake['id']}_{lake_name}"
+        eda.out_folder = Path(os.path.join(lake_analysis_folder, lake_str))
 
-                pks_x_raw = np.array(nc.variables["pks_x"][x, y, :])
-                pk_mask = ~np.isnan(pks_x_raw)
-                pks_x = unix_to_datetime(pks_x_raw[pk_mask])
-                pks_y = np.array(nc.variables["pks_y"][x, y, :])[pk_mask]
-                pks_qa = np.array(nc.variables["pks_qa"][x, y, :])[pk_mask]
+        if args["maps"]:
+            logging.info(f"Starting maps for lake {lake['id']}")
+            save_maps(eda, lake_analysis_folder, lake_str, time_splits = args["time_splits"])
+            logging.info(f"Maps for {lake['id']} complete")
 
-                trgs_x_raw = np.array(nc.variables["trgs_x"][x, y, :])
-                trg_mask = ~np.isnan(trgs_x_raw)
-                trgs_x = unix_to_datetime(trgs_x_raw[trg_mask])
-                trgs_y = np.array(nc.variables["trgs_y"][x, y, :])[trg_mask]
-                trgs_qa = np.array(nc.variables["trgs_qa"][x, y, :])[trg_mask]
-
-                gap_starts = unix_to_datetime(remove_nan(nc.variables["data_gap_start"][x, y, :]))
-                gap_ends = unix_to_datetime(remove_nan(nc.variables["data_gap_end"][x, y, :]))
-
-
-            with netCDF4.Dataset(e_file) as nc:
-                variable = getattr(nc, "variable")
-                values = np.array(nc.variables[variable][:, x, y])
-                mask = (values != -9999) & (np.array(nc.variables[getattr(nc, 'qa')][:, x, y]) == 0)
-                values_m = values[mask]
-                time_m = t_all[mask]
-
-            if len(values_m) > 1:
-                smooth_x = np.arange(t_all.min(), t_all.max() + 1, 1)
-                smooth_y = csaps(time_m, values_m, smooth_x, smooth=smoothing)
-                # Shade data gaps
-                for gs, ge in zip(gap_starts, gap_ends):
-                    ax_ts.axvspan(gs, ge, color="orange", alpha=0.15, zorder=0)
-                if len(gap_starts) > 0:
-                    ax_ts.axvspan(gap_starts[0], gap_ends[0], color="orange",
-                                  alpha=0.15, zorder=0, label="Data gap")
-
-                ax_ts.scatter(datenum_to_datetime(time_m), values_m,
-                              color="grey", alpha=0.3, s=10, label="Data")
-                ax_ts.plot(datenum_to_datetime(smooth_x), smooth_y,
-                           color="blue", linewidth=1, label="Spline")
-
-                # Peaks/troughs colored by QA flag (0=Good, 1=Fair, 2=Poor)
-                qa_colors = {0: "green", 1: "orange", 2: "red"}
-                qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
-                for qa in (0, 1, 2):
-                    pm = pks_qa == qa
-                    if pm.any():
-                        ax_ts.scatter(pks_x[pm], pks_y[pm], color=qa_colors[qa], s=60,
-                                      marker="^", edgecolors="black", linewidths=0.5,
-                                      zorder=4, label=f"Peak ({qa_labels[qa]})")
-                    tm = trgs_qa == qa
-                    if tm.any():
-                        ax_ts.scatter(trgs_x[tm], trgs_y[tm], color=qa_colors[qa], s=60,
-                                      marker="v", edgecolors="black", linewidths=0.5,
-                                      zorder=4, label=f"Trough ({qa_labels[qa]})")
-
-                # Scale y-axis to the peak/trough range (with a small margin)
-                feat_y = np.concatenate([pks_y, trgs_y])
-                if feat_y.size > 0:
-                    lo, hi = feat_y.min(), feat_y.max()
-                    pad = (hi - lo) * 0.1 or abs(hi) * 0.1 or 1.0
-                    ax_ts.set_ylim(lo - pad, hi + pad)
-                ax_ts.legend(fontsize=8)
+        if args["pixel_plots"]:
+            lake_id_str = str(lake['id'])
+            with open(args["pixel_plots"]) as f:
+                pixel_dict = json.load(f)
+            if lake_id_str in pixel_dict:
+                logging.info(f"Starting pixel plots for lake {lake['id']}")
+                save_pixel_plots(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str, time_splits= args["time_splits"], aggregation=args["aggregation"])
+                create_summary(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str, time_splits= args["time_splits"])
+                logging.info(f"Pixel plots for lake {lake['id']} complete")
             else:
-                ax_ts.text(0.5, 0.5, "No valid data for this cell",
-                           transform=ax_ts.transAxes, ha="center", va="center")
+                logging.info(f"WARNING: lake {lake['id']} is not in the pixel dictionary")
 
-        except Exception as exc:
-            ax_ts.text(0.5, 0.5, f"Error: {exc}",
-                       transform=ax_ts.transAxes, ha="center", va="center", wrap=True)
+        if args["timing_plots"]:
+            logging.info(f"Starting timing plots for lake {lake['id']}")
+            save_timing_plots(eda, lake_analysis_folder, lake_str, time_splits=args["time_splits"], kde_qa=args["kde_qa"])
+            logging.info(f"Timing plots for lake {lake['id']} complete")
 
-        ax_ts.set_title(
-            f"lat_idx={x}  lon_idx={y}  |  lat={lat[x]:.3f}°  lon={lon[y]:.3f}°"
-        )
-        ax_ts.set_xlabel("Date")
-        ax_ts.set_ylabel(variable)
-        fig.canvas.draw_idle()
+        if args["comparison"]:
+            logging.info("Starting Comparison Plots")
+            if not args["pixel_plots"]:
+                logging.warning("Skipping comparison: pixel_plots arg is required")
+            elif lake_id_str not in pixel_dict:
+                logging.warning(f"Skipping comparison for lake {lake['id']}: not in pixel dictionary")
+            else:
+                _class_paths = {
+                    "chla21":        ("v2.1", "chla_mean"),
+                    "chla3":        ("v3.0", "chla"),
+                    "phycocyanin3": ("v3.0", "phycocyanin"),
+                }
+                instances = {}
+                for class_name in args["comparison_classes"]:
+                    base_ver, folder = _class_paths[class_name]
+                    base_dir = args["out_folder"] if base_ver == os.path.basename(args["out_folder"]) \
+                                else os.path.join(os.path.dirname(args["out_folder"]), base_ver)
+                    e = os.path.join(base_dir, "extract",   folder, f"{lake['id']}.nc")
+                    p = os.path.join(base_dir, "phenology", folder, f"{lake['id']}.nc")
+                    instances[class_name] = PhenologyVisualization(e, p) if (os.path.isfile(e) and os.path.isfile(p)) else None
+                    if instances[class_name] is None:
+                        logging.warning(f"Comparison: missing files for {class_name}, lake {lake['id']}")
 
-
-    def on_click(event):
-        if event.inaxes is not ax_grid or event.xdata is None:
-            return
-        lon_idx = int(round(event.xdata))
-        lat_idx = int(round(event.ydata))
-        lat_idx = max(0, min(lat_idx, summary.shape[0] - 1))
-        lon_idx = max(0, min(lon_idx, summary.shape[1] - 1))
-        if summary[lat_idx, lon_idx] <= 2:
-            return  # invalid cell — ignore click
-        selected[0], selected[1] = lat_idx, lon_idx
-        sel_marker.set_data([lon_idx], [lat_idx])
-        update_time_series(lat_idx, lon_idx)
-
-
-    fig.canvas.mpl_connect("button_press_event", on_click)
-
-    sel_marker.set_data([selected[1]], [selected[0]])
-    update_time_series(selected[0], selected[1])
-
-    plt.tight_layout()
-    plt.show()
+                if not all(instances.get(c) for c in args["comparison_classes"]):
+                    logging.warning(f"Skipping comparison for lake {lake['id']}: one or more instances missing")
+                else:
+                    save_comparison_plots(
+                        instances, pixel_dict[lake_id_str], lake_analysis_folder, lake_str,
+                        time_splits=args["time_splits"],
+                        comparison_plot_types=args["comparison_plot_types"],
+                        aggregation=args["aggregation"],
+                        background_pts=args["background_pts"],
+                        purple_chla21=args["purple_chla21"],
+                        ratio_qa_source=args["ratio_qa_source"]
+                    )
+                    logging.info(f"Comparison plots for lake {lake['id']} complete")
+                    
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Plot results of phenology computation')
+    parser = argparse.ArgumentParser(description='Plot and save results of phenology computation')
     parser.add_argument('--extract_file', '-e', help='Absolute path of extract file')
     parser.add_argument('--phenology_file', '-p', help='Absolute path of phenology file')
+    parser.add_argument('--file', '-f', type=verify_arg_file, help='Name of the argument file in /args')
+    parser.add_argument('--logs', '-l', help="Write logs to file", action='store_true')
+    parser.add_argument('--threads', '-t', help="Number of threads", default=1)
+    parser.add_argument('--parallel', '-p', help="Run parallelisation on lakes or pixels", choices=['lakes', 'pixels'], default='lake')
+    parser.add_argument('--batch-size', '-b', help="Number of pixels per batch for phenology I/O", type=int, default=100)
     args = parser.parse_args()
-    plot(args.extract_file, args.phenology_file)
+    with open(args.file) as f:
+        file_args = json.load(f)
+    plot(file_args, log=args.logs, threads=int(args.threads), parallel=args.parallel,
+         batch_size=args.batch_size, args_file=os.path.splitext(os.path.basename(args.file))[0])
