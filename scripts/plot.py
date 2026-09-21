@@ -11,10 +11,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, save_timing_plots, write_provenance, sanitize_filename
-from extract import extract
-from phenology import phenology
-from postprocess import postprocess
-from plot import plot
+
 from visualization import PhenologyVisualization
 
 def plot(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=None):

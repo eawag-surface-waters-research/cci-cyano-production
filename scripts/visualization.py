@@ -34,7 +34,6 @@ import colorcet as cc
 import time
 
 
-
 _GLOBALS = {}
 
 

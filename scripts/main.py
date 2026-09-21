@@ -14,8 +14,6 @@ from functions import set_logging, verify_arg_file, parse_args, save_maps, save_
 from extract import extract
 from phenology import phenology
 from postprocess import postprocess
-from plot import plot
-from visualization import PhenologyVisualization
 
 def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=None):
     set_logging(log)
@@ -61,6 +59,8 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
             write_provenance(args["out_folder"], "phenology", args, args_file=args_file,
                              extra={"lakes": [int(lake["id"]) for lake in lakes], "threads": threads,
                                     "parallel": parallel, "batch_size": batch_size}, run_id=run_id)
+    else:
+        logging.info("Skipping phenology step.")
 
     if args["postprocess"]:
         logging.info("Calculating fit metrics and bloom probabilities.")
@@ -76,7 +76,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
                                 extra={"lakes": [int(lake["id"]) for lake in lakes], "threads": threads,
                                     "parallel": parallel, "batch_size": batch_size}, run_id=run_id)
     else:
-        logging.info("Skipping postprocessing step")
+        logging.info("Skipping postprocessing step.")
 
 
 if __name__ == "__main__":
