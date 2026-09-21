@@ -5,10 +5,11 @@
   "images": "D:/lakecci_data/raw/v3.0/merged_product",
   "out_folder": "D:/phenology_data/v3.0",
   "lakes": [2, 5, 6, 12, 15],
-  "extract": true,
+  "extract": false,
   "qa_filter": true,
-  "phenology": true,
-  "analysis": true,
+  "phenology": false,
+  "postprocess": false,
+  "plot": true,
   "timing_plots":true,
   "kde_qa": [[0,1],[0],[1],[2],null],
   "purple_chla21": true,
@@ -17,6 +18,6 @@
   "background_pts": true,
   "comparison": false,
   "save_format": "netcdf",
-  "time_splits": [[0,9999],[2002,2012],[2012,2016],[2016,2023]], 
+  "time_splits": [[0,9999]], 
   "pixel_plots": "C:\\Users\\schelian\\cci-cyano-production\\pixel_dicts\\v3_can_aggregate_pixels.json"
 }
