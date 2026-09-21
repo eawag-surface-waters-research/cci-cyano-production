@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from datetime import datetime, timezone
 
-from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, save_timing_plots, write_provenance, sanitize_filename
+from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, save_timing_plots, write_provenance, sanitize_filename, ID_to_name
 
 from visualization import PhenologyVisualization
 
@@ -53,7 +53,7 @@ def plot(lake, args, threads=1, batch_size=100):
         return
     logging.info(f"Analysing lake {lake['id']}")
     eda = PhenologyVisualization(e_path, p_path)
-    lake_name = sanitize_filename(eda.ID_to_name(lake['id']).replace(" ", ""))
+    lake_name = sanitize_filename(ID_to_name(eda.gdf,lake['id']).replace(" ", ""))
     lake_str = f"ID{lake['id']}_{lake_name}"
     eda.out_folder = Path(os.path.join(lake_analysis_folder, lake_str))
 

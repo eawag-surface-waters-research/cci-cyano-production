@@ -622,7 +622,7 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
         out_path = os.path.join(lake_analysis_folder, lake_str, "summaries", f"{i}_{j}")
         os.makedirs(out_path, exist_ok=True)
         txt_path = os.path.join(out_path, f"summary_{eda_instance.variable}.txt")
-        lat, lon = eda_instance.index_to_lat_lon(i, j)
+        lat, lon = index_to_lat_lon(eda_instance.e_path, i, j)
         with open(txt_path, "w") as file:
             file.write(f"Pixel: ({i}, {j})\n")
             file.write(f"Latitude: {lat:.6f}, Longitude: {lon:.6f}\n")
@@ -1796,3 +1796,174 @@ def coerce_varname_to_var_x(var):
     elif not var.endswith('_x'):
         var = var + '_x'
     return var
+
+def ID_to_name(gdf, id):
+    """Return the lake name for a given lake ID from the shapefile.
+
+    Parameters
+    ----------
+    id : int
+        Lake ID matching the 'id' column in the CCI shapefile.
+
+    Returns
+    -------
+    str
+        Lake name from the 'name' column.
+
+    Raises
+    ------
+    ValueError
+        If the ID is not found in the shapefile.
+    """
+    matches = gdf.loc[gdf["id"] == int(id), "name"]
+    if matches.empty:
+        raise ValueError(f"Lake ID {id} not found in shapefile.")
+    return matches.iloc[0]
+
+
+def index_to_lat_lon(e_path, lat_index, lon_index):
+    """Return the geographic coordinates for a grid index pair.
+
+    Parameters
+    ----------
+    lat_index : int
+        Row index in the extract grid.
+    lon_index : int
+        Column index in the extract grid.
+
+    Returns
+    -------
+    str
+        Formatted string with the latitude and longitude values.
+    """
+    with netCDF4.Dataset(e_path) as nc:
+        lats = nc.variables["lat"][:]
+        lons = nc.variables["lon"][:]
+        lat = lats[lat_index]
+        lon = lons[lon_index]
+    return lat , lon
+
+    
+def get_year_edges(e_path):
+    """Return the first and last year of the extract time series.
+
+    Returns
+    -------
+    tuple of int
+        (first_year, last_year) in the extract NetCDF.
+    """
+    with netCDF4.Dataset(e_path) as nc:
+        time_raw = nc.variables["time"][:]
+        t_all = unix_to_datenum(time_raw)
+        time_dt = np.array(datenum_to_datetime(t_all))
+        years_all = np.array([d.year for d in time_dt])
+        return years_all.min(), years_all.max()
+
+    
+def valid_index_pairs(e_path):
+    """Return grid index pairs that have more than one valid QA-passing observation.
+
+    Reads the extract NetCDF and identifies pixels where the observation count
+    (non-fill, QA==0) exceeds one — the minimum required for spline fitting.
+
+    Returns
+    -------
+    list of tuple of int
+        List of (row, col) index pairs with sufficient valid observations.
+    """
+    with netCDF4.Dataset(e_path) as nc:
+        variable = getattr(nc, "variable")
+        qa_variable = getattr(nc, "qa")
+
+        values = np.asarray(nc.variables[variable][:])
+        qa = np.asarray(nc.variables[qa_variable][:])
+
+        valid_mask = (values != -9999) & (qa == 0)
+        valid_counts = np.sum(valid_mask, axis=0)
+
+        return [tuple(int(x) for x in idx) for idx in np.argwhere(valid_counts > 1)]
+
+
+def create_DataFrame(p_path, latitude_idx, longitude_idx):
+    """Build a combined long-format DataFrame of all phenology variables for a single pixel.
+
+    Reads all _x (time) and _y (value) variable pairs from the phenology NetCDF
+    and concatenates them into a single DataFrame.
+
+    Parameters
+    ----------
+    latitude_idx : int
+        Row (lat) index of the pixel in the grid.
+    longitude_idx : int
+        Column (lon) index of the pixel in the grid.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Long-format DataFrame with columns Value, Variable, latitude_idx, longitude_idx
+        and a datetime index named Time.
+    """
+    p = netCDF4.Dataset(p_path)
+    exclude = ['lat','lon','smoothing_parameter','trgs_qa','data_gap_start','data_gap_end']
+    l = list(set(list(p.variables))-set(exclude))
+    variables_x = sorted([i for i in l if i[-1]== "x"])
+    variables_y = sorted([i for i in l if i[-1]== "y"])
+    lat = np.array(p.variables["lat"])
+    lon = np.array(p.variables["lon"])
+
+    result = {}
+
+    for x,y in zip(variables_x, variables_y):
+        var_x =unix_to_datetime(remove_nan(p[x][latitude_idx,longitude_idx,:]))
+        var_y = remove_nan(p[y][latitude_idx,longitude_idx,:])
+        var_label = [x[:-2]]*len(var_y)
+        df = pd.DataFrame({"Value":var_y,
+                        "Variable": var_label,
+                        "latitude": lat[latitude_idx],
+                        "longitude": lon[longitude_idx]},
+                        index = var_x)
+        df.index.names = ["Time"]
+        result[y[:-2]] = df
+    combined_df = pd.concat(result.values())
+
+    return combined_df
+
+
+def sort_by_year(df, start_year=None, end_year=None):
+    """Filter a prep_kde_data DataFrame to rows whose bloom overlaps [start_year, end_year].
+
+    Each row is treated as a triple (green_up_advanced, peak_qa, green_down_onset).
+    A row is kept when its bloom interval [adv_year, onset_year] overlaps the
+    requested range. Cross-year blooms (e.g. green_up_advanced in December,
+    green_down_onset in January of the next year) are included if either end
+    falls within the range — the whole triple is kept rather than dropped.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Output of prep_kde_data (columns: green_up_advanced, peak_qa, green_down_onset).
+    start_year : int or None
+        Earliest year to include. None means no lower bound.
+    end_year : int or None
+        Latest year to include. None means no upper bound.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Filtered copy of df.
+    """
+    if start_year is None and end_year is None:
+        return df
+
+    adv_year = df["primary"].astype(int)
+    onset_year = df["secondary"].astype(int)
+
+    mask = pd.Series(True, index=df.index)
+    if start_year is not None:
+        # keep rows where the bloom ends at or after start_year
+        mask &= onset_year >= start_year
+    if end_year is not None:
+        # keep rows where the bloom begins at or before end_year
+        mask &= adv_year <= end_year
+
+    return df[mask]

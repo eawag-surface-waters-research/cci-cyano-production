@@ -189,7 +189,6 @@ class PhenologyVisualizationBase:
         },
     }
 
-
     VAR_CONFIG = {
         "phycocyanin": {
             "label": "phyco",
@@ -274,15 +273,14 @@ class PhenologyVisualizationBase:
         self.version = Path(self.p_path).parents[2].name.removeprefix('v')
         self.variable = Path(self.p_path).parents[0].stem
         self.lakeID = Path(self.p_path).stem
-        # self.lakename = lakeID_to_name(self.gdf,self.lakeID)
         self.info = (f"Version: {self.version} \n",
                     f"Variable: {self.variable} \n" ,
                     f"Lake ID: {self.lakeID}")
         self.methods = [method for method in dir(type(self)) if callable(getattr(type(self), method)) and not method.startswith("__")]
-        self.valid_coords = self.valid_index_pairs()
+        self.valid_coords = f.valid_index_pairs(self.e_path)
         self.out_folder = Path(self.p_path).parents[2]
         self.data_folder = Path(self.p_path).parents[2]
-        self.start_year , self.end_year = self.get_year_edges()
+        self.start_year , self.end_year = f.get_year_edges(self.e_path)
         self.aggregation_df = None
         self.aggregation_ds = None
         self._aggregation_pixel_index = None
@@ -292,70 +290,6 @@ class PhenologyVisualizationBase:
         self._lake_cache = {}
         self.prep_geometry_from_shapefile()
         self.extract_nonborder_coords()
-
-
-    def ID_to_name(self, id):
-        """Return the lake name for a given lake ID from the shapefile.
-
-        Parameters
-        ----------
-        id : int
-            Lake ID matching the 'id' column in the CCI shapefile.
-
-        Returns
-        -------
-        str
-            Lake name from the 'name' column.
-
-        Raises
-        ------
-        ValueError
-            If the ID is not found in the shapefile.
-        """
-        matches = self.gdf.loc[self.gdf["id"] == int(id), "name"]
-        if matches.empty:
-            raise ValueError(f"Lake ID {id} not found in shapefile.")
-        return matches.iloc[0]
-
-
-    def index_to_lat_lon(self, lat_index, lon_index):
-        """Return the geographic coordinates for a grid index pair.
-
-        Parameters
-        ----------
-        lat_index : int
-            Row index in the extract grid.
-        lon_index : int
-            Column index in the extract grid.
-
-        Returns
-        -------
-        str
-            Formatted string with the latitude and longitude values.
-        """
-        with netCDF4.Dataset(self.e_path) as nc:
-            lats = nc.variables["lat"][:]
-            lons = nc.variables["lon"][:]
-            lat = lats[lat_index]
-            lon = lons[lon_index]
-        return lat , lon
-    
-
-    def get_year_edges(self):
-        """Return the first and last year of the extract time series.
-
-        Returns
-        -------
-        tuple of int
-            (first_year, last_year) in the extract NetCDF.
-        """
-        with netCDF4.Dataset(self.e_path) as nc:
-            time_raw = nc.variables["time"][:]
-            t_all = f.unix_to_datenum(time_raw)
-            time_dt = np.array(f.datenum_to_datetime(t_all))
-            years_all = np.array([d.year for d in time_dt])
-            return years_all.min(), years_all.max()
-
     
     @classmethod
     def set_shapefile_path(cls, path: str):
@@ -391,77 +325,7 @@ class PhenologyVisualizationBase:
         if fmt not in ("csv", "netcdf"):
             raise ValueError(f"save_format must be 'csv' or 'netcdf', got {fmt!r}")
         cls.save_format = fmt
-
-
-    def valid_index_pairs(self):
-        """Return grid index pairs that have more than one valid QA-passing observation.
-
-        Reads the extract NetCDF and identifies pixels where the observation count
-        (non-fill, QA==0) exceeds one — the minimum required for spline fitting.
-
-        Returns
-        -------
-        list of tuple of int
-            List of (row, col) index pairs with sufficient valid observations.
-        """
-        with netCDF4.Dataset(self.e_path) as nc:
-            variable = getattr(nc, "variable")
-            qa_variable = getattr(nc, "qa")
-
-            values = np.asarray(nc.variables[variable][:])
-            qa = np.asarray(nc.variables[qa_variable][:])
-
-            valid_mask = (values != -9999) & (qa == 0)
-            valid_counts = np.sum(valid_mask, axis=0)
-
-            return [tuple(int(x) for x in idx) for idx in np.argwhere(valid_counts > 1)]
             
-
-    def create_DataFrame(self, latitude_idx, longitude_idx):
-        """Build a combined long-format DataFrame of all phenology variables for a single pixel.
-
-        Reads all _x (time) and _y (value) variable pairs from the phenology NetCDF
-        and concatenates them into a single DataFrame.
-
-        Parameters
-        ----------
-        latitude_idx : int
-            Row (lat) index of the pixel in the grid.
-        longitude_idx : int
-            Column (lon) index of the pixel in the grid.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Long-format DataFrame with columns Value, Variable, latitude_idx, longitude_idx
-            and a datetime index named Time.
-        """
-        p = netCDF4.Dataset(self.p_path)
-        exclude = ['lat','lon','smoothing_parameter','trgs_qa','data_gap_start','data_gap_end']
-        l = list(set(list(p.variables))-set(exclude))
-        variables_x = sorted([i for i in l if i[-1]== "x"])
-        variables_y = sorted([i for i in l if i[-1]== "y"])
-        lat = np.array(p.variables["lat"])
-        lon = np.array(p.variables["lon"])
-
-        result = {}
-
-        for x,y in zip(variables_x, variables_y):
-            var_x =f.unix_to_datetime(f.remove_nan(p[x][latitude_idx,longitude_idx,:]))
-            var_y = f.remove_nan(p[y][latitude_idx,longitude_idx,:])
-            var_label = [x[:-2]]*len(var_y)
-            df = pd.DataFrame({"Value":var_y,
-                            "Variable": var_label,
-                            "latitude": lat[latitude_idx],
-                            "longitude": lon[longitude_idx], 
-                            "lake_ID": self.lakeID},
-                            index = var_x)
-            df.index.names = ["Time"]
-            result[y[:-2]] = df
-        combined_df = pd.concat(result.values())
-
-        return combined_df
-
 
     def get_plot_config(self, config_name, key, **kwargs):
         """
@@ -580,6 +444,7 @@ class PhenologyVisualizationBase:
         self.valid_coords_prep = inside_coords
 
 
+    # MOVE TO PixelCalc
     @staticmethod
     def compute_metric_score(coord, start=0, end=9999, metrics_to_compute= None):
         """Compute one spline-fit metric or observation count for a single pixel.
@@ -685,6 +550,7 @@ class PhenologyVisualizationBase:
             return (i,j), metric
 
 
+    # MOVE TO PixelCalc
     def build_metric_path(self, metric_name, start=0, end=9999):
         """Return the cache path for one lake and one time window."""
         ext = "nc" if self.save_format == "netcdf" else "csv"
@@ -702,6 +568,7 @@ class PhenologyVisualizationBase:
         return base, os.path.join(base, filename)
 
 
+    # MOVE TO PixelCalc
     def build_kde_path(self):
         """Return the output directory and file path for the cached KDE events CSV.
 
@@ -716,7 +583,6 @@ class PhenologyVisualizationBase:
 
         start_label = self.start_year
         end_label = self.end_year
-        # lake_name = f.sanitize_filename(self.ID_to_name(int(self.lakeID)).replace(" ", ""))
         base = os.path.join(
             self.data_folder,
             "calculated_values",
@@ -728,6 +594,7 @@ class PhenologyVisualizationBase:
         return base, path
 
 
+    # MOVE TO PixelCalc
     def build_bloom_prob_path(
         self,
         qa_value=None,
@@ -771,7 +638,8 @@ class PhenologyVisualizationBase:
 
         return base, os.path.join(base, filename)
 
-    
+
+    # MOVE TO PixelCalc    
     def _bloom_prob_metadata_from_path(self, file_path):
         """Extract bloom-probability metadata encoded in the cache filename."""
         filename = Path(file_path).name
@@ -810,6 +678,7 @@ class PhenologyVisualizationBase:
             "y_max": float(values["y_max"]),
         }
 
+    # MOVE TO PixelCalc
     def _write_kde_netcdf(self, file_path, kde_df):
         """Write cached KDE event data to NetCDF."""
         columns = ["primary", "qa_column", "secondary"]
@@ -832,6 +701,7 @@ class PhenologyVisualizationBase:
             ds.variable = str(self.variable)
 
 
+    # MOVE TO PixelCalc
     def _read_kde_nc(self, file_path):
         """Read cached KDE event data from NetCDF."""
         with netCDF4.Dataset(file_path, "r") as ds:
@@ -850,6 +720,7 @@ class PhenologyVisualizationBase:
             })
 
 
+    # MOVE TO PixelCalc
     def _write_bloom_prob_netcdf(self, file_path, bloom_prob_df):
         """Write cached bloom probability data to NetCDF."""
         columns = ['x_low', 'x_high','y_low','y_high','probability']
@@ -872,6 +743,7 @@ class PhenologyVisualizationBase:
             ds.variable = str(self.variable)
 
 
+    # MOVE TO PixelCalc
     def _read_bloom_prob_nc(self, file_path):
         """Read cached bloom proabability data from NetCDF."""
         with netCDF4.Dataset(file_path, "r") as ds:
@@ -887,6 +759,7 @@ class PhenologyVisualizationBase:
             bloom_df = pd.DataFrame({req_var: np.asarray(ds.variables[req_var][:]) for req_var in required})
             return bloom_df[req_cols]
 
+    # MOVE TO PixelCalc
     def _read_bloom_prob_cache(self, file_path):
         """Read a bloom-probability cache and return its data and filename metadata."""
         if Path(file_path).suffix == ".nc":
@@ -897,6 +770,7 @@ class PhenologyVisualizationBase:
         metadata = self._bloom_prob_metadata_from_path(file_path)
         return bloom_df, metadata
 
+    # MOVE TO PixelCalc
     def compute_and_cache_metric(self, metric_name, col_name, compute_fn,
                              start=0, end=9999):
         """Compute or load one metric for a lake and time window."""
@@ -964,6 +838,7 @@ class PhenologyVisualizationBase:
         return data
 
 
+    # MOVE TO PixelCalc
     def _write_metric_netcdf(self, file_path, col_name, data):
         """Append one metric to a lake/window NetCDF cache."""
         with netCDF4.Dataset(self.e_path) as src:
@@ -1008,6 +883,7 @@ class PhenologyVisualizationBase:
             metric_var[:, :] = grid
 
 
+    # MOVE TO PixelCalc
     def _read_metric_netcdf(self, file_path, col_name):
         """Read one metric from a lake/window NetCDF cache."""
         with netCDF4.Dataset(file_path, "r") as ds:
@@ -1024,6 +900,7 @@ class PhenologyVisualizationBase:
         return {(int(i), int(j)): grid[i, j] for i, j in computed}
 
 
+    # MOVE TO PixelCalc
     def r2_scores(self, time_split=None):
         """Return R² scores for all valid pixels over a single time window.
 
@@ -1046,6 +923,7 @@ class PhenologyVisualizationBase:
                                                  start=start, end=end)
 
 
+    # MOVE TO PixelCalc
     def MAD_scores(self, time_split=None):
         """Return Median Absolute Deviation scores for all valid pixels over a single time window.
 
@@ -1068,6 +946,7 @@ class PhenologyVisualizationBase:
                                                  start= start,end= end)
 
 
+    # MOVE TO PixelCalc
     def RMSE_scores(self, time_split=None):
         """Return Root Mean Squared Error scores for all valid pixels over a single time window.
 
@@ -1090,6 +969,7 @@ class PhenologyVisualizationBase:
                                                  start=start, end=end)
 
 
+    # MOVE TO PixelCalc
     def correlation_scores(self, time_split=None):
         """Return Pearson correlation scores for all valid pixels over a single time window.
 
@@ -1112,6 +992,7 @@ class PhenologyVisualizationBase:
                                                  start=start, end=end)
 
 
+    # MOVE TO PixelCalc
     def values_per_pixel(self, time_split=None):
         """Return valid observation counts for all pixels over a single time window.
 
@@ -1134,6 +1015,7 @@ class PhenologyVisualizationBase:
                                                  start=start,end= end)
 
 
+    # MOVE TO PixelCalc
     def spatial_aggregation(self):
         """Compute or load per-pixel 3×3 neighbourhood median values for all timesteps.
 
@@ -1276,6 +1158,7 @@ class PhenologyVisualizationBase:
             self.aggregation_df = aggregation_df
 
 
+    # MOVE TO PixelCalc
     def _write_aggregation_netcdf(self, file_path, t_all, i_idx, j_idx, lat_vals, lon_vals, values):
         """Write spatial_aggregation() results to a compressed (time, pixel) NetCDF cache.
 
@@ -1306,6 +1189,7 @@ class PhenologyVisualizationBase:
         self._load_aggregation_netcdf(file_path)
 
 
+    # MOVE TO PixelCalc
     def _load_aggregation_netcdf(self, file_path):
         """Open a cached aggregation NetCDF file and rebuild the pixel lookup index."""
         self.aggregation_ds = netCDF4.Dataset(file_path, "r")
@@ -3134,6 +3018,7 @@ class PhenologyVisualizationBase:
         return fig, ax
 
 
+    # UNSURE WHERE TO PLACE
     def pixel_r2(self, latitude_idx, longitude_idx, start=0, end=9999):
         """Return the R² score for a single pixel within a year range.
 
@@ -3159,7 +3044,7 @@ class PhenologyVisualizationBase:
         scores = self.r2_scores([(start, end)])
         return scores[(latitude_idx, longitude_idx)]
 
-
+    # UNSURE WHERE TO PLACE
     def pixel_rmse(self, latitude_idx, longitude_idx, start=0, end=9999):
         """Return the RMSE for a single pixel within a year range.
 
@@ -3186,6 +3071,7 @@ class PhenologyVisualizationBase:
         return scores[(latitude_idx, longitude_idx)]
 
 
+    # UNSURE WHERE TO PLACE
     def pixel_mad(self, latitude_idx, longitude_idx, start=0, end=9999):
         """Return the Median Absolute Deviation for a single pixel within a year range.
 
@@ -3212,6 +3098,7 @@ class PhenologyVisualizationBase:
         return scores[(latitude_idx, longitude_idx)]
     
 
+    # UNSURE WHERE TO PLACE
     def pixel_correlation(self, latitude_idx, longitude_idx, start=0, end=9999):
         """Return the Pearson correlation coefficient for a single pixel within a year range.
 
@@ -3238,6 +3125,7 @@ class PhenologyVisualizationBase:
         return scores[(latitude_idx, longitude_idx)]
 
 
+    # UNSURE WHERE TO PLACE
     def pixel_values(self, latitude_idx, longitude_idx, start=0, end=9999):
         """Return the valid observation count for a single pixel within a year range.
 
@@ -3979,6 +3867,7 @@ class PhenologyVisualizationBase:
             frames[qa_var] = pd.Series(index=qa_doy, data= qa)
         return pd.DataFrame(frames)
 
+    # MOVE TO PixelCalc
     def _extract_pixel_kde_events(self, nc, i, j,
                                    primary_vars=None, secondary_vars=None,
                                    qa_var="pks", arrays=None):
@@ -4097,6 +3986,7 @@ class PhenologyVisualizationBase:
         )
 
 
+    # MOVE TO PixelCalc
     def assemble_kde_data(self, primary_vars=None, secondary_vars=None, qa_var="pks"):
         """Collect bracketing and peak events lake-wide into a DataFrame.
 
@@ -4164,6 +4054,7 @@ class PhenologyVisualizationBase:
         return pd.concat(frames, ignore_index=True).set_index("year.DOY")
 
 
+    # MOVE TO PixelCalc
     def prep_kde_data(self, kde_df):
         """Pair each peak with its bracketing green-up advanced and green-down onset, per pixel.
 
@@ -4263,46 +4154,7 @@ class PhenologyVisualizationBase:
         return df.loc[mask, ["prev_var1_time", "next_var2_time", "qa_column"]]
 
 
-    def sort_by_year(self, df, start_year=None, end_year=None):
-        """Filter a prep_kde_data DataFrame to rows whose bloom overlaps [start_year, end_year].
-
-        Each row is treated as a triple (green_up_advanced, peak_qa, green_down_onset).
-        A row is kept when its bloom interval [adv_year, onset_year] overlaps the
-        requested range. Cross-year blooms (e.g. green_up_advanced in December,
-        green_down_onset in January of the next year) are included if either end
-        falls within the range — the whole triple is kept rather than dropped.
-
-        Parameters
-        ----------
-        df : pandas.DataFrame
-            Output of prep_kde_data (columns: green_up_advanced, peak_qa, green_down_onset).
-        start_year : int or None
-            Earliest year to include. None means no lower bound.
-        end_year : int or None
-            Latest year to include. None means no upper bound.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Filtered copy of df.
-        """
-        if start_year is None and end_year is None:
-            return df
-
-        adv_year = df["primary"].astype(int)
-        onset_year = df["secondary"].astype(int)
-
-        mask = pd.Series(True, index=df.index)
-        if start_year is not None:
-            # keep rows where the bloom ends at or after start_year
-            mask &= onset_year >= start_year
-        if end_year is not None:
-            # keep rows where the bloom begins at or before end_year
-            mask &= adv_year <= end_year
-
-        return df[mask]
-
-
+    # MOVE TO PixelCalc
     def _fit_bloom_kde(self, qa_value = None, start_year = 0, end_year = 9999):
         """
         Load/filter cached bloom events and fit a 2D gaussian_kde on
@@ -4354,7 +4206,7 @@ class PhenologyVisualizationBase:
 
         years_all = np.unique(list(compressed_df["primary"].astype(int) ) + list(compressed_df["secondary"].astype(int) ))
         start, end = f.define_year_range(start_year, end_year, years_all)
-        plot_df = self.sort_by_year(compressed_df, start_year=start, end_year=end)
+        plot_df = f.sort_by_year(compressed_df, start_year=start, end_year=end)
 
         x = np.round((plot_df["primary"].values % 1) * 1000).astype(int)
         y = np.round((plot_df["secondary"].values % 1) * 1000).astype(int)
@@ -4371,6 +4223,7 @@ class PhenologyVisualizationBase:
         return kde, start, end, qa_filtered_set
 
 
+    # MOVE TO PixelCalc
     def calculate_bloom_probabilities_from_kde(self, qa_value = None, start_year = 0, end_year = 9999,
                                      interval = 21, x_max = 400, y_max = 730, resolution = 1):
         """
@@ -4492,6 +4345,7 @@ class PhenologyVisualizationBase:
         return probability_df, start, end, qa_filtered_set
     
 
+    # SPLIT UP AND MOVE PART TO PixelCalc
     def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999, plt_kwargs = None, probability= False, interval = 21, resolution= 1, x_max = 400, y_max = 730):
         print(f"plotting started at: {datetime.datetime.now()}")
         if probability:
