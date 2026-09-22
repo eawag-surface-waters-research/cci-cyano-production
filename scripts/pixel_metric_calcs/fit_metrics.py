@@ -37,6 +37,9 @@ class PixelCalcBase:
     def write_output(self):
         pass
 
+    def calculate_and_write_chunked(self,block_size=64):
+        pass
+
     def read_cached_metric(self):
         pass
 
@@ -45,6 +48,13 @@ class PixelCalcBase:
         self.read_input()
         self.calculate()
         self.write_output()
+
+    def run_chunked(self, block_size=64):
+        """Run the chunked calculation and writing workflow."""
+        self.build_path()
+        self.read_input()
+        self.calculate_and_write_chunked(block_size=block_size)
+
 
 
 def _init_worker(p_path, e_path):
@@ -158,107 +168,175 @@ class SpatialAgg(PixelCalcBase):
     def read_input(self):
         self.data_path = os.path.join(self.out_folder,'extract',self.variable,f"{self.lakeID}.nc")
     
-    def calculate(self):
-        with netCDF4.Dataset(self.data_path) as nc:
-            lat = np.asarray(nc.variables["lat"][:])
-            lon = np.asarray(nc.variables["lon"][:])
-            t_all = f.unix_to_datenum(nc.variables["time"][:])
-            self.datenum_arr = t_all
+    def _get_spatial_inputs(self, nc):
+        """Return time values, valid interior coordinates, and pixel locations."""
+        lat = np.asarray(nc.variables["lat"][:])
+        lon = np.asarray(nc.variables["lon"][:])
 
-            variable_name = getattr(nc, "variable")
-            data_var = nc.variables[variable_name]
-            qa_var = nc.variables[getattr(nc, "qa")]
+        t_all = f.unix_to_datenum(nc.variables["time"][:])
+        nlat = len(nc.dimensions["lat"])
+        nlon = len(nc.dimensions["lon"])
 
-            ntime = len(nc.dimensions["time"])
-            nlat = len(nc.dimensions["lat"])
-            nlon = len(nc.dimensions["lon"])
+        coords = np.asarray(self.valid_coords, dtype=int)
+        interior = (
+            (coords[:, 0] >= 1)
+            & (coords[:, 0] < nlat - 1)
+            & (coords[:, 1] >= 1)
+            & (coords[:, 1] < nlon - 1)
+        )
+        coords = coords[interior]
 
-            coords = np.asarray(self.valid_coords, dtype=int)
-            self.coords = coords
-            # Remove border cells once
-            interior_mask = (
-            (coords[:, 0] >= 1) & (coords[:, 0] < nlat - 1) &
-            (coords[:, 1] >= 1) & (coords[:, 1] < nlon - 1)
+        return (
+            t_all,
+            coords,
+            lat[coords[:, 0]],
+            lon[coords[:, 1]],
+        )
+
+    @staticmethod
+    def _calculate_block(data_var, qa_var, coords, start, stop):
+        """Calculate spatial aggregation values for time indices [start, stop)."""
+        n_pixels = len(coords)
+        values = np.full(
+            (stop - start, n_pixels),
+            np.nan,
+            dtype=np.float32,
+        )
+
+        if n_pixels == 0:
+            return values
+
+        i_idx = coords[:, 0]
+        j_idx = coords[:, 1]
+
+        offsets_i = np.array([-1, -1, -1, 0, 0, 0, 1, 1, 1], dtype=int)
+        offsets_j = np.array([-1, 0, 1, -1, 0, 1, -1, 0, 1], dtype=int)
+
+        for output_index, time_index in enumerate(range(start, stop)):
+            data_n = np.asarray(data_var[time_index], dtype=np.float32)
+            qa_n = np.asarray(qa_var[time_index])
+
+            data_windows = data_n[
+                i_idx[:, None] + offsets_i,
+                j_idx[:, None] + offsets_j,
+            ]
+            qa_windows = qa_n[
+                i_idx[:, None] + offsets_i,
+                j_idx[:, None] + offsets_j,
+            ]
+
+            invalid = (data_windows == -9999) | (qa_windows != 0)
+            data_windows[invalid] = np.nan
+
+            values[output_index] = np.nanmedian(
+                data_windows,
+                axis=1,
             )
-            coords = coords[interior_mask]
 
-            if coords.size == 0:
-                # self._write_aggregation_netcdf(t_all,
-                #     np.empty(0, dtype=int), np.empty(0, dtype=int),
-                #     np.empty(0), np.empty(0),
-                #     np.empty((ntime, 0), dtype=np.float32),
-                # )
-                return
+        return values
 
-            i_idx = coords[:, 0]
-            j_idx = coords[:, 1]
+    def calculate(self):
+        """Calculate and retain the complete result in memory."""
+        with netCDF4.Dataset(self.data_path) as nc:
+            (
+                self.datenum_arr,
+                self.coords,
+                self.lat_vals,
+                self.lon_vals,
+            ) = self._get_spatial_inputs(nc)
 
-            # indices for median_grid, which is smaller by 1 border cell each side
-            ii = i_idx - 1
-            jj = j_idx - 1
+            data_var = nc.variables[getattr(nc, "variable")]
+            qa_var = nc.variables[getattr(nc, "qa")]
+            ntime = len(nc.dimensions["time"])
 
-            self.lat_vals = lat[i_idx]
-            self.lon_vals = lon[j_idx]
+            self.values = self._calculate_block(
+                data_var,
+                qa_var,
+                self.coords,
+                0,
+                ntime,
+            )
 
-            n_pixels = len(coords)
-            # netcdf path accumulates a (ntime, n_pixels) array and writes it in one
-            # bulk call: writing timestep-by-timestep into chunks that span the full
-            # time dimension would force a decompress/recompress of every chunk on
-            # every iteration.
-            values = np.full((ntime, n_pixels), np.nan, dtype=np.float32)
+    def _create_output(self, ds, t_all, coords, lat_vals, lon_vals, block_size):
+        """Create dimensions and variables for a spatial aggregation cache."""
+        n_pixels = len(coords)
+        ntime = len(t_all)
 
-            for n in range(ntime):
-                data_n = np.asarray(data_var[n], dtype=np.float32)
-                qa_n = np.asarray(qa_var[n])
+        ds.createDimension("time", ntime)
+        ds.createDimension("pixel", n_pixels)
 
-                # shape: (nlat-2, nlon-2, 3, 3)
-                data_windows = np.lib.stride_tricks.sliding_window_view(data_n, (3, 3))
-                qa_windows = np.lib.stride_tricks.sliding_window_view(qa_n, (3, 3))
+        ds.createVariable("time", "f8", ("time",))[:] = t_all
+        ds.createVariable("pixel_i", "i4", ("pixel",))[:] = coords[:, 0]
+        ds.createVariable("pixel_j", "i4", ("pixel",))[:] = coords[:, 1]
+        ds.createVariable("lat", "f8", ("pixel",))[:] = lat_vals
+        ds.createVariable("lon", "f8", ("pixel",))[:] = lon_vals
 
-                valid_mask = (data_windows != -9999) & (qa_windows == 0)
+        chunksizes = None
+        if n_pixels > 0 and ntime > 0:
+            chunksizes = (
+                min(block_size, ntime),
+                min(256, n_pixels),
+            )
 
-                masked = data_windows.astype(np.float32, copy=True)
-                masked[~valid_mask] = np.nan
-
-                # shape: (nlat-2, nlon-2)
-                median_grid = np.nanmedian(masked, axis=(-2, -1))
-
-                ma_values = median_grid[ii, jj]
-
-                values[n, :] = ma_values
-            self.values = values
+        return ds.createVariable(
+            "MA_value",
+            "f4",
+            ("time", "pixel"),
+            fill_value=np.nan,
+            zlib=True,
+            complevel=4,
+            chunksizes=chunksizes,
+        )
 
     def write_output(self):
-        """Write spatial_aggregation() results to a compressed (time, pixel) NetCDF cache.
-
-        lat/lon are stored once per pixel rather than once per row (the CSV's main
-        source of bloat), and MA_value is chunked as (ntime, 1) so a per-pixel read
-        - the only access pattern plot_background_pts uses - pulls exactly one
-        contiguous chunk instead of scanning the whole file.
-        """
-        t_all = self.datenum_arr
-        lat_vals = self.lat_vals
-        lon_vals = self.lon_vals
-        i_idx = self.coords[:, 0]
-        j_idx = self.coords[:, 1]
-        n_pixels = len(i_idx)
+        """Write the complete in-memory result for a small lake."""
         with netCDF4.Dataset(self.save_fp, "w") as ds:
-            ds.createDimension("time", len(t_all))
-            ds.createDimension("pixel", n_pixels)
-
-            ds.createVariable("time", "f8", ("time",))[:] = t_all
-            ds.createVariable("pixel_i", "i4", ("pixel",))[:] = i_idx
-            ds.createVariable("pixel_j", "i4", ("pixel",))[:] = j_idx
-            ds.createVariable("lat", "f8", ("pixel",))[:] = lat_vals
-            ds.createVariable("lon", "f8", ("pixel",))[:] = lon_vals
-
-            chunksizes = (len(t_all), 1) if n_pixels > 0 else None
-            ma_var = ds.createVariable(
-                "MA_value", "f4", ("time", "pixel"),
-                fill_value=np.nan, zlib=True, complevel=4,
-                chunksizes=chunksizes,
+            ma_var = self._create_output(
+                ds,
+                self.datenum_arr,
+                self.coords,
+                self.lat_vals,
+                self.lon_vals,
+                block_size=len(self.datenum_arr),
             )
             ma_var[:, :] = self.values
+
+    def calculate_and_write_chunked(self, block_size=64):
+        """Calculate and write aggregation values without retaining all results."""
+        with netCDF4.Dataset(self.data_path) as src:
+            (
+                t_all,
+                coords,
+                lat_vals,
+                lon_vals,
+            ) = self._get_spatial_inputs(src)
+
+            data_var = src.variables[getattr(src, "variable")]
+            qa_var = src.variables[getattr(src, "qa")]
+            ntime = len(src.dimensions["time"])
+
+            with netCDF4.Dataset(self.save_fp, "w") as dst:
+                ma_var = self._create_output(
+                    dst,
+                    t_all,
+                    coords,
+                    lat_vals,
+                    lon_vals,
+                    block_size=block_size,
+                )
+
+                for start in range(0, ntime, block_size):
+                    stop = min(start + block_size, ntime)
+
+                    values = self._calculate_block(
+                        data_var,
+                        qa_var,
+                        coords,
+                        start,
+                        stop,
+                    )
+                    ma_var[start:stop, :] = values
+
 
     def read_cached_metric(self):
         """Open a cached aggregation NetCDF file and rebuild the pixel lookup index."""
