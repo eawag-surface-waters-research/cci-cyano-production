@@ -10,6 +10,7 @@ from csaps import csaps
 from scipy.signal import find_peaks
 from datetime import datetime, timezone
 import warnings
+import multiprocessing
 from scipy.sparse import SparseEfficiencyWarning
 import matplotlib
 matplotlib.use("Agg")
@@ -1967,3 +1968,286 @@ def sort_by_year(df, start_year=None, end_year=None):
         mask &= adv_year <= end_year
 
     return df[mask]
+
+def find_preceding_and_following(pixel_df):
+    """Vectorized bracket-finder for a single pixel's long-format event DataFrame.
+
+    For each peak row (qa_column not NaN), finds the most recent preceding
+    green_up_advanced event (primary=True) and the earliest following
+    green_down_onset event (secondary=True) using ffill/bfill on the year.DOY index.
+
+    Parameters
+    ----------
+    pixel_df : pandas.DataFrame
+        Single-pixel slice of the output of assemble_kde_data. Index is year.DOY,
+        columns include primary (bool), qa_column (float), secondary (bool).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns: prev_var1_time, next_var2_time, qa_column.
+        Only peak rows are returned; NaN in either bracket column means
+        the peak is not fully bracketed.
+    """
+    df = pixel_df.copy()
+    df["var1_time"] = df.index.where(df["primary"].fillna(False).astype(bool))
+    df["var2_time"] = df.index.where(df["secondary"].fillna(False).astype(bool))
+    df["prev_var1_time"] = df["var1_time"].ffill()
+    df["next_var2_time"] = df["var2_time"].bfill()
+    mask = df["qa_column"].notna()
+    return df.loc[mask, ["prev_var1_time", "next_var2_time", "qa_column"]]
+
+
+def greedy_match_within_tolerance(time_self, time_other, tolerance_days):
+    """Match each self event to at most one other event within tolerance_days.
+
+    Core matching logic shared by pair_phenology_events (single pixel) and
+    qa_boxplot_lake's ratio mode (bulk, all lake pixels). Candidate pairs are
+    ranked by time gap and claimed closest-first, so no event is ever paired
+    twice - see pair_phenology_events's docstring for the full rationale.
+
+    Parameters
+    ----------
+    time_self, time_other : numpy.ndarray of numpy.datetime64
+        Event timestamps to match against each other.
+    tolerance_days : int
+        Maximum gap in days between two events for them to count as a pair.
+
+    Returns
+    -------
+    self_idx, other_idx : numpy.ndarray of int
+        Index arrays into time_self/time_other for matched pairs.
+    day_diff : numpy.ndarray of float
+        Matching day gap for each pair, same length as self_idx/other_idx.
+    """
+    empty = np.array([], dtype=int)
+    if len(time_self) == 0 or len(time_other) == 0:
+        return empty, empty, np.array([], dtype=float)
+
+    day_diff = np.abs(time_self[:, None] - time_other[None, :]) / np.timedelta64(1, "D")
+    self_idx, other_idx = np.where(day_diff <= tolerance_days)
+    if len(self_idx) == 0:
+        return empty, empty, np.array([], dtype=float)
+
+    candidates = pd.DataFrame({
+        "self_idx": self_idx,
+        "other_idx": other_idx,
+        "day_diff": day_diff[self_idx, other_idx],
+    }).sort_values("day_diff", kind="stable")
+
+    # claim closest pairs first; once an event is claimed on either side,
+    # drop_duplicates removes every other candidate row that reuses it
+    candidates = candidates.drop_duplicates(subset="self_idx", keep="first")
+    candidates = candidates.drop_duplicates(subset="other_idx", keep="first")
+
+    return (candidates["self_idx"].to_numpy(), candidates["other_idx"].to_numpy(),
+            candidates["day_diff"].to_numpy())
+
+
+def prep_kde_pixel_worker(pixel_df):
+    """Multiprocessing worker for a single pixel's bracket-matching step.
+
+    Designed to be dispatched by multiprocessing.Pool in prep_kde_data.
+    No initializer needed — all data is passed directly as a DataFrame.
+
+    Parameters
+    ----------
+    pixel_df : pandas.DataFrame
+        Single-pixel slice of the kde_df produced by assemble_kde_data.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns: primary, qa_column, secondary. Empty if no fully-bracketed
+        peaks exist for this pixel.
+    """
+    bracketed = f.find_preceding_and_following(
+        pixel_df.sort_index()
+    ).dropna(subset=["prev_var1_time", "next_var2_time"])
+    if bracketed.empty:
+        return pd.DataFrame(columns=["primary", "qa_column", "secondary"])
+    bracketed = bracketed.rename(columns={
+        "prev_var1_time": "primary",
+        "next_var2_time": "secondary",
+    })
+    bracketed["qa_column"] = bracketed["qa_column"].astype(int)
+    return bracketed[["primary", "qa_column", "secondary"]]
+
+def prep_kde_data(kde_df):
+    """Pair each peak with its bracketing green-up advanced and green-down onset, per pixel.
+
+    For each pixel, finds all peaks and matches each one with the most recent
+    green-up advanced event before it and the earliest green-down onset event
+    after it (within that same pixel). Peaks that cannot be fully bracketed are
+    dropped. Results from all pixels are then pooled into a single DataFrame.
+
+    Parameters
+    ----------
+    kde_df : pandas.DataFrame
+        Output of assemble_kde_data. Index is year.DOY (float), columns include
+        i, j (pixel indices), green_up_advanced (bool), peaks (float QA or NaN),
+        green_down_onset (bool).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns:
+            green_up_advanced : float — year.DOY of the bracketing green-up advanced event.
+            peak_qa           : int   — QA indicator of the peak (0=Good, 1=Fair, 2=Poor).
+            green_down_onset  : float — year.DOY of the bracketing green-down onset event.
+        Each row is one fully-bracketed peak. Duplicates across pixels are retained.
+    """
+
+    print(f"prep kde started at: {datetime.datetime.now()}")
+
+    pixel_groups = [pixel_df for _, pixel_df in kde_df.groupby(["i", "j"])]
+
+    with multiprocessing.Pool(processes=os.cpu_count()) as pool:
+        results = pool.map(prep_kde_pixel_worker, pixel_groups)
+
+    frames = [df for df in results if not df.empty]
+    if not frames:
+        return pd.DataFrame(columns=["primary", "qa_column", "secondary"])
+    print(f"prep kde finished at: {datetime.datetime.now()}")
+    return pd.concat(frames, ignore_index=True)
+
+
+def gap_rectangles(gap_starts, gap_ends):
+    """Convert data gap intervals into heatmap cell coordinates.
+
+    For each gap, finds every year/quarter cell it overlaps and returns the
+    proportional position of the gap within that cell (matching how axvspan
+    renders gaps in single_plot, but mapped onto the heatmap grid).
+
+    Parameters
+    ----------
+    gap_starts, gap_ends : array-like of timezone-aware datetime
+
+    Returns
+    -------
+    list of (year, q_idx, x_offset, x_width)
+        x_offset and x_width are in [0, 1] relative to the cell width.
+    """
+    import calendar as _cal
+    quarters_def = [(1, 3), (4, 6), (7, 9), (10, 12)]
+    rects = []
+    for gs, ge in zip(gap_starts, gap_ends):
+        for year in range(gs.year, ge.year + 1):
+            for q_idx, (m_start, m_end) in enumerate(quarters_def):
+                q_start = datetime.datetime(year, m_start, 1, tzinfo=datetime.timezone.utc)
+                last_day = _cal.monthrange(year, m_end)[1]
+                q_end = datetime.datetime(year, m_end, last_day, 23, 59, 59,
+                                            tzinfo=datetime.timezone.utc)
+                q_duration = (q_end - q_start).total_seconds()
+                clipped_start = max(gs, q_start)
+                clipped_end = min(ge, q_end)
+                if clipped_end <= clipped_start or q_duration <= 0:
+                    continue
+                x_offset = (clipped_start - q_start).total_seconds() / q_duration
+                x_width = (clipped_end - clipped_start).total_seconds() / q_duration
+                rects.append((year, q_idx, x_offset, x_width))
+    return rects
+
+
+def parse_mask_cells(mask_cells):
+    """Parse a list of 'YYYY Quarter' strings into (year, q_idx) tuples.
+
+    Parameters
+    ----------
+    mask_cells : list of str
+        Each entry is '<year> <quarter>', e.g. '2015 Apr-Jun'.
+        Valid quarter labels: 'Jan-Mar', 'Apr-Jun', 'Jul-Sep', 'Oct-Dec'.
+
+    Returns
+    -------
+    list of (int, int)
+        (year, q_idx) pairs where q_idx is 0–3.
+    """
+    quarter_map = {"Jan-Mar": 0, "Apr-Jun": 1, "Jul-Sep": 2, "Oct-Dec": 3}
+    result = []
+    for entry in mask_cells:
+        parts = entry.strip().split()
+        if len(parts) != 2:
+            raise ValueError(f"Invalid mask entry '{entry}'. Expected '<year> <quarter>'.")
+        year = int(parts[0])
+        quarter = parts[1]
+        if quarter not in quarter_map:
+            raise ValueError(f"Unknown quarter '{quarter}'. Must be one of {list(quarter_map)}.")
+        result.append((year, quarter_map[quarter]))
+    return result
+
+
+def annotate_pairwise_significance(ax, groups):
+    """Draw pairwise Mann-Whitney U significance brackets above a boxplot.
+
+    Compares every pair of groups (by their 1-indexed boxplot position) with
+    a two-sided Mann-Whitney U test. Brackets are stacked bottom-to-top by
+    increasing span (adjacent groups first) so they don't overlap. Pairs with
+    fewer than 2 samples in either group are skipped (test undefined).
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axes already containing the boxplot to annotate.
+    groups : list of array-like
+        The same group arrays passed to ax.boxplot, in boxplot position order.
+    """
+    pairs = [(a, b) for a in range(len(groups)) for b in range(a + 1, len(groups))]
+    pairs = [p for p in pairs if len(groups[p[0]]) >= 2 and len(groups[p[1]]) >= 2]
+    if not pairs:
+        return
+
+    pairs.sort(key=lambda p: p[1] - p[0])
+
+    y_max = max(g.max() for g in groups if len(g))
+    y_min = min(g.min() for g in groups if len(g))
+    y_range = (y_max - y_min) or abs(y_max) or 1.0
+    step = y_range * 0.08
+
+    for level, (a, b) in enumerate(pairs):
+        _, p_value = mannwhitneyu(groups[a], groups[b], alternative="two-sided")
+        if p_value < 0.001:
+            sig = "***"
+        elif p_value < 0.01:
+            sig = "**"
+        elif p_value < 0.05:
+            sig = "*"
+        else:
+            sig = "ns"
+
+        y = y_max + step * (1 + level * 1.6)
+        x1, x2 = a + 1, b + 1
+        ax.plot([x1, x1, x2, x2], [y, y + step * 0.2, y + step * 0.2, y],
+                color="black", linewidth=1)
+        ax.text((x1 + x2) / 2, y + step * 0.25, sig, ha="center", va="bottom", fontsize=10)
+
+    ax.set_ylim(top=y_max + step * (1 + len(pairs) * 1.6) + step)
+
+
+def extract_pixel_timing_OHE(nc, i, j, vars= None, qa_var = 'pks'):
+    frames = {}
+    if vars is None:
+        vars = ['pks','trgs','midUP','midDOWN']
+
+    for var in vars:
+        var = f.coerce_varname_to_var_x(var)
+
+        var_raw = f.remove_nan(nc.variables[var][i,j,:])
+        if len(var_raw) <1:
+            continue
+        var_dt = pd.to_datetime(var_raw, unit='s',utc=True)
+        doy = var_dt.year + var_dt.day_of_year / 1000
+        frames[var] = pd.Series(index=doy,dtype=bool)
+
+    qa_var = f.parse_qa_var_from_str(qa_var)
+    if qa_var is not None:
+        qa_x = f.coerce_varname_to_var_x(qa_var)
+        qa_x_raw = np.array(nc.variables[qa_x][i, j, :])
+        qa_mask = ~np.isnan(qa_x_raw)
+        if len(qa_x_raw) <1:
+            pass
+        qa_dt = pd.to_datetime(qa_x_raw[qa_mask], unit="s", utc=True)
+        qa_doy = qa_dt.year + qa_dt.day_of_year / 1000
+        qa = np.array(nc.variables[qa_var][i, j, :])[qa_mask].astype(int)
+        frames[qa_var] = pd.Series(index=qa_doy, data= qa)
+    return pd.DataFrame(frames)
