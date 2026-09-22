@@ -8,10 +8,44 @@ import multiprocessing
 from functools import partial
 import warnings
 
-from base import PixelCalcBase
+# from pixel_metric_calcs.base import PixelCalcBase
 import functions as f
 
 _GLOBALS = {}
+
+
+class PixelCalcBase:
+    def __init__(self, lakeID, out_folder, variable, version, metric_name, time_splits = None):
+        self.out_folder = out_folder
+        self.e_path = os.path.join(out_folder,"extract",variable,f"{lakeID}.nc")
+        self.p_path = os.path.join(out_folder,"phenology",variable,f"{lakeID}.nc")
+        self.version = version
+        self.variable = variable
+        self.lakeID = lakeID
+        self.metric_name = metric_name
+        self.valid_coords = f.valid_index_pairs(self.e_path)
+
+    def build_path(self):
+        pass
+
+    def read_input(self):
+        pass
+
+    def calculate(self):
+        pass
+
+    def write_output(self):
+        pass
+
+    def read_cached_metric(self):
+        pass
+
+    def run(self):
+        self.build_path()
+        self.read_input()
+        self.calculate()
+        self.write_output()
+
 
 def _init_worker(p_path, e_path):
     """Initialise per-process globals for multiprocessing metric computation.
@@ -107,7 +141,10 @@ def _evaluate_bloom_probability_rows(args):
 
 
 class SpatialAgg(PixelCalcBase):
-    # self.__init__(metric_name = "background_median")
+    def __init__(self, *args, **kwargs):
+
+        kwargs = kwargs | {'metric_name': "background_median"}
+        super().__init__(*args, **kwargs)
     def build_path(self):
         out_dir = os.path.join(
                 self.out_folder,
@@ -126,6 +163,7 @@ class SpatialAgg(PixelCalcBase):
             lat = np.asarray(nc.variables["lat"][:])
             lon = np.asarray(nc.variables["lon"][:])
             t_all = f.unix_to_datenum(nc.variables["time"][:])
+            self.datenum_arr = t_all
 
             variable_name = getattr(nc, "variable")
             data_var = nc.variables[variable_name]
@@ -136,7 +174,7 @@ class SpatialAgg(PixelCalcBase):
             nlon = len(nc.dimensions["lon"])
 
             coords = np.asarray(self.valid_coords, dtype=int)
-
+            self.coords = coords
             # Remove border cells once
             interior_mask = (
             (coords[:, 0] >= 1) & (coords[:, 0] < nlat - 1) &
@@ -159,8 +197,8 @@ class SpatialAgg(PixelCalcBase):
             ii = i_idx - 1
             jj = j_idx - 1
 
-            lat_vals = lat[i_idx]
-            lon_vals = lon[j_idx]
+            self.lat_vals = lat[i_idx]
+            self.lon_vals = lon[j_idx]
 
             n_pixels = len(coords)
             # netcdf path accumulates a (ntime, n_pixels) array and writes it in one
@@ -188,8 +226,9 @@ class SpatialAgg(PixelCalcBase):
                 ma_values = median_grid[ii, jj]
 
                 values[n, :] = ma_values
+            self.values = values
 
-    def write_output(self, t_all, i_idx, j_idx, lat_vals, lon_vals, values):
+    def write_output(self):
         """Write spatial_aggregation() results to a compressed (time, pixel) NetCDF cache.
 
         lat/lon are stored once per pixel rather than once per row (the CSV's main
@@ -197,6 +236,11 @@ class SpatialAgg(PixelCalcBase):
         - the only access pattern plot_background_pts uses - pulls exactly one
         contiguous chunk instead of scanning the whole file.
         """
+        t_all = self.datenum_arr
+        lat_vals = self.lat_vals
+        lon_vals = self.lon_vals
+        i_idx = self.coords[:, 0]
+        j_idx = self.coords[:, 1]
         n_pixels = len(i_idx)
         with netCDF4.Dataset(self.save_fp, "w") as ds:
             ds.createDimension("time", len(t_all))
@@ -214,7 +258,7 @@ class SpatialAgg(PixelCalcBase):
                 fill_value=np.nan, zlib=True, complevel=4,
                 chunksizes=chunksizes,
             )
-            ma_var[:, :] = values
+            ma_var[:, :] = self.values
 
     def read_cached_metric(self):
         """Open a cached aggregation NetCDF file and rebuild the pixel lookup index."""
