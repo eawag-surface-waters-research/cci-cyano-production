@@ -642,7 +642,7 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
 
                 file.write(f"    {label}:\n")
                 if "n_peaks" in summary_types:
-                    file.write(f"        Number of Peaks: {eda_instance.count_extrema(i, j, start=start, end=end, peaks = True)}\n")
+                    file.write(f"        Number of Peaks: {count_extrema(eda_instance.p_path,i, j, start=start, end=end, peaks = True)}\n")
                 if "r2" in summary_types:
                     file.write(f"        R2: {round(eda_instance.pixel_r2(i, j, start=start, end=end), 4)}\n")
                 if "rmse" in summary_types:
@@ -2232,7 +2232,7 @@ def extract_pixel_timing_OHE(nc, i, j, vars= None, qa_var = 'pks'):
     for var in vars:
         var = f.coerce_varname_to_var_x(var)
 
-        var_raw = f.remove_nan(nc.variables[var][i,j,:])
+        var_raw = remove_nan(nc.variables[var][i,j,:])
         if len(var_raw) <1:
             continue
         var_dt = pd.to_datetime(var_raw, unit='s',utc=True)
@@ -2251,3 +2251,81 @@ def extract_pixel_timing_OHE(nc, i, j, vars= None, qa_var = 'pks'):
         qa = np.array(nc.variables[qa_var][i, j, :])[qa_mask].astype(int)
         frames[qa_var] = pd.Series(index=qa_doy, data= qa)
     return pd.DataFrame(frames)
+
+def load_extract_meta_from_path(e_path):
+    with netCDF4.Dataset(e_path) as nc:
+        extracted_globals= {
+            "lat": np.asarray(nc.variables["lat"]),
+            "lon": np.asarray(nc.variables["lon"]),
+            "t_all":    unix_to_datenum(nc.variables["time"]),
+            "variable": getattr(nc, "variable"),
+            "qa":       getattr(nc, "qa"),
+        }
+    return extracted_globals
+
+
+def load_pixel_cs_from_path(p_path,i,j):
+    with netCDF4.Dataset(p_path) as nc:
+        smoothing = float(nc.variables["smoothing_parameter"][i, j])
+        pks_x_raw = np.array(nc.variables["pks_x"][i, j, :])
+        pk_mask   = ~np.isnan(pks_x_raw)
+        pks_x  =unix_to_datetime(pks_x_raw[pk_mask])
+        pks_y  = np.array(nc.variables["pks_y"][i, j, :])[pk_mask]
+        pks_qa = np.array(nc.variables["pks_qa"][i, j, :])[pk_mask]
+        trgs_x_raw = np.array(nc.variables["trgs_x"][i, j, :])
+        trg_mask   = ~np.isnan(trgs_x_raw)
+        trgs_x  = unix_to_datetime(trgs_x_raw[trg_mask])
+        trgs_y  = np.array(nc.variables["trgs_y"][i, j, :])[trg_mask]
+        trgs_qa = np.array(nc.variables["trgs_qa"][i, j, :])[trg_mask]
+        midUP_x    = unix_to_datetime(remove_nan(nc.variables["green_up_mid_x"][i, j, :]))
+        midUP_y    = remove_nan(nc.variables["green_up_mid_y"][i, j, :])
+        midDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_mid_x"][i, j, :]))
+        midDOWN_y  = remove_nan(nc.variables["green_down_mid_y"][i, j, :])
+        onsetUP_x    = unix_to_datetime(remove_nan(nc.variables["green_up_onset_x"][i, j, :]))
+        onsetUP_y    = remove_nan(nc.variables["green_up_onset_y"][i, j, :])
+        onsetDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_onset_x"][i, j, :]))
+        onsetDOWN_y  = remove_nan(nc.variables["green_down_onset_y"][i, j, :])
+        advUP_x    = unix_to_datetime(remove_nan(nc.variables["green_up_advanced_x"][i, j, :]))
+        advUP_y    = remove_nan(nc.variables["green_up_advanced_y"][i, j, :])
+        advDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_advanced_x"][i, j, :]))
+        advDOWN_y  = remove_nan(nc.variables["green_down_advanced_y"][i, j, :])
+
+        gap_starts = unix_to_datetime(remove_nan(nc.variables["data_gap_start"][i, j, :]))
+        gap_ends   = unix_to_datetime(remove_nan(nc.variables["data_gap_end"][i, j, :]))
+    return {
+        "smoothing": smoothing,
+        "pks_x": pks_x, "pks_y": pks_y, "pks_qa": pks_qa,
+        "trgs_x": trgs_x, "trgs_y": trgs_y, "trgs_qa": trgs_qa,
+        "midUP_x": midUP_x, "midUP_y": midUP_y,
+        "midDOWN_x": midDOWN_x, "midDOWN_y": midDOWN_y,
+        "onsetUP_x": onsetUP_x, "onsetUP_y": onsetUP_y,
+        "onsetDOWN_x": onsetDOWN_x, "onsetDOWN_y": onsetDOWN_y,
+        "advUP_x": advUP_x, "advUP_y": advUP_y,
+        "advDOWN_x": advDOWN_x, "advDOWN_y": advDOWN_y,
+        "gap_starts": gap_starts, "gap_ends": gap_ends,
+    }
+
+
+def count_extrema(p_path, latitude_idx, longitude_idx, start= 0, end= 9999, peaks = True):
+    """Return the number of detected peaks for a pixel within a year range.
+
+    Parameters
+    ----------
+    latitude_idx : int
+        Row (lat) index of the pixel.
+    longitude_idx : int
+        Column (lon) index of the pixel.
+    start : int, optional
+        First year to include (inclusive). 0 = earliest in the series.
+    end : int, optional
+        Last year to include (inclusive). 9999 = latest in the series.
+
+    Returns
+    -------
+    int
+        Number of peaks falling within the specified year range.
+    """
+    var = "pks" if peaks else "trgs"
+    pixel_data = load_pixel_cs_from_path(p_path,latitude_idx, longitude_idx)
+    plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=pixel_data, variables=[var])
+    return len(plotting_data[var][0])

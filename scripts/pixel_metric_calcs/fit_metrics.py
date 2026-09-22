@@ -11,6 +11,101 @@ import warnings
 from base import PixelCalcBase
 import functions as f
 
+_GLOBALS = {}
+
+def _init_worker(p_path, e_path):
+    """Initialise per-process globals for multiprocessing metric computation.
+
+    Called once per worker process by multiprocessing.Pool. Loads the parameter
+    and extract NetCDF datasets into module-level _GLOBALS so they are reused
+    across all pixel-level calls within the same worker.
+
+    Parameters
+    ----------
+    p_path : str
+        Path to the phenology parameter NetCDF file.
+    e_path : str
+        Path to the extract NetCDF file containing satellite observations.
+    """
+    nc_p = netCDF4.Dataset(p_path)
+    nc_e = netCDF4.Dataset(e_path)
+
+    variable = getattr(nc_e, "variable")
+    qa_name = getattr(nc_e, "qa")
+
+    time_raw = nc_e.variables["time"][:]
+    t_all = f.unix_to_datenum(time_raw)
+
+    # Convert once, not per pixel
+    time_dt = np.array(f.datenum_to_datetime(t_all))
+    years_all = np.array([d.year for d in time_dt])
+
+    smoothing_all = np.asarray(nc_p.variables["smoothing_parameter"][:])
+    values_all = np.asarray(nc_e.variables[variable][:])
+    qa_all = np.asarray(nc_e.variables[qa_name][:])
+
+    lats = nc_e.variables["lat"][:]
+    lons = nc_e.variables["lon"][:]
+
+    _GLOBALS["nc_p"] = nc_p
+    _GLOBALS["nc_e"] = nc_e
+    _GLOBALS["variable"] = getattr(nc_e, "variable")
+    _GLOBALS["qa"] = getattr(nc_e, "qa")
+    _GLOBALS["t_all"] = t_all
+    _GLOBALS["years_all"] = years_all
+    _GLOBALS["smoothing_all"] = smoothing_all
+    _GLOBALS["values_all"] = values_all
+    _GLOBALS["qa_all"] = qa_all
+    _GLOBALS["lats"] = lats
+    _GLOBALS["lons"] = lons
+
+
+def _init_kde_worker(p_path, var_names):
+    """Initialise per-process globals for KDE pixel extraction.
+
+    Called once per worker process by multiprocessing.Pool. Preloads all
+    required phenology arrays as numpy arrays so per-pixel work is pure
+    in-memory indexing with no NetCDF I/O in the hot path.
+
+    Parameters
+    ----------
+    p_path : str
+        Path to the phenology NetCDF file.
+    var_names : list of str
+        NetCDF variable names to preload (determined by assemble_kde_data).
+    """
+    with netCDF4.Dataset(p_path) as nc:
+        for var in var_names:
+            v = nc.variables[var]
+            nlat, nlon, nrec = v.shape
+            arr = np.empty((nlat, nlon, nrec), dtype=v.dtype)
+            # read pixel by pixel (v[i, j, :]) rather than a bulk v[:] read - netCDF4
+            # 1.7.4 silently misattributes data between pixels when read this way for
+            # files with an unlimited 'record' dimension, verified against the trusted
+            # per-pixel access pattern used elsewhere in this class (e.g. _load_pixel_data)
+            for i in range(nlat):
+                for j in range(nlon):
+                    arr[i, j, :] = v[i, j, :]
+            _GLOBALS[f"kde_{var}"] = arr
+
+
+def _init_bloom_probability_worker(kde):
+    _GLOBALS["bloom_kde"] = kde
+
+
+def _evaluate_bloom_probability_rows(args):
+    """Evaluate KDE density for a chunk of y-grid rows."""
+    y_rows, xi = args
+    kde = _GLOBALS["bloom_kde"]
+
+    Xi, Yi = np.meshgrid(xi, y_rows)
+    density = kde(
+        np.vstack([Xi.ravel(), Yi.ravel()])
+    ).reshape(Xi.shape)
+
+    return density
+
+
 class SpatialAgg(PixelCalcBase):
     # self.__init__(metric_name = "background_median")
     def build_path(self):
