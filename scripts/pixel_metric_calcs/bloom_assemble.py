@@ -81,15 +81,12 @@ class BloomAssemble(PixelCalcBase):
     def read_input(self):
         """Resolve the source files used to calculate bloom events."""
         self.p_path = Path(self.p_path).resolve()
-        self.e_path = Path(self.e_path).resolve()
 
         if not self.p_path.is_file():
             raise FileNotFoundError(f"Phenology file not found: {self.p_path}")
 
-        if not self.e_path.is_file():
-            raise FileNotFoundError(f"Extract file not found: {self.e_path}")
-
-        return self.p_path, self.e_path
+        return self.p_path
+    
 
     def calculate(
         self,
@@ -104,6 +101,7 @@ class BloomAssemble(PixelCalcBase):
             qa_var=qa_var,
         )
         return self.bloom_assembly_df
+
 
     def _create_output(self, ds, n_events=None, block_size=1000):
         """
@@ -369,17 +367,9 @@ class BloomAssemble(PixelCalcBase):
         """
 
         print(f"assemble bloom events started at: {datetime.datetime.now()}")
-        g = self._load_extracted_globals()
-        lats = g["lat"]
-        lons = g["lon"]
 
         if coords is None:
             coords = self.valid_coords
-
-        inset_coords = [
-            (i, j) for (i, j) in coords
-            if self.prepped_geom.contains(Point(lons[j], lats[i]))
-        ]
 
         # Compute the full set of NetCDF variable names needed so the initializer
         # can preload them as numpy arrays — eliminates per-pixel disk reads.
@@ -401,11 +391,11 @@ class BloomAssemble(PixelCalcBase):
             primary_vars=primary_vars, secondary_vars=secondary_vars, qa_var=qa_var,
         )
         n_workers = min(10, os.cpu_count() or 4)
-        chunksize = max(1, len(inset_coords) // (n_workers * 4))
+        chunksize = max(1, len(coords) // (n_workers * 4))
         with multiprocessing.Pool(
             initializer=_init_bloom_assemble_worker, initargs=(self.p_path, var_names), processes=n_workers
         ) as pool:
-            results = list(pool.imap_unordered(worker, inset_coords, chunksize=chunksize))
+            results = list(pool.imap_unordered(worker, coords, chunksize=chunksize))
 
         frames = [df for df in results if not df.empty]
         if not frames:
