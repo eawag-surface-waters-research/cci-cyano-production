@@ -14,6 +14,7 @@ class SpatialAgg(PixelCalcBase):
 
         kwargs = kwargs | {'metric_name': "background_median"}
         super().__init__(*args, **kwargs)
+        
     def build_path(self):
         out_dir = os.path.join(
                 self.out_folder,
