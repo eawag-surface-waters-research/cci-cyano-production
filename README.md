@@ -134,7 +134,7 @@ Each JSON file in `args/` controls one run. All keys except `variable`, `qa`, `s
 | `analysis` | `false` | Run the post-processing analysis stage |
 | `maps` | `false` | Save metric maps (R², MAD, RMSE, correlation, values per pixel) as PNG files |
 | `pixel_plots` | `false` | Path to a JSON pixel dictionary file (see below), or `false` to skip pixel plots |
-| `timing_plots` | `false` | Save lake-wide bloom-timing outputs to `plots/timing_plots/`: DOY panels (peaks and green-up mid), a lake-wide year×quarter heatmap, one KDE bloom-timing plot per `kde_qa` entry, and lake-wide QA boxplots (see [Bloom-timing KDE](#bloom-timing-kde)) |
+| `timing_plots` | `false` | Save lake-wide bloom-timing outputs to `plots/timing_plots/`: DOY panels (peaks and green-up mid), a lake-wide year×quarter heatmap, one KDE bloom-timing plot per `kde_qa` entry, and lake-wide QA boxplots (see [Bloom Assembly](#bloom-assembly)) |
 | `comparison` | `false` | Run cross-version comparison plots |
 | `comparison_classes` | `["chla21","chla3","phycocyanin3"]` | Dataset labels used for comparison; each must correspond to a configured `PhenologyVisualization` instance. Currently `chla3`/`phycocyanin3` resolve to the `v3.0` folder (see `_class_paths` in `main.py`) |
 | `comparison_plot_types` | `["chla21 vs chla3","chla21 vs phyco","chla3 vs phyco","triple"]` | Which pairwise or triple comparisons to generate |
@@ -214,16 +214,16 @@ vis = PhenologyVisualization(
 | `values_per_pixel(time_split)` | `{(i,j): count}` of valid observations; cached per `save_format` |
 | `spatial_aggregation()` | Compute 3×3 neighbourhood medians for all pixels and timesteps; cached to CSV or NetCDF depending on `save_format` (see below) |
 | `set_save_format(fmt)` *(classmethod)* | Set the on-disk cache format used by `spatial_aggregation()` and the metric caches for all instances: `"csv"` or `"netcdf"` |
-| `lake_bloom_kde(ax, qa_value, start_year, end_year, plt_kwargs, probability, interval, resolution, x_max, y_max)` | Lake-wide 2D KDE of bloom timing (green-up advance DOY vs. green-down onset DOY), or — with `probability=True` — a bloom-window probability contour. See [Bloom-timing KDE](#bloom-timing-kde) |
+| `lake_bloom_kde(ax, qa_value, start_year, end_year, plt_kwargs, probability, interval, resolution, x_max, y_max)` | Lake-wide 2D KDE of bloom timing (green-up advance DOY vs. green-down onset DOY), or — with `probability=True` — a bloom-window probability contour. See [Bloom Assembly](#bloom-assembly) |
 | `calculate_bloom_probabilities_from_kde(qa_value, start_year, end_year, interval, x_max, y_max, resolution, save_path)` | Probability of an `interval`-day bloom window under the fitted KDE, evaluated on a `resolution`-day grid; returns a DataFrame and optionally caches the grid to NetCDF via `save_path` |
 
 The metric methods (`r2_scores`, `MAD_scores`, `RMSE_scores`, `correlation_scores`, `values_per_pixel`) each accept a `time_split` argument: a single-element list containing one `[start, end]` year pair, e.g. `[[2003, 2012]]` or `[[0, 9999]]` for the full series. Results are cached to CSV or NetCDF depending on `save_format`; the cache filename encodes the time window so different windows are stored independently.
 
 All metric and aggregation computations are cached (CSV or NetCDF, per `save_format`) on first call and loaded from cache on subsequent calls. Interactive plot methods require an interactive Matplotlib backend (`%matplotlib widget`).
 
-### Bloom-timing KDE
+### Bloom Assembly
 
-`lake_bloom_kde` fits a 2D Gaussian KDE (via `scipy.stats.gaussian_kde`) to bloom events pooled across every valid pixel in the lake, pairing each detected peak with its bracketing green-up advanced (start) and green-down onset (end) events. Building this event set is expensive (`assemble_kde_data` + `prep_kde_data` scan every pixel's phenology arrays in parallel), so the bracketed events are cached once per lake/variable/version to `kde_events.csv` (see [Output Format](#output-format) below) and reused across calls with different `qa_value` or year-range filters.
+`lake_bloom_kde` fits a 2D Gaussian KDE (via `scipy.stats.gaussian_kde`) to bloom events pooled across every valid pixel in the lake, pairing each detected peak with its bracketing green-up advanced (start) and green-down onset (end) events. Building this event set is expensive (`assemble_bloom_data` + `prep_kde_data` scan every pixel's phenology arrays in parallel), so the bracketed events are cached once per lake/variable/version to `bloom_events.nc` (see [Output Format](#output-format) below) and reused across calls with different `qa_value` or year-range filters.
 
 Two plotting modes, selected by `probability`:
 - **Density (default, `probability=False`)** — a filled contour of the raw KDE density over green-up advance DOY (x) vs. green-down onset DOY (y).
@@ -283,13 +283,16 @@ This applies whenever `out_folder` is reassigned to the lake analysis path, whic
 │   │   └── calculated_values/
 │   │       ├── metrics/                # r2 , MAD , RMSE , correlation , values_per_pixel
 │   │       │   └── {variable}/
-│   │       │       ├── ID{lakeID}_{start}_{end}.nc   # start and end years
+│   │       │       ├── ID{lakeID}_{start}_{end}.nc   # start and end years, inclusive
 │   │       ├── spatial_aggregation_values/
 │   │       │   └── {variable}/
-│   │       │       └── aggregation_background_values.{csv|nc} # format set by save_format
-│   │       └── kde_data/
+│   │       │       └── ID{lakeID}_background_agg.nc
+│   │       ├── bloom_assembly/
+│   │       │   └── {variable}/
+│   │       │       └── ID{lakeID}_{start}_{end}.nc  # start and end years, inclusive
+│   │       └── bloom_prob/
 │   │           └── {variable}/
-│   │               └── kde_events.csv  # bracketed peak events cached by build_kde_path
+│   │               └── ID{lakeID}_{start}_{end}_{qa_label}_i{interval}_r{resolution}_x{x_max}_y{y_max}
 │   └── v2.1/                           # = out_folder for a v2.1 run; same layout as v3.0/
 │
 └── lake_analysis/                      # = dirname(dirname(out_folder))/lake_analysis

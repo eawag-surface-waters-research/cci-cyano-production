@@ -4,8 +4,11 @@ import logging
 import netCDF4
 import numpy as np
 import pandas as pd
+import datetime
 import multiprocessing
 from functools import partial
+from shapely.geometry import Point
+from scipy.stats import pearsonr, gaussian_kde
 import warnings
 from contextlib import contextmanager
 import functions as f
@@ -61,35 +64,6 @@ def _init_worker(p_path, e_path):
     _GLOBALS["lons"] = lons
 
 
-def _init_kde_worker(p_path, var_names):
-    """Initialise per-process globals for KDE pixel extraction.
-
-    Called once per worker process by multiprocessing.Pool. Preloads all
-    required phenology arrays as numpy arrays so per-pixel work is pure
-    in-memory indexing with no NetCDF I/O in the hot path.
-
-    Parameters
-    ----------
-    p_path : str
-        Path to the phenology NetCDF file.
-    var_names : list of str
-        NetCDF variable names to preload (determined by assemble_kde_data).
-    """
-    with netCDF4.Dataset(p_path) as nc:
-        for var in var_names:
-            v = nc.variables[var]
-            nlat, nlon, nrec = v.shape
-            arr = np.empty((nlat, nlon, nrec), dtype=v.dtype)
-            # read pixel by pixel (v[i, j, :]) rather than a bulk v[:] read - netCDF4
-            # 1.7.4 silently misattributes data between pixels when read this way for
-            # files with an unlimited 'record' dimension, verified against the trusted
-            # per-pixel access pattern used elsewhere in this class (e.g. _load_pixel_data)
-            for i in range(nlat):
-                for j in range(nlon):
-                    arr[i, j, :] = v[i, j, :]
-            _GLOBALS[f"kde_{var}"] = arr
-
-
 def _init_bloom_probability_worker(kde):
     _GLOBALS["bloom_kde"] = kde
 
@@ -107,332 +81,6 @@ def _evaluate_bloom_probability_rows(args):
     return density
 
 
-
-
-class KDE(PixelCalcBase):
-
-    def build_path(self):
-        """Return the output directory and file path for the cached KDE events CSV.
-
-        Returns
-        -------
-        base : str
-            Directory path where the CSV will be written.
-        file_path : str
-            Full path to the CSV file.
-        """
-
-        start_label = self.start_year
-        end_label = self.end_year
-        # lake_name = f.sanitize_filename(self.ID_to_name(int(self.lakeID)).replace(" ", ""))
-        out_dir = os.path.join(
-            self.data_folder,
-            "calculated_values",
-            "kde_data",
-            self.variable,
-        )
-        filename = f"ID{self.lakeID}_{start_label}_{end_label}.nc"
-        os.makedirs(out_dir, exist_ok=True)
-        self.save_fp = os.path.join(out_dir, filename)
-
-    def read_input(self):
-        pass
-
-    def calculate(self):
-        pass
-
-    def write_output(self):
-        """Write cached KDE event data to NetCDF."""
-        columns = ["primary", "qa_column", "secondary"]
-
-        with netCDF4.Dataset(self.save_fp, "w") as ds:
-            ds.createDimension("event", len(self.kde_df))
-
-            for column in columns:
-                values = self.kde_df[column].to_numpy()
-
-                if column == "qa_column":
-                    variable = ds.createVariable(column, "f4", ("event",))
-                    variable[:] = values
-                else:
-                    variable = ds.createVariable(column, "f8", ("event",))
-                    variable[:] = values
-
-            ds.lake_id = str(self.lakeID)
-            ds.version = str(self.version)
-            ds.variable = str(self.variable)
-
-    def read_cached_metric(self):
-        """Read cached KDE event data from NetCDF."""
-        with netCDF4.Dataset(self.save_fp, "r") as ds:
-            required = {"primary", "qa_column", "secondary"}
-            missing = required.difference(ds.variables)
-
-            if missing:
-                raise ValueError(
-                    f"KDE cache {self.save_fp} is missing variables: {sorted(missing)}"
-                )
-
-            return pd.DataFrame({
-                "primary": np.asarray(ds.variables["primary"][:]),
-                "qa_column": np.asarray(ds.variables["qa_column"][:]),
-                "secondary": np.asarray(ds.variables["secondary"][:]),
-            })
-
-        
-    def _extract_pixel_kde_events(self, nc, i, j,
-                                   primary_vars=None, secondary_vars=None,
-                                   qa_var="pks", arrays=None):
-        """Extract bracketing and peak events for a single pixel.
-
-        Parameters
-        ----------
-        nc : netCDF4.Dataset or None
-            Open phenology dataset. Ignored when arrays is provided.
-        i, j : int
-            Pixel row and column indices.
-        primary_vars : list of str, optional
-            NetCDF variable names whose events mark the start of a bloom bracket
-            (e.g. green-up). Defaults to ['green_up_advanced'].
-        secondary_vars : list of str, optional
-            NetCDF variable names whose events mark the end of a bloom bracket
-            (e.g. green-down onset). Defaults to ['green_down_onset'].
-        qa_var : str, optional
-            Short name for the peak QA variable (passed through parse_qa_var_from_str).
-            Defaults to 'pks'.
-        arrays : dict of str -> np.ndarray, optional
-            Preloaded full arrays keyed by NetCDF variable name. When provided,
-            pixel slices are taken from these in-memory arrays instead of reading
-            from nc, which is the fast path used by _kde_pixel_worker.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Columns: year.DOY, i, j, green_up_advanced, peaks, green_down_onset.
-            Empty DataFrame if the pixel has no events.
-        """
-        if primary_vars is None:
-            primary_vars = ["green_up_advanced"]
-        if secondary_vars is None:
-            secondary_vars = ["green_down_onset"]
-
-        def _get(var_name):
-            if arrays is not None:
-                return arrays[var_name][i, j, :]
-            return nc.variables[var_name][i, j, :]
-
-        frames = []
-
-        for var in primary_vars:
-            var_x = f.coerce_varname_to_var_x(var)
-            raw = f.remove_nan(_get(var_x))
-            if len(raw) == 0:
-                continue
-            dt = pd.to_datetime(raw, unit="s", utc=True)
-            frames.append(pd.DataFrame({
-                "year.DOY": dt.year + dt.day_of_year / 1000,
-                "i": i, "j": j,
-                "primary": True,
-                "qa_column": np.nan,
-                "secondary": False,
-            }))
-
-        qa_var_parsed = f.parse_qa_var_from_str(qa_var)
-        if qa_var_parsed is not None:
-            qa_x = f.coerce_varname_to_var_x(qa_var_parsed)
-            qa_x_raw = np.array(_get(qa_x))
-            pk_mask = ~np.isnan(qa_x_raw)
-            if pk_mask.any():
-                pks_dt = pd.to_datetime(qa_x_raw[pk_mask], unit="s", utc=True)
-                frames.append(pd.DataFrame({
-                    "year.DOY": pks_dt.year + pks_dt.day_of_year / 1000,
-                    "i": i, "j": j,
-                    "primary": False,
-                    "qa_column": np.array(_get(qa_var_parsed))[pk_mask].astype(int),
-                    "secondary": False,
-                }))
-
-        for var in secondary_vars:
-            var_x = f.coerce_varname_to_var_x(var)
-            raw = f.remove_nan(_get(var_x))
-            if len(raw) == 0:
-                continue
-            dt = pd.to_datetime(raw, unit="s", utc=True)
-            frames.append(pd.DataFrame({
-                "year.DOY": dt.year + dt.day_of_year / 1000,
-                "i": i, "j": j,
-                "primary": False,
-                "qa_column": np.nan,
-                "secondary": True,
-            }))
-
-        if not frames:
-            return pd.DataFrame(columns=["year.DOY", "i", "j", "primary", "qa_column", "secondary"])
-        return pd.concat(frames, ignore_index=True)
-
-    @staticmethod
-    def _kde_pixel_worker(coord, primary_vars, secondary_vars, qa_var):
-        """Multiprocessing worker for a single pixel's KDE event extraction.
-
-        Uses preloaded numpy arrays from _GLOBALS (populated by _init_kde_worker)
-        for pure in-memory indexing — no NetCDF I/O in the hot path.
-
-        Parameters
-        ----------
-        coord : tuple of int
-            (i, j) grid index pair.
-        primary_vars, secondary_vars : list of str
-            Passed through to the extraction logic.
-        qa_var : str
-            Short name for the peak QA variable.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Same schema as _extract_pixel_kde_events; empty if no events found.
-        """
-        i, j = coord
-        arrays = {k[4:]: v for k, v in _GLOBALS.items() if k.startswith("kde_")}
-        return KDE._extract_pixel_kde_events(
-            None, None, i, j, primary_vars, secondary_vars, qa_var, arrays=arrays
-        )
-
-
-    # MOVE TO PixelCalc
-    def assemble_kde_data(self, primary_vars=None, secondary_vars=None, qa_var="pks"):
-        """Collect bracketing and peak events lake-wide into a DataFrame.
-
-        Iterates all valid pixels inside the 1 km-inset lake boundary and gathers
-        events for each variable type. Each row represents one event occurrence.
-
-        Parameters
-        ----------
-        primary_vars : list of str, optional
-            Variables marking the start of a bloom bracket. Defaults to ['green_up_advanced'].
-        secondary_vars : list of str, optional
-            Variables marking the end of a bloom bracket. Defaults to ['green_down_onset'].
-        qa_var : str, optional
-            Short name for the peak QA variable. Defaults to 'pks'.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Index named 'year.DOY' — a float of the form year + DOY/1000
-            (e.g. 2005.150 = year 2005, day-of-year 150).
-            Columns: i, j, primary (bool), qa_column (float), secondary (bool).
-            Row count equals the total number of events across all variables and pixels.
-        """
-
-        print(f"assemble kde started at: {datetime.datetime.now()}")
-        g = self._load_extracted_globals()
-        lats = g["lat"]
-        lons = g["lon"]
-
-        inset_coords = [
-            (i, j) for (i, j) in self.valid_coords
-            if self.prepped_geom.contains(Point(lons[j], lats[i]))
-        ]
-
-        # Compute the full set of NetCDF variable names needed so the initializer
-        # can preload them as numpy arrays — eliminates per-pixel disk reads.
-        var_names_set = set()
-        _pv = primary_vars if primary_vars is not None else ["green_up_advanced"]
-        _sv = secondary_vars if secondary_vars is not None else ["green_down_onset"]
-        for var in _pv:
-            var_names_set.add(f.coerce_varname_to_var_x(var))
-        qa_var_parsed = f.parse_qa_var_from_str(qa_var)
-        if qa_var_parsed is not None:
-            var_names_set.add(f.coerce_varname_to_var_x(qa_var_parsed))
-            var_names_set.add(qa_var_parsed)
-        for var in _sv:
-            var_names_set.add(f.coerce_varname_to_var_x(var))
-        var_names = list(var_names_set)
-
-        worker = partial(
-            PhenologyVisualization._kde_pixel_worker,
-            primary_vars=primary_vars, secondary_vars=secondary_vars, qa_var=qa_var,
-        )
-        n_workers = min(10, os.cpu_count() or 4)
-        chunksize = max(1, len(inset_coords) // (n_workers * 4))
-        with multiprocessing.Pool(
-            initializer=_init_kde_worker, initargs=(self.p_path, var_names), processes=n_workers
-        ) as pool:
-            results = list(pool.imap_unordered(worker, inset_coords, chunksize=chunksize))
-
-        frames = [df for df in results if not df.empty]
-        if not frames:
-            return pd.DataFrame(columns=["i", "j", "primary", "qa_column", "secondary"])
-        print(f"assemble kde finished at: {datetime.datetime.now()}")
-        return pd.concat(frames, ignore_index=True).set_index("year.DOY")
-
-
-    # MOVE TO PixelCalc
-    def _fit_bloom_kde(self, qa_value = None, start_year = 0, end_year = 9999):
-        """
-        Load/filter cached bloom events and fit a 2D gaussian_kde on
-        (green-up advance DOY, green-down onset DOY).
-
-        Returns
-        -------
-        tuple or None
-            (kde, start, end, qa_filtered_set), or None if there isn't
-            enough data to fit a KDE.
-        """
-        dir_path, file_path = self.build_kde_path()
-        # the cached CSV doesn't retain per-pixel (i, j) identity (only pooled
-        # primary/qa_column/secondary event columns), so unlike compute_and_cache_metric
-        # we can't detect staleness by checking pixel coverage - fall back to comparing
-        # against the source NetCDFs' modification time instead
-        source_mtime = max(os.path.getmtime(self.p_path), os.path.getmtime(self.e_path))
-        cache_is_stale = os.path.isfile(file_path) and os.path.getmtime(file_path) < source_mtime
-
-        if os.path.isfile(file_path) and not cache_is_stale:
-            if self.save_format == "netcdf":
-                compressed_df = self._read_kde_nc(file_path)
-            else:
-                compressed_df = pd.read_csv(file_path)
-        else:
-            if cache_is_stale:
-                warnings.warn(f"Cached KDE events for lake ID {self.lakeID} predate the source data; recomputing.")
-            else:
-                warnings.warn("KDE events need to be calculated. Depending on the lake size this may take a while.")
-            os.makedirs(dir_path, exist_ok=True)
-            df = self.assemble_kde_data()
-            compressed_df = self.prep_kde_data(df)
-            if self.save_format == "netcdf":
-                self._write_kde_netcdf(file_path, compressed_df)
-            else:
-                compressed_df.to_csv(file_path, index=False)
-
-        qa_filtered_set = None
-        if qa_value is not None:
-            if type(qa_value) != set:
-                warnings.warn("qa_value needs to be a set")
-            else:
-                compressed_df = compressed_df[compressed_df['qa_column'].isin(qa_value)]
-                qa_filtered_set = qa_value
-
-        if len(compressed_df) < 2:
-            warnings.warn("Not enough data to plot kde")
-            return None
-
-        years_all = np.unique(list(compressed_df["primary"].astype(int) ) + list(compressed_df["secondary"].astype(int) ))
-        start, end = f.define_year_range(start_year, end_year, years_all)
-        plot_df = f.sort_by_year(compressed_df, start_year=start, end_year=end)
-
-        x = np.round((plot_df["primary"].values % 1) * 1000).astype(int)
-        y = np.round((plot_df["secondary"].values % 1) * 1000).astype(int)
-        y[y< x] += 365
-
-        try:
-            kde = gaussian_kde(np.vstack([x, y]))
-        except np.linalg.LinAlgError:
-            # too few / too degenerate (collinear or duplicate) points for a 2D KDE -
-            # e.g. can happen with a restrictive qa_value filter that leaves very few events
-            warnings.warn(f"Not enough distinct {self.variable} events to plot KDE for lake ID {self.lakeID}.")
-            return None
-
-        return kde, start, end, qa_filtered_set
 
 
 class FitMetric(PixelCalcBase):
@@ -911,6 +559,7 @@ class BloomProb(PixelCalcBase):
             "y_max": float(values["y_max"]),
         }
 
+
     def read_cached_metric(self, file_path):
         """Read cached bloom proabability data from NetCDF."""
         with netCDF4.Dataset(file_path, "r") as ds:
@@ -926,6 +575,7 @@ class BloomProb(PixelCalcBase):
             bloom_df = pd.DataFrame({req_var: np.asarray(ds.variables[req_var][:]) for req_var in required})
             return bloom_df[req_cols]
 
+
     def read_full_cache(self, file_path):
         """Read a bloom-probability cache and return its data and filename metadata."""
         if Path(file_path).suffix == ".nc":
@@ -935,3 +585,69 @@ class BloomProb(PixelCalcBase):
 
         metadata = self._bloom_prob_metadata_from_path(file_path)
         return bloom_df, metadata
+
+
+    def _fit_bloom_kde(self, qa_value = None, start_year = 0, end_year = 9999):
+        """
+        Load/filter cached bloom events and fit a 2D gaussian_kde on
+        (green-up advance DOY, green-down onset DOY).
+
+        Returns
+        -------
+        tuple or None
+            (kde, start, end, qa_filtered_set), or None if there isn't
+            enough data to fit a KDE.
+        """
+        dir_path, file_path = self.build_kde_path()
+        # the cached CSV doesn't retain per-pixel (i, j) identity (only pooled
+        # primary/qa_column/secondary event columns), so unlike compute_and_cache_metric
+        # we can't detect staleness by checking pixel coverage - fall back to comparing
+        # against the source NetCDFs' modification time instead
+        source_mtime = max(os.path.getmtime(self.p_path), os.path.getmtime(self.e_path))
+        cache_is_stale = os.path.isfile(file_path) and os.path.getmtime(file_path) < source_mtime
+
+        if os.path.isfile(file_path) and not cache_is_stale:
+            if self.save_format == "netcdf":
+                compressed_df = self._read_kde_nc(file_path)
+            else:
+                compressed_df = pd.read_csv(file_path)
+        else:
+            if cache_is_stale:
+                warnings.warn(f"Cached KDE events for lake ID {self.lakeID} predate the source data; recomputing.")
+            else:
+                warnings.warn("KDE events need to be calculated. Depending on the lake size this may take a while.")
+            os.makedirs(dir_path, exist_ok=True)
+            df = self.assemble_kde_data()
+            compressed_df = self.prep_kde_data(df)
+            if self.save_format == "netcdf":
+                self.write_output()
+
+        qa_filtered_set = None
+        if qa_value is not None:
+            if type(qa_value) != set:
+                warnings.warn("qa_value needs to be a set")
+            else:
+                compressed_df = compressed_df[compressed_df['qa_column'].isin(qa_value)]
+                qa_filtered_set = qa_value
+
+        if len(compressed_df) < 2:
+            warnings.warn("Not enough data to plot kde")
+            return None
+
+        years_all = np.unique(list(compressed_df["primary"].astype(int) ) + list(compressed_df["secondary"].astype(int) ))
+        start, end = f.define_year_range(start_year, end_year, years_all)
+        plot_df = f.sort_by_year(compressed_df, start_year=start, end_year=end)
+
+        x = np.round((plot_df["primary"].values % 1) * 1000).astype(int)
+        y = np.round((plot_df["secondary"].values % 1) * 1000).astype(int)
+        y[y< x] += 365
+
+        try:
+            kde = gaussian_kde(np.vstack([x, y]))
+        except np.linalg.LinAlgError:
+            # too few / too degenerate (collinear or duplicate) points for a 2D KDE -
+            # e.g. can happen with a restrictive qa_value filter that leaves very few events
+            warnings.warn(f"Not enough distinct {self.variable} events to plot KDE for lake ID {self.lakeID}.")
+            return None
+
+        return kde, start, end, qa_filtered_set
