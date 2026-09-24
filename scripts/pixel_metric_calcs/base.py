@@ -11,7 +11,7 @@ import warnings
 import functions as f
 
 class PixelCalcBase:
-    def __init__(self, lakeID, out_folder, variable, version, metric_name, time_splits = None):
+    def __init__(self, lakeID, out_folder, variable, version, metric_name, start_year=0,end_year=9999):
         self.out_folder = out_folder
         self.e_path = os.path.join(out_folder,"extract",variable,f"{lakeID}.nc")
         self.p_path = os.path.join(out_folder,"phenology",variable,f"{lakeID}.nc")
@@ -19,6 +19,8 @@ class PixelCalcBase:
         self.variable = variable
         self.lakeID = lakeID
         self.metric_name = metric_name
+        self.start_year = start_year
+        self.end_year = end_year
         self.valid_coords = f.valid_index_pairs(self.e_path)
 
     def build_path(self):
