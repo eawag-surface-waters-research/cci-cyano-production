@@ -4,6 +4,7 @@ import logging
 import netCDF4
 import numpy as np
 import pandas as pd
+from abc import abstractmethod
 import multiprocessing
 from functools import partial
 import warnings
@@ -19,8 +20,9 @@ class PixelCalcBase:
         self.variable = variable
         self.lakeID = lakeID
         self.metric_name = metric_name
-        self.start_year = start_year
-        self.end_year = end_year
+        data_start , data_end = f.get_year_edges(self.e_path)
+        self.start_year = max(data_start, start_year)
+        self.end_year = min(data_end, end_year)
         self.valid_coords = f.valid_index_pairs(self.e_path)
 
     def build_path(self):

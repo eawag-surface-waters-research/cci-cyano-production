@@ -169,6 +169,7 @@ def _init_worker(p_path, e_path):
 class FitMetric(PixelCalcBase):
     def __init__(self, *args, **kwargs):
 
+        kwargs = kwargs | {'metric_name': "fit_metrics"}
         super().__init__(*args, **kwargs)
 
     def build_path(self,):
