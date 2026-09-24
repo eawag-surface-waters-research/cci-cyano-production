@@ -1,4 +1,7 @@
 import os
+import sys
+sys.path.append(os.path.abspath('../'))
+sys.path.append(os.path.abspath('./scripts/'))
 from pathlib import Path
 import logging
 import netCDF4
@@ -207,16 +210,17 @@ class BloomAssemble(PixelCalcBase):
 
                 event_start = event_stop
 
-
-    def read_cached_metric(self):
-        """Read cached bloom event data from NetCDF."""
-        with netCDF4.Dataset(self.save_fp, "r") as ds:
+    @staticmethod
+    def read_cached_metric(fp=None):
+        """Read cached bloom event data from NetCDF.
+        Includes optional fp string for stand-alone usage."""
+        with netCDF4.Dataset(fp, "r") as ds:
             required = set(REQ_COLS)
             missing = required.difference(ds.variables)
 
             if missing:
                 raise ValueError(
-                    f"Bloom cache {self.save_fp} is missing variables: "
+                    f"Bloom cache {fp} is missing variables: "
                     f"{sorted(missing)}"
                 )
 
@@ -336,7 +340,7 @@ class BloomAssemble(PixelCalcBase):
             Same schema as _extract_pixel_bloom_events; empty if no events found.
         """
         i, j = coord
-        arrays = {k[4:]: v for k, v in _GLOBALS.items() if k.startswith("bloom_")}
+        arrays = {k.removeprefix('bloom_'): v for k, v in _GLOBALS.items() if k.startswith("bloom_")}
         return BloomAssemble._extract_pixel_bloom_events(
             nc=None, i=i, j=j, primary_vars = primary_vars, secondary_vars = secondary_vars, qa_var = qa_var, arrays=arrays
         )
@@ -397,8 +401,21 @@ class BloomAssemble(PixelCalcBase):
         ) as pool:
             results = list(pool.imap_unordered(worker, coords, chunksize=chunksize))
 
+        [print(df.describe()) for df in results if not df.empty]
         frames = [df for df in results if not df.empty]
         if not frames:
             return pd.DataFrame(columns=REQ_COLS)
         print(f"assemble bloom events finished at: {datetime.datetime.now()}")
         return pd.concat(frames, ignore_index=True)
+
+if __name__ == "__main__":
+    test_bloom = BloomAssemble(lakeID = 3500,
+                               out_folder = "C:/Users/schelian/cci-cyano-production/data/v3.0",
+                               variable = 'chla',
+                               version = '3.0')
+    test_bloom.build_path()
+    test_bloom.read_input()
+    calc_vals = test_bloom.calculate()
+    print(type(calc_vals))
+    print(calc_vals.describe())
+

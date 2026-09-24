@@ -1,4 +1,7 @@
 import os
+import sys
+sys.path.append(os.path.abspath('../'))
+sys.path.append(os.path.abspath('./scripts/'))
 from pathlib import Path
 import logging
 import netCDF4
@@ -90,7 +93,9 @@ class BloomProb(PixelCalcBase):
 
 
     def read_input(self):
-        """Locate bloom assembly cache file."""
+        """Locate bloom assembly cache file.
+        Checks in 'kde_data' folder (legacy name for the data), 
+        if not found in 'bloom_assembly_data' folder."""
 
         filename = (
             f"ID{self.lakeID}_{self.start_year}_{self.end_year}.nc"
@@ -125,18 +130,14 @@ class BloomProb(PixelCalcBase):
     def calculate(self):
         """Calculate and retain the complete result in memory."""
 
-        fit = self._fit_bloom_kde(
-            qa_value=self.qa_value,
-            start_year=self.start_year_filter,
-            end_year=self.end_year_filter,
-        )
+        fit = self._fit_bloom_kde()
 
         if fit is None:
             self.bloom_prob_df = pd.DataFrame()
             return self.bloom_prob_df
 
         self.kde, self.result_start_year, self.result_end_year, self.result_qa = fit
-
+        print('calculate',self.kde)
         self.bloom_prob_df = self._calculate_probability_grid(self.kde)
 
         return self.bloom_prob_df
@@ -257,17 +258,13 @@ class BloomProb(PixelCalcBase):
     def calculate_and_write_chunked(self,block_size = 64):
         """Calculate and write probability windows in row blocks."""
 
-        fit = self._fit_bloom_kde(
-            qa_value=self.qa_value,
-            start_year=self.start_year_filter,
-            end_year=self.end_year_filter,
-        )
+        fit = self._fit_bloom_kde()
 
         if fit is None:
             return None
 
         self.kde, self.result_start_year, self.result_end_year, self.result_qa = fit
-
+        print('calc chunked',type(self.kde))
         xi = np.arange(-self.interval, self.x_max + self.interval, self.resolution)
         yi = np.arange(-self.interval, self.y_max + self.interval, self.resolution)
         n_cells = int(round(self.interval / self.resolution))
@@ -406,7 +403,8 @@ class BloomProb(PixelCalcBase):
             (kde, start, end, qa_filtered_set), or None if there isn't
             enough data to fit a KDE.
         """
-        compressed_df = BloomAssemble.read_cached_metric(self.bloom_assembly_fp)
+        compressed_df = BloomAssemble.read_cached_metric(fp=self.bloom_assembly_fp)
+        print("before if statement\n",compressed_df.describe())
         qa_filtered_set = None
         if self.qa_value is not None:
             if type(self.qa_value) != set:
@@ -414,30 +412,33 @@ class BloomProb(PixelCalcBase):
             else:
                 compressed_df = compressed_df[compressed_df['qa_column'].isin(self.qa_value)]
                 qa_filtered_set = self.qa_value
+        print("after if statement",compressed_df.shape)
 
         if len(compressed_df) < 2:
             warnings.warn("Not enough data to plot kde")
             return None
 
         years_all = compressed_df["year.DOY"].astype(int).unique()
-        start, end = f.define_year_range(self.start_year_filter, self.end_year_filter, years_all)
-        plot_df = f.sort_by_year(compressed_df, start_year=start, end_year=end)
+        # start, end = f.define_year_range(self.start_year_filter, self.end_year_filter, years_all)
+        plot_df = compressed_df#f.sort_by_year(compressed_df, start_year=self.start_year, end_year=self.end_year)
         plot_df["year"] = plot_df["year.DOY"].astype(int)
         plot_df["doy"] = np.round((plot_df["year.DOY"] % 1) * 1000).astype(int)
-
+        print('plot_df describe\n', plot_df.describe())
+        print('primary df\n',plot_df["primary"].astype(bool).sum())
         paired = (
-            plot_df.loc[plot_df["primary"], ["i", "j", "year", "doy"]]
+            plot_df.loc[plot_df["primary"].astype(bool), ["i", "j", "year", "doy"]]
             .merge(
-                plot_df.loc[plot_df["secondary"], ["i", "j", "year", "doy"]],
+                plot_df.loc[plot_df["secondary"].astype(bool), ["i", "j", "year", "doy"]],
                 on=["i", "j", "year"],
                 suffixes=("_x", "_y"),
                 how="inner",
             )
         )
-
+        print(paired.head())
         x = paired["doy_x"].to_numpy()
         y = paired["doy_y"].to_numpy()
         y[y < x] += 365
+        print(np.vstack([x, y]))
         try:
             kde = gaussian_kde(np.vstack([x, y]))
         except np.linalg.LinAlgError:
@@ -447,3 +448,12 @@ class BloomProb(PixelCalcBase):
             return None
 
         return kde, start, end, qa_filtered_set
+
+if __name__ == "__main__":
+    test_bloom = BloomProb(lakeID = 3500,
+                               out_folder = "C:/Users/schelian/cci-cyano-production/data/v3.0",
+                               variable = 'chla',
+                               version = '3.0',
+                               qa_value = None)
+    test_bloom.run_chunked()
+
