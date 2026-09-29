@@ -26,7 +26,7 @@ DTYPES = {
     "secondary": "i1",
     "i": "i4",
     "j": "i4",
-    "qa_column": "i4",
+    "qa_column": "f8",
     "year.DOY": "f8",
 }
 
