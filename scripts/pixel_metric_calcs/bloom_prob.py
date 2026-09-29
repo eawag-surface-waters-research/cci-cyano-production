@@ -455,5 +455,7 @@ if __name__ == "__main__":
                                variable = 'chla',
                                version = '3.0',
                                qa_value = None)
-    test_bloom.run_chunked()
+    test_bloom.build_path()
+    print(test_bloom.read_input())
+    test_bloom.calculate_and_write_chunked()
 

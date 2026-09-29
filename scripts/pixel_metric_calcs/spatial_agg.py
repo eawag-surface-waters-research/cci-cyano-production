@@ -1,5 +1,8 @@
 import os
 from pathlib import Path
+import sys
+sys.path.append(os.path.abspath('../'))
+sys.path.append(os.path.abspath('./scripts/'))
 import netCDF4
 import numpy as np
 import multiprocessing
@@ -201,7 +204,7 @@ class SpatialAgg(PixelCalcBase):
 
 
     @contextmanager
-    def open_cached_metric(self):
+    def open_cache(self):
         ds = netCDF4.Dataset(self.save_fp, "r")
         try:
             pixel_i = np.asarray(ds.variables["pixel_i"][:])
@@ -216,3 +219,10 @@ class SpatialAgg(PixelCalcBase):
 
         finally:
             ds.close()
+
+if __name__ == '__main__':
+    test_bloom = SpatialAgg(lakeID = 3500,
+                            out_folder = "C:/Users/schelian/cci-cyano-production/data/v3.0",
+                            variable = 'chla',
+                            version = '3.0')
+    test_bloom.run_chunked()
