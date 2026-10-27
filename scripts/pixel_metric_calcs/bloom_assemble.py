@@ -401,7 +401,6 @@ class BloomAssemble(PixelCalcBase):
         ) as pool:
             results = list(pool.imap_unordered(worker, coords, chunksize=chunksize))
 
-        [print(df.describe()) for df in results if not df.empty]
         frames = [df for df in results if not df.empty]
         if not frames:
             return pd.DataFrame(columns=REQ_COLS)

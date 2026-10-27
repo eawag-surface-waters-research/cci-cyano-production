@@ -63,7 +63,7 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
         logging.info("Skipping phenology step.")
 
     if args["postprocess"]:
-        logging.info("Calculating fit metrics and bloom probabilities.")
+        logging.info("Postprocessing fit metrics and bloom probabilities.")
         if parallel == "pixels" or threads == 1:
             for lake in lakes:
                 postprocess(lake, args, threads=threads, batch_size=batch_size)
