@@ -29,7 +29,7 @@ METRICS = [
     "correlation",
 ]
 
-def _calculate_pixel_metrics(coord,start_year,end_year):
+def _calculate_pixel_metrics(coord):
     i, j = coord
 
     smoothing_all = _GLOBALS["smoothing_all"]
@@ -37,6 +37,7 @@ def _calculate_pixel_metrics(coord,start_year,end_year):
     qa_all = _GLOBALS["qa_all"]
     t_all = _GLOBALS["t_all"]
     years_all = _GLOBALS["years_all"]
+    year_mask = _GLOBALS["year_mask"]
 
     smoothing = float(smoothing_all[i, j])
 
@@ -46,22 +47,15 @@ def _calculate_pixel_metrics(coord,start_year,end_year):
     mask = (
         (values != -9999)
         & (qa_values == 0)
+        & year_mask
     )
 
     values_m = values[mask]
     time_m = t_all[mask]
-    years_m = years_all[mask]
 
-    function_start, function_end = f.define_year_range(start= start_year, end = end_year, years = years_m)
-
-    mask_sub = (years_m>= function_start) & (years_m <=function_end)
-    valid = np.isfinite(y_true) & np.isfinite(y_pred)
-
-    if valid.sum()<1:
-            warnings.warn(f"Check data for lat, lon indices:{(i, j)}, perhaps smoothing parameter is nan or duplicates in time axis.")
-
-    combined_mask = valid & mask_sub
-
+    if not np.isfinite(smoothing):
+        warnings.warn(f"Check data for lat, lon indices:{(i, j)}, perhaps smoothing parameter is nan or duplicates in time axis.")
+    
     results = {
         "values_per_pixel": np.nan,
         "r2": np.nan,
@@ -94,8 +88,8 @@ def _calculate_pixel_metrics(coord,start_year,end_year):
     if valid.sum() < 2:
         return (i, j), results
 
-    y_true = values_m[combined_mask]
-    y_pred = y_pred[combined_mask]
+    y_true = values_m[valid]
+    y_pred = y_pred[valid]
 
     results["r2"] = r2_score(
         y_true,
@@ -123,7 +117,7 @@ def _calculate_pixel_metrics(coord,start_year,end_year):
 
     return (i, j), results
 
-def _init_worker(p_path, e_path):
+def _init_worker(p_path, e_path, start_year = 0, end_year = 9999):
     """Initialise per-process globals for multiprocessing metric computation.
 
     Called once per worker process by multiprocessing.Pool. Loads the parameter
@@ -149,6 +143,10 @@ def _init_worker(p_path, e_path):
     # Convert once, not per pixel
     time_dt = np.array(f.datenum_to_datetime(t_all))
     years_all = np.array([d.year for d in time_dt])
+    year_mask = (
+        (years_all >= start_year)
+        & (years_all <= end_year)
+    )
 
     smoothing_all = np.asarray(nc_p.variables["smoothing_parameter"][:])
     values_all = np.asarray(nc_e.variables[variable][:])
@@ -163,6 +161,7 @@ def _init_worker(p_path, e_path):
     _GLOBALS["qa"] = getattr(nc_e, "qa")
     _GLOBALS["t_all"] = t_all
     _GLOBALS["years_all"] = years_all
+    _GLOBALS["year_mask"] = year_mask
     _GLOBALS["smoothing_all"] = smoothing_all
     _GLOBALS["values_all"] = values_all
     _GLOBALS["qa_all"] = qa_all

@@ -447,7 +447,7 @@ class BloomProb(PixelCalcBase):
             warnings.warn(f"Not enough distinct {self.variable} events to plot KDE for lake ID {self.lakeID}.")
             return None
 
-        return kde, start, end, qa_filtered_set
+        return kde, self.start_year_filter, self.end_year_filter, qa_filtered_set
 
 if __name__ == "__main__":
     test_bloom = BloomProb(lakeID = 3500,
