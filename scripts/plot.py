@@ -28,18 +28,20 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=
 
     lakes = [row for i, (_, row) in enumerate(gdf.iterrows())]
 
-    logging.info("Plotting")
-    if parallel == "pixels" or threads == 1:
-        for lake in lakes:
-            plot(lake, args, threads=threads, batch_size=batch_size)
+    if args["plot"]:
+        logging.info("Plotting {} lakes".format(len(lakes)))
+        if parallel == "pixels" or threads == 1:
+            for lake in lakes:
+                plot(lake, args, threads=threads, batch_size=batch_size)
+        else:
+            with ProcessPoolExecutor(max_workers=threads) as executor:
+                executor.map(plot, lakes, itertools.repeat(args),
+                                itertools.repeat(1), itertools.repeat(batch_size))
+        if args["provenance"]:
+            write_provenance(args["out_folder"], "plot", args, args_file=args_file,
+                                extra={"lakes": [int(lake["id"]) for lake in lakes]}, run_id=run_id)
     else:
-        with ProcessPoolExecutor(max_workers=threads) as executor:
-            executor.map(plot, lakes, itertools.repeat(args),
-                            itertools.repeat(1), itertools.repeat(batch_size))
-    if args["provenance"]:
-        write_provenance(args["out_folder"], "plot", args, args_file=args_file,
-                            extra={"lakes": [int(lake["id"]) for lake in lakes]}, run_id=run_id)
-
+        logging.info("Skipping plotting step.")
 
 def plot(lake, args, threads=1, batch_size=100):
     PhenologyVisualization.set_shapefile_path(args["shapefile"])
@@ -51,11 +53,15 @@ def plot(lake, args, threads=1, batch_size=100):
     if not os.path.isfile(e_path) or not os.path.isfile(p_path):
         logging.warning(f"Skipping lake {lake['id']}: extract or phenology file missing")
         return
-    logging.info(f"Analysing lake {lake['id']}")
+    logging.info(f"Beginning plotting for lake {lake['id']}")
     eda = PhenologyVisualization(e_path, p_path)
     lake_name = sanitize_filename(ID_to_name(eda.gdf,lake['id']).replace(" ", ""))
     lake_str = f"ID{lake['id']}_{lake_name}"
     eda.out_folder = Path(os.path.join(lake_analysis_folder, lake_str))
+
+    if not args["maps"] and not args["pixel_plots"] and not args["timing_plots"] and not args["comparison"]:
+        logging.info(f"No plots requested for lake {lake['id']}, skipping")
+        return
 
     if args["maps"]:
         logging.info(f"Starting maps for lake {lake['id']}")

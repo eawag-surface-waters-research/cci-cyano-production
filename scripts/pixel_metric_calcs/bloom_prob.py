@@ -325,71 +325,10 @@ class BloomProb(PixelCalcBase):
 
         return self.save_fp
 
-    
-    def read_metadata_from_path(self, file_path):
-        """Extract bloom-probability metadata encoded in the cache filename."""
-        filename = Path(file_path).name
-
-        pattern = (
-            r"^ID(?P<lake_id>[^_]+)_"
-            r"(?P<start>\d+)_"
-            r"(?P<end>\d+)_"
-            r"(?P<qa>all|qa[0-9]+)_"
-            r"i(?P<interval>[0-9.]+)_"
-            r"r(?P<resolution>[0-9.]+)_"
-            r"x(?P<x_max>[0-9.]+)_"
-            r"y(?P<y_max>[0-9.]+)"
-            r"\.(?P<extension>csv|nc)$"
-        )
-
-        match = re.match(pattern, filename)
-        if match is None:
-            raise ValueError(f"Invalid bloom probability cache filename: {filename}")
-
-        values = match.groupdict()
-        qa_label = values["qa"]
-
-        return {
-            "lake_id": values["lake_id"],
-            "start_year": int(values["start"]),
-            "end_year": int(values["end"]),
-            "qa_value": (
-                None
-                if qa_label == "all"
-                else {int(value) for value in qa_label.removeprefix("qa")}
-            ),
-            "interval": int(values["interval"]),
-            "resolution": float(values["resolution"]),
-            "x_max": float(values["x_max"]),
-            "y_max": float(values["y_max"]),
-        }
-
-
-    def read_cached_metric(self, file_path):
-        """Read cached bloom proabability data from NetCDF."""
-        with netCDF4.Dataset(file_path, "r") as ds:
-            req_cols = ['x_low', 'x_high','y_low','y_high','probability'] # used to maintain order
-            required = set(req_cols)
-            missing = required.difference(ds.variables)
-
-            if missing:
-                raise ValueError(
-                    f"Bloom prob cache {file_path} is missing variables: {sorted(missing)}"
-                )
-
-            bloom_df = pd.DataFrame({req_var: np.asarray(ds.variables[req_var][:]) for req_var in required})
-            return bloom_df[req_cols]
-
 
     def read_full_cache(self, file_path):
         """Read a bloom-probability cache and return its data and filename metadata."""
-        if Path(file_path).suffix == ".nc":
-            bloom_df = self.read_cached_metric(file_path)
-        else:
-            bloom_df = pd.read_csv(file_path)
-
-        metadata = self.read_metadata_from_path(file_path)
-        return bloom_df, metadata
+        return f.read_bloom_probability_with_metadata(file_path)
 
 
     def _fit_bloom_kde(self):

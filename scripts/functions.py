@@ -6,12 +6,14 @@ import subprocess
 import logging
 import netCDF4
 import numpy as np
+from pathlib import Path
 from csaps import csaps
 from scipy.signal import find_peaks
 from datetime import datetime, timezone
 import warnings
 import multiprocessing
 from scipy.sparse import SparseEfficiencyWarning
+from scipy.stats import pearsonr, gaussian_kde, mannwhitneyu
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -690,7 +692,7 @@ def save_timing_plots(eda_instance, lake_analysis_folder, lake_str, time_splits,
     timing_plots_path = os.path.join(lake_analysis_folder, lake_str, "plots", "timing_plots")
     os.makedirs(timing_plots_path, exist_ok=True)
 
-    def _year(v, zero_val=2002, max_val=2024):
+    def _year(v, zero_val=2002, max_val=2023):
         return zero_val if v == 0 else (max_val if v == 9999 else v)
 
     # Lake-wide DOY plots (peaks and green-up midpoint), one panel per configured time split
@@ -706,7 +708,6 @@ def save_timing_plots(eda_instance, lake_analysis_folder, lake_str, time_splits,
 
         for peaks, metric_name in ((True, "peaks"), (False, "green_up_mid")):
             fig , axs = eda_instance.time_map_panel(years=years, nrow=rows, ncol=cols, peaks=peaks)
-            print(type(fig))
             file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_doy_{metric_name}_{ts_suffix}.png"
             fig.savefig(os.path.join(timing_plots_path, file_name), dpi=600, bbox_inches="tight")
             plt.close(fig)
@@ -718,13 +719,31 @@ def save_timing_plots(eda_instance, lake_analysis_folder, lake_str, time_splits,
     plt.close(fig)
 
     # Lake-wide KDE - one plot per requested QA filter x time split, e.g. kde_qa=[None, {0}, {0,1}]
+    bloom_prob_dir = Path(eda_instance.data_folder) / "calculated_values" / "bloom_prob" / eda_instance.variable
     for qa_spec in kde_qa:
         qa_set = set(qa_spec) if qa_spec is not None else None
         qa_suffix = "all" if qa_set is None else "".join(str(q) for q in sorted(qa_set))
         for start, end in time_splits:
             ts_suffix = "full_ts" if (start == 0 and end == 9999) else f"{_year(start)}_to_{_year(end)}"
+            matching_file = None
+            print(f"Searching for qa_suffix {qa_suffix}, start {_year(start)}, end {_year(end)}, in {bloom_prob_dir}")
+            print(bloom_prob_dir.glob(f"ID{eda_instance.lakeID}_*.nc"))
+            for fp in list(bloom_prob_dir.glob(f"ID{eda_instance.lakeID}_*.nc")):
+                print(fp)
+                
+                metadata = parse_bloom_probability_filename(fp)
+                print(type(metadata["start_year"]), type(_year(start)),type(metadata["end_year"]), type(_year(end)), type(metadata["qa_label"]), type(qa_suffix))
+                if (
+                    metadata["start_year"] == _year(start)
+                    and metadata["end_year"] == _year(end)
+                    and metadata["qa_label"] == qa_suffix
+                ):
+                    matching_file = fp
+                    break
+            print(matching_file)
+            print(f"ID{eda_instance.lakeID}_{_year(start)}_{_year(end)}_{qa_suffix}")
             fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-            eda_instance.lake_bloom_kde(ax, qa_value=qa_set, start_year=start, end_year=end, probability=True)
+            eda_instance.lake_bloom_kde_from_fp(ax, matching_file, plt_kwargs=None)
             kde_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_kde_qa{qa_suffix}_{ts_suffix}.png"
             fig.savefig(os.path.join(timing_plots_path, kde_file_name), dpi=600, bbox_inches="tight")
             plt.close(fig)
@@ -2061,7 +2080,7 @@ def prep_kde_pixel_worker(pixel_df):
         Columns: primary, qa_column, secondary. Empty if no fully-bracketed
         peaks exist for this pixel.
     """
-    bracketed = f.find_preceding_and_following(
+    bracketed = find_preceding_and_following(
         pixel_df.sort_index()
     ).dropna(subset=["prev_var1_time", "next_var2_time"])
     if bracketed.empty:
@@ -2230,7 +2249,7 @@ def extract_pixel_timing_OHE(nc, i, j, vars= None, qa_var = 'pks'):
         vars = ['pks','trgs','midUP','midDOWN']
 
     for var in vars:
-        var = f.coerce_varname_to_var_x(var)
+        var = coerce_varname_to_var_x(var)
 
         var_raw = remove_nan(nc.variables[var][i,j,:])
         if len(var_raw) <1:
@@ -2239,9 +2258,9 @@ def extract_pixel_timing_OHE(nc, i, j, vars= None, qa_var = 'pks'):
         doy = var_dt.year + var_dt.day_of_year / 1000
         frames[var] = pd.Series(index=doy,dtype=bool)
 
-    qa_var = f.parse_qa_var_from_str(qa_var)
+    qa_var = parse_qa_var_from_str(qa_var)
     if qa_var is not None:
-        qa_x = f.coerce_varname_to_var_x(qa_var)
+        qa_x = coerce_varname_to_var_x(qa_var)
         qa_x_raw = np.array(nc.variables[qa_x][i, j, :])
         qa_mask = ~np.isnan(qa_x_raw)
         if len(qa_x_raw) <1:
@@ -2329,3 +2348,81 @@ def count_extrema(p_path, latitude_idx, longitude_idx, start= 0, end= 9999, peak
     pixel_data = load_pixel_cs_from_path(p_path,latitude_idx, longitude_idx)
     plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=pixel_data, variables=[var])
     return len(plotting_data[var][0])
+
+
+def read_bloom_probability(file_path):
+    """Read bloom probability data from NetCDF."""
+
+    with netCDF4.Dataset(file_path, "r") as ds:
+
+        cols = ["x_low", "x_high", "y_low", "y_high", "probability"]
+
+        missing = set(cols) - set(ds.variables)
+
+        if missing:
+            raise ValueError(
+                f"Bloom probability cache {file_path} is missing variables: {sorted(missing)}"
+            )
+
+        return pd.DataFrame({col: np.asarray(ds.variables[col][:]) for col in cols})[cols]
+
+
+def parse_bloom_probability_filename(file_path):
+    """Extract metadata encoded in bloom probability filename."""
+
+    filename = Path(file_path).name
+
+    pattern = (
+        r"^ID(?P<lake_id>[^_]+)_"
+        r"(?P<start>\d+)_"
+        r"(?P<end>\d+)_"
+        r"(?P<qa>all|qa[0-9]+)_"
+        r"i(?P<interval>[0-9.]+)_"
+        r"r(?P<resolution>[0-9.]+)_"
+        r"x(?P<x_max>[0-9.]+)_"
+        r"y(?P<y_max>[0-9.]+)"
+        r"\.(?P<extension>csv|nc)$"
+    )
+
+    match = re.match(pattern, filename)
+
+    if match is None:
+        raise ValueError(
+            f"Invalid bloom probability filename: {filename}"
+        )
+
+    values = match.groupdict()
+
+    qa_label = values["qa"]
+
+    return {
+        "lake_id": values["lake_id"],
+        "start_year": int(values["start"]),
+        "end_year": int(values["end"]),
+        "qa_label": (
+            "all"
+            if qa_label == "all"
+            else qa_label.removeprefix("qa")
+        ),
+        "interval": int(values["interval"]),
+        "resolution": float(values["resolution"]),
+        "x_max": float(values["x_max"]),
+        "y_max": float(values["y_max"]),
+    }
+
+
+def read_bloom_probability_with_metadata(file_path):
+    """Read bloom probability cache and associated metadata."""
+
+    suffix = Path(file_path).suffix
+
+    if suffix == ".nc":
+        bloom_df = read_bloom_probability(file_path)
+    elif suffix == ".csv":
+        bloom_df = pd.read_csv(file_path)
+    else:
+        raise ValueError(f"Unsupported file type: {suffix}")
+
+    metadata = parse_bloom_probability_filename(file_path)
+
+    return bloom_df, metadata

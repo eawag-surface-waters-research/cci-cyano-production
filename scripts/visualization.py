@@ -675,6 +675,13 @@ class PhenologyVisualizationBase:
     
 
 class HeatmapVisualization(PhenologyVisualizationBase):
+
+    graph_type = "heatmap"
+    graph_methods = frozenset({
+        "create_heatmap_output",
+        "yearly_heatmap_pixel",
+        "yearly_heatmap_lake",
+    })
     
     def create_heatmap_output(self, latitude_idx, longitude_idx, start_year=2002, end_year=2024, fraction=False, qa=None):
         """Return peak/trough counts or lake-wide fractions per year and quarter.
@@ -946,7 +953,14 @@ class HeatmapVisualization(PhenologyVisualizationBase):
 
 class BoxplotVisualization(PhenologyVisualizationBase):
 
-
+    graph_type = "boxplot"
+    graph_methods = frozenset({
+        "pair_phenology_events",
+        "qa_boxplot",
+        "qa_boxplot_lake",
+        "_boxplot_by_qa",
+    })
+    
     def pair_phenology_events(self, other, latitude_idx, longitude_idx, metric="pks", tolerance_days=4):
         """Pair phenology metric events between self and another phenology product/version.
 
@@ -2935,84 +2949,102 @@ class TimingVisualization(PhenologyVisualizationBase):
     graph_type = "timing"
     graph_methods = frozenset({
         "yearly_cubic_spline",
-        "lake_bloom_kde",
-        "calculate_bloom_probabilities_from_kde",
+        "plot_lake_bloom_kde",
+        "plot_lake_bloom_kde_from_fp",
     })
 
-    def lake_bloom_kde(self, ax, qa_value = None, start_year = 0, end_year = 9999, plt_kwargs = None, probability= False, interval = 21, resolution= 1, x_max = 400, y_max = 730):
-        print(f"plotting started at: {datetime.datetime.now()}")
-        if probability:
-            plt_kwargs = {'cmap':'ocean_r',
-                            'levels':50,
-                            'cbar':True}
+    def plot_lake_bloom_kde(
+        self,
+        ax,
+        probs,
+        metadata,
+        plt_kwargs=None,
+    ):
+        """
+        Plot bloom probability surface from an already-loaded probability table.
+        """
+
+        interval = metadata["interval"]
+        start = metadata["start_year"]
+        end = metadata["end_year"]
+        qa_label = metadata["qa_label"]
+        x_max = metadata["x_max"]
+        y_max = metadata["y_max"]
+
+        qa_filtered_set = (
+                None
+                if qa_label == "all"
+                else {int(value) for value in qa_label.removeprefix("qa")}
+            )
 
         if plt_kwargs is None:
-            plt_kwargs = {'cmap':'ocean_r',
-                          'levels':20,
-                          'cbar':True}
-            
+            plt_kwargs = {
+                "cmap": "ocean_r",
+                "levels": 20,
+                "cbar": True,
+            }
+
         plt_kwargs = dict(plt_kwargs)
-        show_cbar = plt_kwargs.pop('cbar', False)
+        show_cbar = plt_kwargs.pop("cbar", False)
 
-        if probability:
-            fit = self.calculate_bloom_probabilities_from_kde(
-            qa_value=qa_value, start_year=start_year, end_year=end_year,
-            interval=interval, x_max=x_max, y_max=y_max, resolution=resolution,
-            )
-            if fit is None:
-                return None
-            probs, start, end, qa_filtered_set = fit
+        grid = probs.pivot(index="y_low", columns="x_low", values="probability")
 
-            grid = probs.pivot(index="y_low", columns="x_low", values="probability")
-            x_centers = grid.columns.values + interval / 2
-            y_centers = grid.index.values + interval / 2
+        x_centers = grid.columns.values + interval / 2
+        y_centers = grid.index.values + interval / 2
 
-            cf = ax.contourf(x_centers, y_centers, grid.values, **plt_kwargs, vmax = 0.05)
-            # Add a contour line at probability = 0.05
-            ax.contour(x_centers, y_centers, grid.values, levels=[0.05], colors="red", linewidths=2)
-            if show_cbar:
-                cbar = plt.colorbar(cf, ax=ax, label="Probability")
-                cbar.ax.axhline(0.05, color="red", linewidth=2)
+        cf = ax.contourf(x_centers, y_centers, grid.values, **plt_kwargs, vmax=0.05)
 
-            if qa_filtered_set is None:
-                qa_label = "All QA"
-            else:
-                qa_label = "QA: " + ", ".join(self.get_plot_config("qa", q)["label"] for q in sorted(qa_filtered_set))
-            title_str = f"Bloom event probability per {interval}-day interval\nLake ID: {self.lakeID} | {start} - {end} | {qa_label}"
+        ax.contour(x_centers, y_centers, grid.values, levels=[0.05], colors="red", linewidths=2)
 
+        if show_cbar:
+            cbar = plt.colorbar(cf, ax=ax, label="Probability")
+            cbar.ax.axhline(0.05, color="red", linewidth=2)
+
+        if qa_filtered_set is None:
+            qa_label = "All QA"
         else:
-            fit = self._fit_bloom_kde(qa_value=qa_value, start_year=start_year, end_year=end_year)
-            if fit is None:
-                return
-            kde, start, end, qa_filtered_set = fit
+            qa_label = (
+                "QA: "
+                + ", ".join(
+                    self.get_plot_config("qa", q)["label"]
+                    for q in sorted(qa_filtered_set)
+                )
+            )
 
-            xi = np.linspace(0, 400, 100)
-            yi = np.linspace(0, 730, 100)
-            Xi, Yi = np.meshgrid(xi, yi)
-            Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape)
-
-            cf = ax.contourf(Xi, Yi, Zi, **plt_kwargs)
-            if show_cbar:
-                plt.colorbar(cf, ax=ax)
-
-            var_label = self.get_plot_config("var", self.variable)["label"]
-            if qa_filtered_set is None:
-                qa_label = "All QA"
-            else:
-                qa_label = "QA: " + ", ".join(self.get_plot_config("qa", q)["label"] for q in sorted(qa_filtered_set))
-            title_str = f"{var_label} - Green-up Advanced vs Green-down Onset\nLake ID: {self.lakeID} | {start} - {end} | {qa_label}"
+        ax.set_title(
+            f"Bloom event probability per {interval}-day interval\n"
+            f"Lake ID: {self.lakeID} | {start} - {end} | {qa_label}"
+        )
 
         ax.set_xlabel("Green-up Advanced (DOY)")
         ax.set_ylabel("Green-down Onset (DOY)")
+
         ax.set_xlim(0, x_max)
         ax.set_ylim(0, y_max)
+
         ax.axline((0, 0), slope=1, color="black", linewidth=1, linestyle="--")
-        ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")            
-        ax.set_title(title_str)
+        ax.axline((0, 365), slope=1, color="black", linewidth=1, linestyle="--")
+
         return ax
 
+    def lake_bloom_kde_from_fp(self,ax,file_path,plt_kwargs=None):
+        """
+        Read a cached BloomProb file and plot the probability surface.
+        """
+        
+        probs, metadata = f.read_bloom_probability_with_metadata(file_path)
 
+        return self.plot_lake_bloom_kde(
+            ax=ax,
+            probs=probs,
+            metadata=metadata,
+            plt_kwargs=plt_kwargs,
+        )
+
+    
 class PhenologyVisualization(
+    HeatmapVisualization,
+    BoxplotVisualization,
     PixelVisualization,
     MapVisualization,
     ComparisonVisualization,
@@ -3027,13 +3059,11 @@ class PhenologyVisualization(
 
     graph_type = "all"
     graph_methods = frozenset().union(
+        HeatmapVisualization.graph_methods,
+        BoxplotVisualization.graph_methods,
         PixelVisualization.graph_methods,
         MapVisualization.graph_methods,
         ComparisonVisualization.graph_methods,
         TimingVisualization.graph_methods,
     )
             
-
-
-
-
