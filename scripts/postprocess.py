@@ -41,8 +41,11 @@ def postprocess(lake, p, threads = 1, batch_size=100):
 
         BloomAssemble(**split_kwargs).run_chunked()
         logging.info(f"Completed bloom assembly for lake {lake['id']} for years {start_year}-{end_year}")
-        
-        BloomProb(**split_kwargs).run_chunked()
-        logging.info(f"Completed bloom probability for lake {lake['id']} for years {start_year}-{end_year}")
+
+        print(len(p['kde_qa']))
+        for qa_spec in p['kde_qa']:
+            print(qa_spec)
+            BloomProb(**split_kwargs,qa_value = qa_spec).run_chunked()
+            logging.info(f"Completed bloom probability for lake {lake['id']} for years {start_year}-{end_year} and QA")
 
     logging.info(f"Postprocessing lake {lake['id']} complete")

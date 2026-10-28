@@ -137,7 +137,6 @@ class BloomProb(PixelCalcBase):
             return self.bloom_prob_df
 
         self.kde, self.result_start_year, self.result_end_year, self.result_qa = fit
-        print('calculate',self.kde)
         self.bloom_prob_df = self._calculate_probability_grid(self.kde)
 
         return self.bloom_prob_df
@@ -157,12 +156,9 @@ class BloomProb(PixelCalcBase):
         if n_cells < 1:
             raise ValueError("interval/resolution must be at least one cell.")
 
-        density = np.asarray(density) * resolution**2
+        density = np.vstack(density) * resolution**2
 
-        integral = np.cumsum(
-            np.cumsum(density, axis=0),
-            axis=1,
-        )
+        integral = np.cumsum(np.cumsum(density, axis=0),axis=1)
         integral = np.pad(integral, ((1, 0), (1, 0)))
 
         window_sum = (
@@ -264,7 +260,7 @@ class BloomProb(PixelCalcBase):
             return None
 
         self.kde, self.result_start_year, self.result_end_year, self.result_qa = fit
-        print('calc chunked',type(self.kde))
+
         xi = np.arange(-self.interval, self.x_max + self.interval, self.resolution)
         yi = np.arange(-self.interval, self.y_max + self.interval, self.resolution)
         n_cells = int(round(self.interval / self.resolution))
@@ -342,42 +338,26 @@ class BloomProb(PixelCalcBase):
             (kde, start, end, qa_filtered_set), or None if there isn't
             enough data to fit a KDE.
         """
-        compressed_df = BloomAssemble.read_cached_metric(fp=self.bloom_assembly_fp)
-        print("before if statement\n",compressed_df.describe())
+        assembly_df = BloomAssemble.read_cached_metric(fp=self.bloom_assembly_fp)
+        paired_df = assembly_df.set_index('year.DOY').groupby(['i','j']).apply(f.find_preceding_and_following, include_groups=False)
+        paired_df = paired_df.droplevel([0,1]).dropna()
         qa_filtered_set = None
         if self.qa_value is not None:
-            if type(self.qa_value) != set:
-                warnings.warn("qa_value needs to be a set")
-            else:
-                compressed_df = compressed_df[compressed_df['qa_column'].isin(self.qa_value)]
-                qa_filtered_set = self.qa_value
-        print("after if statement",compressed_df.shape)
+            paired_df = paired_df[paired_df['qa_column'].isin(self.qa_value)]
+            qa_filtered_set = self.qa_value
+        print("Number of blooms considered:",paired_df.shape[0])
 
-        if len(compressed_df) < 2:
+        if len(paired_df) < 2:
             warnings.warn("Not enough data to plot kde")
             return None
 
-        years_all = compressed_df["year.DOY"].astype(int).unique()
-        # start, end = f.define_year_range(self.start_year_filter, self.end_year_filter, years_all)
-        plot_df = compressed_df#f.sort_by_year(compressed_df, start_year=self.start_year, end_year=self.end_year)
-        plot_df["year"] = plot_df["year.DOY"].astype(int)
-        plot_df["doy"] = np.round((plot_df["year.DOY"] % 1) * 1000).astype(int)
-        print('plot_df describe\n', plot_df.describe())
-        print('primary df\n',plot_df["primary"].astype(bool).sum())
-        paired = (
-            plot_df.loc[plot_df["primary"].astype(bool), ["i", "j", "year", "doy"]]
-            .merge(
-                plot_df.loc[plot_df["secondary"].astype(bool), ["i", "j", "year", "doy"]],
-                on=["i", "j", "year"],
-                suffixes=("_x", "_y"),
-                how="inner",
-            )
-        )
-        print(paired.head())
-        x = paired["doy_x"].to_numpy()
-        y = paired["doy_y"].to_numpy()
+        paired_df["year"] = paired_df.index.astype(int)
+        paired_df["doy_x"] = np.round((paired_df["prev_var1_time"] % 1) * 1000).astype(int)
+        paired_df["doy_y"] = np.round((paired_df["next_var2_time"] % 1) * 1000).astype(int)
+
+        x = paired_df["doy_x"].to_numpy()
+        y = paired_df["doy_y"].to_numpy()
         y[y < x] += 365
-        print(np.vstack([x, y]))
         try:
             kde = gaussian_kde(np.vstack([x, y]))
         except np.linalg.LinAlgError:

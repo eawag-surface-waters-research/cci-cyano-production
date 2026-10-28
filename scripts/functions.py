@@ -726,13 +726,9 @@ def save_timing_plots(eda_instance, lake_analysis_folder, lake_str, time_splits,
         for start, end in time_splits:
             ts_suffix = "full_ts" if (start == 0 and end == 9999) else f"{_year(start)}_to_{_year(end)}"
             matching_file = None
-            print(f"Searching for qa_suffix {qa_suffix}, start {_year(start)}, end {_year(end)}, in {bloom_prob_dir}")
-            print(bloom_prob_dir.glob(f"ID{eda_instance.lakeID}_*.nc"))
-            for fp in list(bloom_prob_dir.glob(f"ID{eda_instance.lakeID}_*.nc")):
-                print(fp)
-                
+
+            for fp in list(bloom_prob_dir.glob(f"ID{eda_instance.lakeID}_*.nc")):             
                 metadata = parse_bloom_probability_filename(fp)
-                print(type(metadata["start_year"]), type(_year(start)),type(metadata["end_year"]), type(_year(end)), type(metadata["qa_label"]), type(qa_suffix))
                 if (
                     metadata["start_year"] == _year(start)
                     and metadata["end_year"] == _year(end)
@@ -740,8 +736,7 @@ def save_timing_plots(eda_instance, lake_analysis_folder, lake_str, time_splits,
                 ):
                     matching_file = fp
                     break
-            print(matching_file)
-            print(f"ID{eda_instance.lakeID}_{_year(start)}_{_year(end)}_{qa_suffix}")
+
             fig, ax = plt.subplots(1, 1, figsize=(8, 8))
             eda_instance.lake_bloom_kde_from_fp(ax, matching_file, plt_kwargs=None)
             kde_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_kde_qa{qa_suffix}_{ts_suffix}.png"
@@ -2011,6 +2006,7 @@ def find_preceding_and_following(pixel_df):
     df = pixel_df.copy()
     df["var1_time"] = df.index.where(df["primary"].fillna(False).astype(bool))
     df["var2_time"] = df.index.where(df["secondary"].fillna(False).astype(bool))
+    df.sort_index(inplace=True)
     df["prev_var1_time"] = df["var1_time"].ffill()
     df["next_var2_time"] = df["var2_time"].bfill()
     mask = df["qa_column"].notna()
@@ -2426,3 +2422,10 @@ def read_bloom_probability_with_metadata(file_path):
     metadata = parse_bloom_probability_filename(file_path)
 
     return bloom_df, metadata
+
+
+def qa_set_to_str(qa_set):
+    return "all" if qa_set is None else "".join(str(q) for q in sorted(qa_set))
+
+def qa_str_to_set(qa_str):
+    return None if qa_str == "all" else {int(value) for value in qa_str.removeprefix("qa")}
