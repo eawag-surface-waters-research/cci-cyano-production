@@ -345,11 +345,8 @@ class PhenologyVisualizationBase:
             Mapping of (i, j) grid index tuples to R² float values.
         """
         if time_split is None:
-            time_split = [(0, 9999)]
-        for start, end in time_split:
-            return self.compute_and_cache_metric(metric_name="r2", col_name="r2_scores",
-                                                 compute_fn=PhenologyVisualizationBase.compute_metric_score,
-                                                 start=start, end=end)
+            time_split = [(self.start_year, self.end_year)]
+        return self.read_metric_lake('r2',*time_split[0])
 
 
     # MOVE TO PixelCalc
@@ -415,10 +412,7 @@ class PhenologyVisualizationBase:
         """
         if time_split is None:
             time_split = [(0, 9999)]
-        for start, end in time_split:
-            return self.compute_and_cache_metric(metric_name="correlation", col_name="correlation_scores",
-                                                 compute_fn=PhenologyVisualizationBase.compute_metric_score,
-                                                 start=start, end=end)
+        return self.read_metric_lake('correlation',**time_split[0])
 
 
     # MOVE TO PixelCalc
@@ -650,6 +644,25 @@ class PhenologyVisualizationBase:
         int
             Number of valid (QA==0, value!=-9999) observations in the window.
         """
-        scores = self.values_per_pixel([(start, end)])
+        scores = self.read_metric_lake('values_per_pixel',**(start, end))
         return scores[(latitude_idx, longitude_idx)]
-    
+
+    def read_metric_lake(self, metric_name,start_year,end_year):
+        """Read one metric from a lake/window NetCDF cache."""
+        start_year = self.start_year if start_year == 0 else start_year
+        end_year = self.end_year if end_year == 9999 else end_year
+
+        fn = f.construct_fit_metric_filename(self.lakeID,start_year,end_year)
+        fp = f.construct_fit_metric_dirpath(self.data_folder,self.variable)
+                
+        with netCDF4.Dataset(fp/fn, "r") as ds:
+            if metric_name not in ds.variables:
+                raise KeyError(
+                    f"Metric {metric_name!r} is not present in {fn}"
+                )
+
+            ds.set_auto_mask(False)
+            grid = np.asarray(ds.variables[metric_name][:, :])
+
+        computed = np.argwhere(grid != -9999.0)
+        return {(int(i), int(j)): grid[i, j] for i, j in computed}

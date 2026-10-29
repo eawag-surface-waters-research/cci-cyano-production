@@ -25,7 +25,6 @@ from matplotlib.patches import Rectangle
 from sklearn.metrics import mean_squared_error, r2_score
 
 
-
 warnings.filterwarnings("ignore", category=SparseEfficiencyWarning)
 
 
@@ -441,49 +440,50 @@ def plot_variables(ax, plotting_data, spline_x, spline_y, time_frame, variables 
 
 def save_maps(eda_instance, lake_analysis_folder, lake_str,  time_splits, metrics = None):
     if metrics is None:
-        metrics = ["R2", "MAD", "RMSE", "correlation", "values_per_pixel"]
+        metrics = ["r2", "MAD", "RMSE", "correlation", "values_per_pixel"]
     for m in metrics:
+
         text_strings = []
         num_splits = len(time_splits)
+        
         out_path = os.path.join(lake_analysis_folder, lake_str, "plots", "metric_maps")
         os.makedirs(out_path, exist_ok= True)
     
-        if m == "R2":
-            score_fn = eda_instance.r2_scores
+        if m == "r2":
             metric_str = "R$^2$"
             cmap = "RdYlBu"
             colorbar_extent = [0, 1]
         elif m == "MAD":
-            score_fn = eda_instance.MAD_scores
             metric_str = "MAD"
             cmap = "RdYlBu_r"
             colorbar_extent = [0, 1]
         elif m == "RMSE":
-            score_fn = eda_instance.RMSE_scores
             metric_str = "RMSE"
             cmap = "RdYlBu_r"
             colorbar_extent = [0, 1]
         elif m == "correlation":
-            score_fn = eda_instance.correlation_scores
             metric_str = "correlation"
             cmap = "RdYlBu"
             colorbar_extent = [0, 1]
         elif m == "values_per_pixel":
-            score_fn = eda_instance.values_per_pixel
             metric_str = "values_per_pixel"
             cmap = "winter"
             colorbar_extent = None
         else:
-            raise ValueError("Please provide a valid metric string")
-
+            raise ValueError(
+                f"Unsupported metric: {m}"
+            )
+        
         for start, end in time_splits:
             if start > end:
                 raise ValueError("Beginning of time split cannot be larger than the end")
 
         rows, cols = close_factors(num_splits)
         fig, axs = plt.subplots(rows, cols, constrained_layout=True)
+
         if num_splits > 1:
             axs = axs.ravel()
+
         for i, (start, end) in enumerate(time_splits):
             if start == 0 and end == 9999:
                 text_strings.append(f"{metric_str}-scores {eda_instance.variable} {eda_instance.version} full ts")
@@ -494,7 +494,7 @@ def save_maps(eda_instance, lake_analysis_folder, lake_str,  time_splits, metric
             else:
                 text_strings.append(f"{metric_str}-scores {eda_instance.variable} {eda_instance.version} {start}-{end}")
 
-            scores = score_fn([(start, end)])
+            scores = eda_instance.read_metric_lake(m, start, end)
 
             if num_splits == 1:
                 eda_instance.metric_map(scores, metric_str, fig, axs, cmap, colorbar_extent=colorbar_extent)
@@ -2441,4 +2441,10 @@ def construct_bloom_prob_filename(lakeID, start_year, end_year, qa_label,
     return f"ID{lakeID}_{start_year}_{end_year}_{qa_label}_i{interval}_r{resolution}_x{x_max}_y{y_max}.nc"
 
 def construct_bloom_prob_dirpath(data_dir, var):
-    return Path(data_dir) / "calculated_values" / "bloom_prob"/ var
+    return Path(data_dir) / "calculated_values" / "bloom_prob" / var
+
+def construct_fit_metric_filename(lakeID, start_year, end_year):
+    return f"ID{lakeID}_{start_year}_{end_year}.nc"
+
+def construct_fit_metric_dirpath(data_dir, var):
+    return Path(data_dir) / "calculated_values" / "metrics" / var
