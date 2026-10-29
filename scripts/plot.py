@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, save_timing_plots, write_provenance, sanitize_filename, ID_to_name
 
-from visualization import PhenologyVisualization
+from scripts.visualization.visualization import PhenologyVisualization
 
 def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=None):
     set_logging(log)
