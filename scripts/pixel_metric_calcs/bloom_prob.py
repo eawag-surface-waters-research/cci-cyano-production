@@ -75,17 +75,15 @@ class BloomProb(PixelCalcBase):
             else "qa" + "".join(map(str, sorted(self.qa_value)))
         )
 
-        out_dir = os.path.join(
+        out_dir = f.construct_bloom_prob_dirpath(
             self.out_folder,
-            "calculated_values",
-            "bloom_prob",
-            self.variable,
+            self.variable
         )
         os.makedirs(out_dir, exist_ok=True)
 
-        filename = (
-            f"ID{self.lakeID}_{start_label}_{end_label}_{qa_label}_"
-            f"i{self.interval}_r{self.resolution}_x{self.x_max}_y{self.y_max}.nc"
+        filename = f.construct_bloom_prob_filename(
+            lakeID = self.lakeID, start_year = start_label, end_year = end_label, qa_label = qa_label,
+            interval = self.interval, resolution = self.resolution, x_max = self.x_max, y_max = self.y_max
         )
 
         self.save_fp = os.path.join(out_dir, filename)
@@ -97,17 +95,9 @@ class BloomProb(PixelCalcBase):
         Checks in 'kde_data' folder (legacy name for the data), 
         if not found in 'bloom_assembly_data' folder."""
 
-        filename = (
-            f"ID{self.lakeID}_{self.start_year}_{self.end_year}.nc"
-        )
+        filename = f.construct_bloom_assembly_filename(self.lakeID)
 
-        self.bloom_assembly_fp = os.path.join(
-            self.out_folder,
-            "calculated_values",
-            "bloom_assembly_data",
-            self.variable,
-            filename,
-        )
+        self.bloom_assembly_fp = f.construct_bloom_assembly_dirpath(self.out_folder, self.variable) /filename
 
         if not os.path.isfile(self.bloom_assembly_fp):
 

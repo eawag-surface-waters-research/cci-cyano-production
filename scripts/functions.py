@@ -2425,7 +2425,20 @@ def read_bloom_probability_with_metadata(file_path):
 
 
 def qa_set_to_str(qa_set):
-    return "all" if qa_set is None else "".join(str(q) for q in sorted(qa_set))
+    return "all" if qa_set is None else "qa"+"".join(str(q) for q in sorted(qa_set))
 
 def qa_str_to_set(qa_str):
     return None if qa_str == "all" else {int(value) for value in qa_str.removeprefix("qa")}
+
+def construct_bloom_assembly_filename(lakeID):
+    return f"ID{lakeID}_bloom_assembly.nc"
+
+def construct_bloom_assembly_dirpath(data_dir, var):
+    return Path(data_dir) / "calculated_values" / "bloom_assembly_data"/ var
+
+def construct_bloom_prob_filename(lakeID, start_year, end_year, qa_label,
+                                  interval = 21, resolution = 1, x_max = 400, y_max = 730):
+    return f"ID{lakeID}_{start_year}_{end_year}_{qa_label}_i{interval}_r{resolution}_x{x_max}_y{y_max}.nc"
+
+def construct_bloom_prob_dirpath(data_dir, var):
+    return Path(data_dir) / "calculated_values" / "bloom_prob"/ var

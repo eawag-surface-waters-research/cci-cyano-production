@@ -78,7 +78,7 @@ class BloomAssemble(PixelCalcBase):
         )
         os.makedirs(out_dir, exist_ok=True)
 
-        filename = f"ID{self.lakeID}_{self.start_year}_{self.end_year}.nc"
+        filename = f"ID{self.lakeID}_bloom_assembly.nc"
         self.save_fp = os.path.join(out_dir, filename)
 
     def read_input(self):
@@ -143,8 +143,6 @@ class BloomAssemble(PixelCalcBase):
         ds.version = str(self.version)
         ds.variable = str(self.variable)
         ds.metric_name = self.metric_name
-        ds.start_year = self.start_year
-        ds.end_year = self.end_year
 
         return output_vars
 
