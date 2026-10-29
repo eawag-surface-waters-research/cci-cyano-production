@@ -11,7 +11,10 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, save_timing_plots, write_provenance, sanitize_filename, ID_to_name
-
+import sys
+sys.path.append(os.path.abspath('./'))
+sys.path.append(os.path.abspath('../'))
+sys.path.append(os.path.abspath('./scripts/'))
 from scripts.visualization.visualization import PhenologyVisualization
 
 def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=None):
@@ -63,7 +66,7 @@ def plot(lake, args, threads=1, batch_size=100):
         logging.info(f"No plots requested for lake {lake['id']}, skipping")
         return
 
-    # not working
+    # working
     if args["maps"]:
         logging.info(f"Starting maps for lake {lake['id']}")
         save_maps(eda, lake_analysis_folder, lake_str, time_splits = args["time_splits"])
