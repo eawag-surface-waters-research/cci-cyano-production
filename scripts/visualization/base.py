@@ -327,116 +327,7 @@ class PhenologyVisualizationBase:
 
         self.valid_idx_prep = inside_indices
         self.valid_coords_prep = inside_coords
-
-
-    # MOVE TO PixelCalc
-    def r2_scores(self, time_split=None):
-        """Return R² scores for all valid pixels over a single time window.
-
-        Parameters
-        ----------
-        time_split : list of tuple of int
-            Single-element list containing one (start, end) year tuple.
-            Use [(0, 9999)] for the full time series.
-
-        Returns
-        -------
-        dict
-            Mapping of (i, j) grid index tuples to R² float values.
-        """
-        if time_split is None:
-            time_split = [(self.start_year, self.end_year)]
-        return self.read_metric_lake('r2',*time_split[0])
-
-
-    # MOVE TO PixelCalc
-    def MAD_scores(self, time_split=None):
-        """Return Median Absolute Deviation scores for all valid pixels over a single time window.
-
-        Parameters
-        ----------
-        time_split : list of tuple of int
-            Single-element list containing one (start, end) year tuple.
-            Use [(0, 9999)] for the full time series.
-
-        Returns
-        -------
-        dict
-            Mapping of (i, j) grid index tuples to MAD float values.
-        """
-        if time_split is None:
-            time_split = [(0, 9999)]
-        for start, end in time_split:
-            return self.compute_and_cache_metric(metric_name="MAD", col_name="mad_scores",
-                                                 compute_fn=PhenologyVisualizationBase.compute_metric_score,
-                                                 start= start,end= end)
-
-
-    # MOVE TO PixelCalc
-    def RMSE_scores(self, time_split=None):
-        """Return Root Mean Squared Error scores for all valid pixels over a single time window.
-
-        Parameters
-        ----------
-        time_split : list of tuple of int
-            Single-element list containing one (start, end) year tuple.
-            Use [(0, 9999)] for the full time series.
-
-        Returns
-        -------
-        dict
-            Mapping of (i, j) grid index tuples to RMSE float values.
-        """
-        if time_split is None:
-            time_split = [(0, 9999)]
-        for start, end in time_split:
-            return self.compute_and_cache_metric(metric_name="RMSE", col_name="rmse_scores",
-                                                 compute_fn=PhenologyVisualizationBase.compute_metric_score,
-                                                 start=start, end=end)
-
-
-    # MOVE TO PixelCalc
-    def correlation_scores(self, time_split=None):
-        """Return Pearson correlation scores for all valid pixels over a single time window.
-
-        Parameters
-        ----------
-        time_split : list of tuple of int
-            Single-element list containing one (start, end) year tuple.
-            Use [(0, 9999)] for the full time series.
-
-        Returns
-        -------
-        dict
-            Mapping of (i, j) grid index tuples to Pearson r float values.
-        """
-        if time_split is None:
-            time_split = [(0, 9999)]
-        return self.read_metric_lake('correlation',**time_split[0])
-
-
-    # MOVE TO PixelCalc
-    def values_per_pixel(self, time_split=None):
-        """Return valid observation counts for all pixels over a single time window.
-
-        Parameters
-        ----------
-        time_split : list of tuple of int
-            Single-element list containing one (start, end) year tuple.
-            Use [(0, 9999)] for the full time series.
-
-        Returns
-        -------
-        dict
-            Mapping of (i, j) grid index tuples to integer observation counts.
-        """
-        if time_split is None:
-            time_split = [(0, 9999)]
-        for start, end in time_split:
-            return self.compute_and_cache_metric(metric_name="values_per_pixel", col_name="number_of_values",
-                                                 compute_fn=PhenologyVisualizationBase.compute_metric_score,
-                                                 start=start,end= end)
-
+        
 
     def _load_extracted_globals(self, reload=False):
         """Lazily load and cache shared arrays from the extract dataset.
@@ -513,140 +404,6 @@ class PhenologyVisualizationBase:
         return pd.Series(index=time_dt,data=values_m)
 
 
-
-    # UNSURE WHERE TO PLACE
-    def pixel_r2(self, latitude_idx, longitude_idx, start=0, end=9999):
-        """Return the R² score for a single pixel within a year range.
-
-        Delegates to r2_scores, which may trigger full-lake parallel computation
-        and CSV caching on the first call for this year range.
-
-        Parameters
-        ----------
-        latitude_idx : int
-            Row (lat) index of the pixel.
-        longitude_idx : int
-            Column (lon) index of the pixel.
-        start : int
-            First year of the evaluation window (0 = full series start).
-        end : int
-            Last year of the evaluation window (9999 = full series end).
-
-        Returns
-        -------
-        float
-            R² score for the pixel, or np.nan if insufficient data.
-        """
-        scores = self.r2_scores([(start, end)])
-        return scores[(latitude_idx, longitude_idx)]
-
-    # UNSURE WHERE TO PLACE
-    def pixel_rmse(self, latitude_idx, longitude_idx, start=0, end=9999):
-        """Return the RMSE for a single pixel within a year range.
-
-        Delegates to RMSE_scores, which may trigger full-lake parallel computation
-        and CSV caching on the first call for this year range.
-
-        Parameters
-        ----------
-        latitude_idx : int
-            Row (lat) index of the pixel.
-        longitude_idx : int
-            Column (lon) index of the pixel.
-        start : int
-            First year of the evaluation window (0 = full series start).
-        end : int
-            Last year of the evaluation window (9999 = full series end).
-
-        Returns
-        -------
-        float
-            RMSE value for the pixel, or np.nan if insufficient data.
-        """
-        scores = self.RMSE_scores([(start, end)])
-        return scores[(latitude_idx, longitude_idx)]
-
-
-    # UNSURE WHERE TO PLACE
-    def pixel_mad(self, latitude_idx, longitude_idx, start=0, end=9999):
-        """Return the Median Absolute Deviation for a single pixel within a year range.
-
-        Delegates to MAD_scores, which may trigger full-lake parallel computation
-        and CSV caching on the first call for this year range.
-
-        Parameters
-        ----------
-        latitude_idx : int
-            Row (lat) index of the pixel.
-        longitude_idx : int
-            Column (lon) index of the pixel.
-        start : int
-            First year of the evaluation window (0 = full series start).
-        end : int
-            Last year of the evaluation window (9999 = full series end).
-
-        Returns
-        -------
-        float
-            MAD value for the pixel, or np.nan if insufficient data.
-        """
-        scores = self.MAD_scores([(start, end)])
-        return scores[(latitude_idx, longitude_idx)]
-    
-
-    # UNSURE WHERE TO PLACE
-    def pixel_correlation(self, latitude_idx, longitude_idx, start=0, end=9999):
-        """Return the Pearson correlation coefficient for a single pixel within a year range.
-
-        Delegates to correlation_scores, which may trigger full-lake parallel
-        computation and CSV caching on the first call for this year range.
-
-        Parameters
-        ----------
-        latitude_idx : int
-            Row (lat) index of the pixel.
-        longitude_idx : int
-            Column (lon) index of the pixel.
-        start : int
-            First year of the evaluation window (0 = full series start).
-        end : int
-            Last year of the evaluation window (9999 = full series end).
-
-        Returns
-        -------
-        float
-            Pearson r for the pixel, or np.nan if insufficient data.
-        """
-        scores = self.correlation_scores([(start, end)])
-        return scores[(latitude_idx, longitude_idx)]
-
-
-    # UNSURE WHERE TO PLACE
-    def pixel_values(self, latitude_idx, longitude_idx, start=0, end=9999):
-        """Return the valid observation count for a single pixel within a year range.
-
-        Delegates to values_per_pixel, which may trigger full-lake parallel
-        computation and CSV caching on the first call for this year range.
-
-        Parameters
-        ----------
-        latitude_idx : int
-            Row (lat) index of the pixel.
-        longitude_idx : int
-            Column (lon) index of the pixel.
-        start : int
-            First year of the evaluation window (0 = full series start).
-        end : int
-            Last year of the evaluation window (9999 = full series end).
-
-        Returns
-        -------
-        int
-            Number of valid (QA==0, value!=-9999) observations in the window.
-        """
-        scores = self.read_metric_lake('values_per_pixel',**(start, end))
-        return scores[(latitude_idx, longitude_idx)]
-
     def read_metric_lake(self, metric_name,start_year,end_year):
         """Read one metric from a lake/window NetCDF cache."""
         start_year = self.start_year if start_year == 0 else start_year
@@ -666,3 +423,19 @@ class PhenologyVisualizationBase:
 
         computed = np.argwhere(grid != -9999.0)
         return {(int(i), int(j)): grid[i, j] for i, j in computed}
+
+
+    def read_pixel_metrics(self, latitude_idx, longitude_idx, start_year,end_year):
+        """Read one metric from a lake/window NetCDF cache."""
+        start_year = self.start_year if start_year == 0 else start_year
+        end_year = self.end_year if end_year == 9999 else end_year
+
+        fn = f.construct_fit_metric_filename(self.lakeID,start_year,end_year)
+        fp = f.construct_fit_metric_dirpath(self.data_folder,self.variable)
+
+        with netCDF4.Dataset(fp / fn, "r") as ds:
+            return {
+                k: v[latitude_idx, longitude_idx]
+                for k, v in ds.variables.items()
+                if v.ndim == 2
+            }
