@@ -373,7 +373,7 @@ class PhenologyVisualizationBase:
                 "qa": np.array(g["qa"][:, i, j])
             }
 
-            self._pixel_cache[(i,j)] = extract_vals | f.load_pixel_data_from_path(self.e_path,self.p_path)
+            self._pixel_cache[(i,j)] = extract_vals | f.load_pixel_cs_from_path(self.p_path,i,j)
         return self._pixel_cache[(i,j)]
 
 

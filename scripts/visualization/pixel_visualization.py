@@ -37,33 +37,18 @@ class PixelVisualization(PhenologyVisualizationBase):
         "yearly_heatmap_pixel",
     })
     
-    
+
     def plot_background_pts(self, ax, latitude_idx, longitude_idx, masked_values, masked_time, aggregation = False, **style_kwargs):
         base_style = {"alpha":0.3, "color":"grey","s":10}
         style = {**base_style,**style_kwargs}
 
         if aggregation:
-            if self.save_format == "netcdf":
-                if self.aggregation_ds is None:
-                    self.spatial_aggregation()
+            fn = f.construct_background_agg_filename(self.lakeID)
+            fp = f.construct_background_agg_dirpath(self.data_folder,self.variable)
+            time, values = f.read_background_agg_pixel(fp/fn, latitude_idx, longitude_idx)
 
-                pixel_idx = self._aggregation_pixel_index.get((latitude_idx, longitude_idx))
-                if pixel_idx is None:
-                    background_time = np.array([])
-                    background_values = np.array([])
-                else:
-                    background_time = np.asarray(self.aggregation_ds.variables["time"][:])
-                    background_values = np.asarray(self.aggregation_ds.variables["MA_value"][:, pixel_idx])
-            else:
-                if self.aggregation_df is None:
-                    self.spatial_aggregation()
-
-                background_sub = self.aggregation_df[(self.aggregation_df["i"]==latitude_idx) & (self.aggregation_df["j"]==longitude_idx)]
-                background_time = background_sub["time"].to_numpy()
-                background_values = background_sub["MA_value"]
-
-            x = f.datenum_to_datetime(background_time)
-            y = background_values
+            x = f.datenum_to_datetime(time)
+            y = values
         else:
             x = f.datenum_to_datetime(masked_time)
             y = masked_values

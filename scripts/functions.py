@@ -255,7 +255,8 @@ def set_labels(ax, fig, im, title, colorbar_label, colorbar_ticks=None):
     cbar = fig.colorbar(im, ax=ax, label=colorbar_label)
     if colorbar_ticks is not None:
         cbar.set_ticks(colorbar_ticks)
-    ax.legend()
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend()
 
 def grab_time_data(e_path, p_path, valid_coords, buffered_geom_prep,
                    var_x, var_y, year, use_max, DOY_start = 160, DOY_end = 250):
@@ -642,19 +643,21 @@ def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_sp
                 else:
                     label = f"{start}-{end}"
 
+                metric_dict = eda_instance.read_pixel_metrics(i,j,start,end)
+
                 file.write(f"    {label}:\n")
                 if "n_peaks" in summary_types:
                     file.write(f"        Number of Peaks: {count_extrema(eda_instance.p_path,i, j, start=start, end=end, peaks = True)}\n")
                 if "r2" in summary_types:
-                    file.write(f"        R2: {round(eda_instance.pixel_r2(i, j, start=start, end=end), 4)}\n")
+                    file.write(f"        R2: {round(metric_dict['r2'].item(), 4)}\n")
                 if "rmse" in summary_types:
-                    file.write(f"        RMSE: {round(eda_instance.pixel_rmse(i, j, start=start, end=end), 4)}\n")
+                    file.write(f"        RMSE: {round(metric_dict['RMSE'].item(), 4)}\n")
                 if "mad" in summary_types:
-                    file.write(f"        MAD: {round(eda_instance.pixel_mad(i, j, start=start, end=end), 4)}\n")
+                    file.write(f"        MAD: {round(metric_dict['MAD'].item(), 4)}\n")
                 if "correlation" in summary_types:
-                    file.write(f"        Correlation: {round(eda_instance.pixel_correlation(i, j, start=start, end=end), 4)}\n")
+                    file.write(f"        Correlation: {round(metric_dict['correlation'].item(), 4)}\n")
                 if "values" in summary_types:
-                    file.write(f"        Values: {round(eda_instance.pixel_values(i, j, start=start, end=end), 4)}\n")
+                    file.write(f"        Values: {round(metric_dict['values_per_pixel'].item(), 4)}\n")
 
             if "qa" in summary_types:
                 px = eda_instance._load_pixel_data(i, j)
@@ -2273,8 +2276,14 @@ def load_extract_meta_from_path(e_path):
             "lat": np.asarray(nc.variables["lat"]),
             "lon": np.asarray(nc.variables["lon"]),
             "t_all":    unix_to_datenum(nc.variables["time"]),
-            "variable": getattr(nc, "variable"),
-            "qa":       getattr(nc, "qa"),
+            "variable_name": getattr(nc, "variable"),
+            "qa_label":       getattr(nc, "qa"),
+            "variable": np.asarray(
+                nc.variables[getattr(nc, "variable")]
+            ),
+            "qa": np.asarray(
+                nc.variables[getattr(nc, "qa")]
+            )
         }
     return extracted_globals
 
@@ -2430,6 +2439,18 @@ def qa_set_to_str(qa_set):
 def qa_str_to_set(qa_str):
     return None if qa_str == "all" else {int(value) for value in qa_str.removeprefix("qa")}
 
+def construct_background_agg_filename(lakeID):
+    return f"ID{lakeID}_background_agg.nc"
+
+def construct_background_agg_dirpath(data_dir, var):
+    return Path(data_dir) / "calculated_values" / "spatial_aggregation_values" / var
+
+def construct_fit_metric_filename(lakeID, start_year, end_year):
+    return f"ID{lakeID}_{start_year}_{end_year}.nc"
+
+def construct_fit_metric_dirpath(data_dir, var):
+    return Path(data_dir) / "calculated_values" / "metrics" / var
+
 def construct_bloom_assembly_filename(lakeID):
     return f"ID{lakeID}_bloom_assembly.nc"
 
@@ -2443,8 +2464,20 @@ def construct_bloom_prob_filename(lakeID, start_year, end_year, qa_label,
 def construct_bloom_prob_dirpath(data_dir, var):
     return Path(data_dir) / "calculated_values" / "bloom_prob" / var
 
-def construct_fit_metric_filename(lakeID, start_year, end_year):
-    return f"ID{lakeID}_{start_year}_{end_year}.nc"
+def read_background_agg_pixel(full_fp, latitude_idx, longitude_idx):
 
-def construct_fit_metric_dirpath(data_dir, var):
-    return Path(data_dir) / "calculated_values" / "metrics" / var
+    with netCDF4.Dataset(full_fp, "r") as ds:
+
+        pixel_lookup = {
+            (int(i), int(j)): idx for idx, (i, j) in enumerate(zip(ds.variables["pixel_i"][:], ds.variables["pixel_j"][:]))
+        }
+
+        pixel_idx = pixel_lookup.get((latitude_idx, longitude_idx))
+
+        if pixel_idx is None:
+            return np.array([]), np.array([])
+
+        time = np.asarray(ds.variables["time"][:])
+        values = np.asarray(ds.variables["MA_value"][:, pixel_idx])
+
+    return time, values
