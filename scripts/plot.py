@@ -72,7 +72,7 @@ def plot(lake, args, threads=1, batch_size=100):
         save_maps(eda, lake_analysis_folder, lake_str, time_splits = args["time_splits"])
         logging.info(f"Maps for {lake['id']} complete")
 
-    # not working
+    # working
     if args["pixel_plots"]:
         lake_id_str = str(lake['id'])
         with open(args["pixel_plots"]) as f:

@@ -195,11 +195,11 @@ class PixelVisualization(PhenologyVisualizationBase):
                     pm = pks_qa_sub == qa
                     tm = trgs_qa_sub == qa
                     if pm.any():
-                        ax.scatter(f.to_frac_month(pks_x_sub[pm]), pks_y_sub[pm], color="black", s=50,
+                        ax.scatter(f.to_frac_month(pks_x_sub[pm]), pks_y_sub[pm], color=year_colors[year], s=50,
                             marker=qa_markers[qa], edgecolors="black", linewidths=0.5,
                             zorder=4, label= qa_labels[qa] if year == years[0] else None)
                     if tm.any():
-                        ax.scatter(f.to_frac_month(trgs_x_sub[tm]), trgs_y_sub[tm], color="darkgray", s=50,
+                        ax.scatter(f.to_frac_month(trgs_x_sub[tm]), trgs_y_sub[tm], color=year_colors[year], s=50,
                             marker=qa_markers[qa], edgecolors="black", linewidths=0.5,
                             zorder=4, label=qa_labels[qa] if (year == years[0] and not pm.any()) else None)
             else:
