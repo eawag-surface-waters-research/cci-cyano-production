@@ -54,6 +54,10 @@ class PixelCalcBase:
     def run_chunked(self, block_size=64):
         """Run the chunked calculation and writing workflow."""
         self.build_path()
+
+        if os.path.isfile(self.save_fp):
+            logging.info(f"{self.metric_name}: file {Path(self.save_fp).name} already exists")
+            return
         self.read_input()
         self.calculate_and_write_chunked(block_size=block_size)
 
