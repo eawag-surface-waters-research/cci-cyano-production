@@ -1,12 +1,18 @@
 {
-  "variable": "chla",
+  "variable": "phycocyanin",
   "qa": "lwlr_quality_flags",
   "shapefile": "C:\\Users\\schelian\\cci-cyano-production\\shapefiles\\lakes_cci_v2.0.2_data_availability_shp\\lakescci_v2.0.2_data-availability.shp",
   "images": "D:/lakecci_data/raw/v3.0/merged_product",
   "out_folder": "D:/phenology_data/v3.0",
-  "lakes": [300009243],
+  "lakes": [2317],
   "extract": false,
   "qa_filter": true,
   "phenology": false,
-  "postprocess": true
+  "postprocess": true,
+  "timing_plots": false,
+  "maps": false,
+  "comparison": true,
+  "comparison_classes": ["chla3", "phycocyanin3"],
+  "pixel_plots": "C:\\Users\\schelian\\cci-cyano-production\\pixel_dicts\\v3_can_aggregate_pixels.json",
+  "kde_qa": [[0,1],null]
 }
