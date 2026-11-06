@@ -40,9 +40,8 @@ class TimingVisualization(PhenologyVisualizationBase):
 
     graph_type = "timing"
     graph_methods = frozenset({
-        "yearly_cubic_spline",
         "plot_lake_bloom_kde",
-        "plot_lake_bloom_kde_from_fp",
+        "lake_bloom_kde_from_fp",
     })
 
     def plot_lake_bloom_kde(

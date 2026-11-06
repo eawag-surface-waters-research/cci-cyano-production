@@ -26,15 +26,18 @@ class PixelVisualization(PhenologyVisualizationBase):
 
     graph_type = "pixel"
     graph_methods = frozenset({
-        "pixel_map",
+        "plot_background_pts",
+        "plot_data_gaps",
+        "plot_pheno_metrics",
+        "yearly_cubic_spline",
+        "annotations_and_limits",
         "single_plot",
         "split_plot",
         "full_plot",
         "single_years_plot",
         "single_plot_insitu",
         "extrema_plot",
-        "qa_boxplot",
-        "yearly_heatmap_pixel",
+        "single_plot_background",
     })
     
 

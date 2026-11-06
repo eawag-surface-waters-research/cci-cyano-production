@@ -16,13 +16,13 @@ class MapVisualization(PhenologyVisualizationBase):
 
     graph_type = "map"
     graph_methods = frozenset({
+        "pixel_map",
         "interactive_pixel_map",
         "metric_map",
         "interactive_metric_map",
         "time_map",
         "time_map_panel",
         "single_day_map",
-        "yearly_heatmap_lake",
     })
 
     
