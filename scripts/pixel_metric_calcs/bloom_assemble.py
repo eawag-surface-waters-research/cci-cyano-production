@@ -368,8 +368,6 @@ class BloomAssemble(PixelCalcBase):
             Row count equals the total number of events across all variables and pixels.
         """
 
-        print(f"assemble bloom events started at: {datetime.datetime.now()}")
-
         if coords is None:
             coords = self.valid_coords
 
@@ -402,7 +400,6 @@ class BloomAssemble(PixelCalcBase):
         frames = [df for df in results if not df.empty]
         if not frames:
             return pd.DataFrame(columns=REQ_COLS)
-        print(f"assemble bloom events finished at: {datetime.datetime.now()}")
         return pd.concat(frames, ignore_index=True)
 
 if __name__ == "__main__":
