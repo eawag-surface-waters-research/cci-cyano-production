@@ -66,13 +66,11 @@ def plot(lake, args, threads=1, batch_size=100):
         logging.info(f"No plots requested for lake {lake['id']}, skipping")
         return
 
-    # working
     if args["maps"]:
         logging.info(f"Starting maps for lake {lake['id']}")
         save_maps(eda, lake_analysis_folder, lake_str, time_splits = args["time_splits"])
         logging.info(f"Maps for {lake['id']} complete")
 
-    # working
     if args["pixel_plots"]:
         lake_id_str = str(lake['id'])
         with open(args["pixel_plots"]) as f:
@@ -83,15 +81,15 @@ def plot(lake, args, threads=1, batch_size=100):
             create_summary(eda, pixel_dict[lake_id_str], lake_analysis_folder, lake_str, time_splits= args["time_splits"])
             logging.info(f"Pixel plots for lake {lake['id']} complete")
         else:
+            # eventually create some handling for lakes that are not in the pixel dictionary, e.g. pick a middle pixel.
             logging.info(f"WARNING: lake {lake['id']} is not in the pixel dictionary")
 
-    # working
     if args["timing_plots"]:
         logging.info(f"Starting timing plots for lake {lake['id']}")
         save_timing_plots(eda, lake_analysis_folder, lake_str, time_splits=args["time_splits"], kde_qa=args["kde_qa"])
         logging.info(f"Timing plots for lake {lake['id']} complete")
 
-    # not tried (presumaably not working)
+    # working
     if args["comparison"]:
         logging.info("Starting Comparison Plots")
         if not args["pixel_plots"]:
