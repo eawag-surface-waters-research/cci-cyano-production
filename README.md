@@ -105,6 +105,9 @@ Each JSON file in `args/` controls one run. All keys except `variable`, `qa`, `s
   "spline_data_gap_size_buffer": 0,
   "spline_subs_peak_win_size": 365,
   "spline_subs_peak_ampl_frac": 0.05
+  "outliers": false,
+  "drop_max": 5,
+  "z_thresh": 3,
 }
 ```
 
@@ -129,6 +132,9 @@ Each JSON file in `args/` controls one run. All keys except `variable`, `qa`, `s
 | `spline_data_gap_size_buffer` | Buffer (days) added around flagged data gaps |
 | `spline_subs_peak_win_size` | Window size (days) for the substantial-peak amplitude check |
 | `spline_subs_peak_ampl_frac` | Amplitude fraction threshold for the substantial-peak check (0.05 retains smaller peaks; 0.35 filters them) |
+| `outliers` | Enable outlier input preparation (default: `false`; execution through `main.py` is not yet integrated) |
+| `drop_max` | Maximum number of candidate dates to remove cumulatively (default: `5`); the original input remains the baseline |
+| `z_thresh` | Positive z-score threshold for candidate selection (default: `3`); a date qualifies if at least one pixel exceeds this threshold relative to its own temporal mean and standard deviation |
 
 ### Analysis and visualization keys
 

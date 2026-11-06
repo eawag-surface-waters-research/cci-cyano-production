@@ -64,7 +64,7 @@ def parse_args(args):
         "ratio_qa_source": "self", # which side's QA to group the ratio boxplot by: 'self', 'other', or 'matched'
         "kde_qa": None, # list of QA filters, one KDE plot per entry, e.g. [[0], [0,1], null] (null = all levels). None (unset) = a single all-levels plot
         "time_splits" : [(0,9999)], 
-        # "start":0,
+        # "drop":0,
         # "end":9999,
         # "split_start": 2016,
         # "split_end": 2012,
@@ -79,6 +79,9 @@ def parse_args(args):
         "spline_data_gap_size_buffer": 0,
         "spline_subs_peak_win_size": 365,
         "spline_subs_peak_ampl_frac": 0.05, # 0.35 removes lower peaks & 0.05 adds lower peaks
+        "outliers": False,
+        "drop_max": 5,
+        "z_thresh": 3,
     }
     return default_args | args
 
