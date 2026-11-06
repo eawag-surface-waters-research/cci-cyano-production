@@ -104,7 +104,7 @@ Each JSON file in `args/` controls one run. All keys except `variable`, `qa`, `s
   "spline_data_gap_size": 31,
   "spline_data_gap_size_buffer": 0,
   "spline_subs_peak_win_size": 365,
-  "spline_subs_peak_ampl_frac": 0.05
+  "spline_subs_peak_ampl_frac": 0.05,
   "outliers": false,
   "drop_max": 5,
   "z_thresh": 3,
