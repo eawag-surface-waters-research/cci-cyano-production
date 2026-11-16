@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import warnings
 import multiprocessing
 from scipy.sparse import SparseEfficiencyWarning
+from scipy.ndimage import label
 from scipy.stats import pearsonr, gaussian_kde, mannwhitneyu
 import matplotlib
 matplotlib.use("Agg")
@@ -79,6 +80,7 @@ def parse_args(args):
         "spline_data_gap_size_buffer": 0,
         "spline_subs_peak_win_size": 365,
         "spline_subs_peak_ampl_frac": 0.05, # 0.35 removes lower peaks & 0.05 adds lower peaks
+        "recurring_bloom_prob_threshold": 0.05,
         "outliers": False,
         "drop_max": 5,
         "z_thresh": 3,
@@ -2484,3 +2486,35 @@ def read_background_agg_pixel(full_fp, latitude_idx, longitude_idx):
         values = np.asarray(ds.variables["MA_value"][:, pixel_idx])
 
     return time, values
+
+
+def count_probability_regions(
+    probs,
+    threshold=0.05,
+):
+    """
+    Determine connected probability regions above threshold.
+
+    Returns
+    -------
+    tuple : (n_regions, region_areas_cells)
+    """
+
+    grid = probs.pivot(
+        index="y_low",
+        columns="x_low",
+        values="probability",
+    )
+
+    labels, n_regions = label(
+        grid.values > threshold
+    )
+
+    region_areas = []
+
+    for region_id in range(1, n_regions + 1):
+        region_areas.append(
+            int(np.sum(labels == region_id))
+        )
+
+    return n_regions, region_areas

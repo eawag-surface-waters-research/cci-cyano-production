@@ -43,6 +43,7 @@ class BloomProb(PixelCalcBase):
         self,
         *args,
         qa_value=None,
+        bloom_prob_threshold=0.05,
         start_year=0,
         end_year=9999,
         interval=21,
@@ -59,6 +60,7 @@ class BloomProb(PixelCalcBase):
         self.start_year_filter = start_year
         self.end_year_filter = end_year
 
+        self.bloom_prob_threshold = bloom_prob_threshold
         self.interval = interval
         self.resolution = resolution
         self.x_max = x_max
@@ -239,7 +241,13 @@ class BloomProb(PixelCalcBase):
                 if self.result_qa is None
                 else ",".join(map(str, sorted(self.result_qa)))
             )
+            ds.bloom_count, _ = f.count_probability_regions(
+                self.bloom_prob_df,
+                threshold=self.bloom_prob_threshold,
+            )
 
+            ds.bloom_prob_threshold = float(self.bloom_prob_threshold)
+        print('Used write_output for calcution. Metadata should be saved.')
 
     def calculate_and_write_chunked(self,block_size = 64):
         """Calculate and write probability windows in row blocks."""
@@ -271,6 +279,7 @@ class BloomProb(PixelCalcBase):
             )
 
             event_start = 0
+            all_blocks = []
 
             for row_start in range(0, len(yi), block_size):
                 row_stop = min(row_start + block_size, len(yi))
@@ -308,7 +317,16 @@ class BloomProb(PixelCalcBase):
                     )
 
                 event_start = event_stop
+                all_blocks.append(block_df)
 
+            full_df = pd.concat(all_blocks, ignore_index=True)
+            ds.bloom_count , _ = f.count_probability_regions(
+                            full_df,
+                            threshold=self.bloom_prob_threshold,
+            )
+
+            ds.bloom_prob_threshold = float(self.bloom_prob_threshold)
+            
         return self.save_fp
 
 

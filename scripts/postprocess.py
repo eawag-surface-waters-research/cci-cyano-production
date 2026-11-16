@@ -26,13 +26,15 @@ def postprocess(lake, p, threads = 1, batch_size=100):
         'lakeID' : lake['id'],
         'out_folder' : p['out_folder'],
         'variable' : p['variable'],
-        'version' : version_str
+        'version' : version_str,
     }
 
     # Postprocessing components
     if p['aggregation']:
         SpatialAgg(**calc_kwargs).run_chunked()
         logging.info(f"Completed aggregation for lake {lake['id']}")
+    else:
+        logging.info(f"Skipping aggregation for lake {lake['id']}")
  
     BloomAssemble(**calc_kwargs).run_chunked()
     logging.info(f"Completed bloom assembly for lake {lake['id']}")
@@ -44,7 +46,7 @@ def postprocess(lake, p, threads = 1, batch_size=100):
         logging.info(f"Completed fit metrics for lake {lake['id']} for years {start_year}-{end_year}")
 
         for qa_spec in p['kde_qa']:
-            BloomProb(**split_kwargs,qa_value = qa_spec).run_chunked()
+            BloomProb(**split_kwargs,bloom_prob_threshold=p['recurring_bloom_prob_threshold'],qa_value = qa_spec).run_chunked()
             logging.info(f"Completed bloom probability for lake {lake['id']} for years {start_year}-{end_year} and QA {qa_spec}")
 
     logging.info(f"Postprocessing lake {lake['id']} complete")
