@@ -257,7 +257,7 @@ class BloomProb(PixelCalcBase):
         if fit is None:
             return None
 
-        self.kde, self.result_start_year, self.result_end_year, self.result_qa = fit
+        self.kde, self.result_qa = fit
 
         xi = np.arange(-self.interval, self.x_max + self.interval, self.resolution)
         yi = np.arange(-self.interval, self.y_max + self.interval, self.resolution)
@@ -270,8 +270,8 @@ class BloomProb(PixelCalcBase):
                 block_size=block_size,
             )
 
-            ds.start_year = self.result_start_year
-            ds.end_year = self.result_end_year
+            ds.start_year = self.start_year
+            ds.end_year = self.end_year
             ds.qa_value = (
                 ""
                 if self.result_qa is None
@@ -364,7 +364,7 @@ class BloomProb(PixelCalcBase):
         paired_df["doy_y"] = np.round((paired_df["next_var2_time"] % 1) * 1000).astype(int)
 
         x = paired_df["doy_x"].to_numpy()
-        y = paired_df["doy_y"].to_numpy()
+        y = paired_df["doy_y"].to_numpy(copy=True)
         y[y < x] += 365
         try:
             kde = gaussian_kde(np.vstack([x, y]))
@@ -374,7 +374,7 @@ class BloomProb(PixelCalcBase):
             warnings.warn(f"Not enough distinct {self.variable} events to plot KDE for lake ID {self.lakeID}.")
             return None
 
-        return kde, self.start_year_filter, self.end_year_filter, qa_filtered_set
+        return kde, qa_filtered_set
 
 if __name__ == "__main__":
     test_bloom = BloomProb(lakeID = 3500,
