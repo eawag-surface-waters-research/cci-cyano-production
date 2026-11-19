@@ -1,0 +1,24 @@
+{
+  "variable": "chla",
+  "shapefile": "synthetic/data/shapefile/synthetic_lakes.shp",
+  "out_folder": "synthetic/data/v3.0",
+  "images": "synthetic/data/v3.0/extract/chla",
+  "lakes": [
+    9999005,
+    9999006,
+    9999007,
+    9999008
+  ],
+  "extract": false,
+  "qa_filter": false,
+  "phenology": false,
+  "postprocess": true,
+  "aggregation": true,
+  "time_splits": [
+    [2002, 2022]
+  ],
+  "kde_qa": [null],
+  "timing_plots": false,
+  "plot": true,
+  "pixel_plots": "args/synthetic_pixel_plots.json"
+}

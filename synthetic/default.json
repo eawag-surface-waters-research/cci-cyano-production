@@ -1,0 +1,44 @@
+{
+  "metadata": {
+    "excel_file": "synthetic/synth_lakes.xlsx",
+    "sheet": "synth_descriptions"
+  },
+  "grid": {
+    "n_lat": 8,
+    "n_lon": 12,
+    "lat_min": 47.15,
+    "lon_min": 8.474,
+    "pixel_size_degrees": 0.01
+  },
+  "time": {
+    "start": "2002-01-01",
+    "end": "2022-12-31"
+  },
+  "variables": {
+    "value": "chla",
+    "qa": "lwlr_quality_flags",
+    "value_fill": -9999.0,
+    "qa_fill": -1
+  },
+  "baseline": {
+    "type": "annual_sinusoid",
+    "mean_ug_l": 8.0,
+    "amplitude_ug_l": 5.0,
+    "phase_months": 3.0
+  },
+  "spatial": {
+    "phase_shift_months_per_pixel_lon": 0.05,
+    "phase_shift_months_per_pixel_lat": 0.05,
+    "amplitude_increase_per_pixel_lon": 0.2,
+    "amplitude_increase_per_pixel_lat": 0.2
+},
+  "noise": {
+    "std_ug_l": 0.0,
+    "random_seed": 42
+},
+  "output": {
+    "out_folder": "synthetic/data/v3.0",
+    "reference_folder": "synthetic/data/v3.0/reference",
+    "shapefile": "synthetic/data/shapefile/synthetic_lakes.shp"
+}
+}

@@ -346,3 +346,12 @@ data/*
 
 matlab
 .claude
+
+# Generated synthetic data and local backups
+/synthetic/data/
+/synthetic/backups/
+/synthetic/lake_analysis/
+/synthetic/validation/
+
+# Generated notebook output
+/notebooks/output/
