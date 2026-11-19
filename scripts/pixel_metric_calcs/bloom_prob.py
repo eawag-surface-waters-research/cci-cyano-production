@@ -346,7 +346,7 @@ class BloomProb(PixelCalcBase):
         paired_df["doy_y"] = np.round((paired_df["next_var2_time"] % 1) * 1000).astype(int)
 
         x = paired_df["doy_x"].to_numpy()
-        y = paired_df["doy_y"].to_numpy()
+        y = paired_df["doy_y"].to_numpy(copy=True)
         y[y < x] += 365
         try:
             kde = gaussian_kde(np.vstack([x, y]))
