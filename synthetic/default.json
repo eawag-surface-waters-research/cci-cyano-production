@@ -22,7 +22,7 @@
   },
   "baseline": {
     "type": "annual_sinusoid",
-    "mean_ug_l": 8.0,
+    "mean_ug_l": 16.0,
     "amplitude_ug_l": 5.0,
     "phase_months": 3.0
   },
@@ -33,12 +33,13 @@
     "amplitude_increase_per_pixel_lat": 0.2
 },
   "noise": {
-    "std_ug_l": 0.0,
+    "std_ug_l": 2.0,
     "random_seed": 42
 },
   "output": {
     "out_folder": "synthetic/data/v3.0",
     "reference_folder": "synthetic/data/v3.0/reference",
-    "shapefile": "synthetic/data/shapefile/synthetic_lakes.shp"
+    "shapefile": "synthetic/data/shapefile/synthetic_lakes.shp",
+    "overwrite": true
 }
 }

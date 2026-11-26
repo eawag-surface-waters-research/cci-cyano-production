@@ -36,34 +36,79 @@ def match_events(reference_times, fitted_times):
 
 
 def check(lake_id):
-    ref_path = ROOT / f"data/v3.0/reference/{lake_id}/reference.nc"
+    ref_dir = ROOT / f"data/v3.0/reference/{lake_id}"
+    ref_nc_path = ref_dir / "reference.nc"
+    ref_csv_path = ref_dir / "reference.csv"
     fit_path = ROOT / f"data/v3.0/phenology/chla/{lake_id}.nc"
     output = ROOT / f"validation/{lake_id}"
     output.mkdir(parents=True, exist_ok=True)
 
     rows, counts = [], []
 
-    with netCDF4.Dataset(ref_path) as ref, \
-            netCDF4.Dataset(fit_path) as fit:
+    with netCDF4.Dataset(fit_path) as fit:
+        if ref_nc_path.exists():
+            ref = netCDF4.Dataset(ref_nc_path)
+            ref_is_nc = True
+        elif ref_csv_path.exists():
+            ref = pd.read_csv(ref_csv_path)
+            ref_is_nc = False
+        else:
+            raise FileNotFoundError(
+                f"Neither reference.nc nor reference.csv found in {ref_dir}"
+            )
 
-        for coord in ("lat", "lon"):
-            a = read_array(ref.variables[coord])
-            b = read_array(fit.variables[coord])
-            if a.shape != b.shape or not np.allclose(
-                a, b, rtol=0, atol=1e-5
-            ):
-                raise ValueError(f"Koordinaten stimmen nicht: {coord}")
+        if ref_is_nc:
+            for coord in ("lat", "lon"):
+                a = read_array(ref.variables[coord])
+                b = read_array(fit.variables[coord])
+                if a.shape != b.shape or not np.allclose(
+                    a, b, rtol=0, atol=1e-5
+                ):
+                    raise ValueError(f"Koordinaten stimmen nicht: {coord}")
 
-        tv = ref.variables["time"]
-        dates = netCDF4.num2date(
-            tv[:], tv.units,
-            calendar=getattr(tv, "calendar", "standard")
-        )
-        time = np.asarray(netCDF4.date2num(
-            dates,
-            "seconds since 1970-01-01 00:00:00",
-            calendar="standard"
-        ), dtype=float)
+            tv = ref.variables["time"]
+            dates = netCDF4.num2date(
+                tv[:], tv.units,
+                calendar=getattr(tv, "calendar", "standard")
+            )
+            time = np.asarray(netCDF4.date2num(
+                dates,
+                "seconds since 1970-01-01 00:00:00",
+                calendar="standard"
+            ), dtype=float)
+
+            n_time = len(time)
+            n_lat = fit.dimensions["lat"].size
+            n_lon = fit.dimensions["lon"].size
+            ref_values = read_array(ref.variables["reference_chla_ug_l"])
+
+            if ref_values.ndim == 1:
+                if ref_values.shape != (n_time,):
+                    raise ValueError(
+                        "1D reference does not match time dimension."
+                    )
+                ref_values = np.broadcast_to(
+                    ref_values[:, None, None],
+                    (n_time, n_lat, n_lon),
+                ).copy()
+        else:
+            dates = pd.to_datetime(ref["date"], utc=True)
+            time = np.asarray(
+                [d.timestamp() for d in dates], dtype=float
+            )
+            n_time = len(time)
+            n_lat = fit.dimensions["lat"].size
+            n_lon = fit.dimensions["lon"].size
+            series = ref["reference_chla_ug_l"].to_numpy(dtype=float)
+
+            if series.shape != (n_time,):
+                raise ValueError(
+                    "CSV reference does not match time dimension."
+                )
+            ref_values = np.broadcast_to(
+                series[:, None, None],
+                (n_time, n_lat, n_lon),
+            ).copy()
 
         if not np.all(np.diff(time) > 0):
             raise ValueError("Referenzzeit muss streng ansteigend sein.")
@@ -76,16 +121,14 @@ def check(lake_id):
         )
 
         print(f"\nSzenario: {lake_id}")
+        print(f"Referenzformat: {'NetCDF' if ref_is_nc else 'CSV'}")
         print(f"Gültige Fit-Pixel: {valid.sum()}/{valid.size}")
         print(f"Medianes Referenzintervall: {step_days:.6f} Tage")
         print(f"Randausschluss: {EDGE_DAYS} Tage je Seite")
         print(f"Maximaler Zuordnungsabstand: {MATCH_DAYS} Tage")
 
         for i, j in np.argwhere(valid):
-            signal = np.ma.asarray(
-                ref.variables["reference_chla_ug_l"][:, i, j],
-                dtype=float
-            ).filled(np.nan)
+            signal = ref_values[:, i, j]
 
             if not np.all(np.isfinite(signal)):
                 raise ValueError(f"Referenzlücken bei Pixel {(i, j)}")
@@ -143,6 +186,9 @@ def check(lake_id):
                         "value_error_ug_l":
                             fitted_y[f] - reference_y[r],
                     })
+
+        if ref_is_nc:
+            ref.close()
 
     count_df = pd.DataFrame(counts)
     event_df = pd.DataFrame(rows)

@@ -9,70 +9,66 @@ from common import (
     create_sinusoid,
     create_daily_sections,
     broadcast_reference_to_grid,
+    add_gaussian_noise,
     save_results,
 )
+
 
 def main():
     p = load_defaults()
 
-    # Isolate the mean shifts: no additional noise in this scenario.
-p["noise"]["std_ug_l"] = 0.0
+    lake = load_scenario_metadata(9999003, p)
+    dates, lat, lon, geometry = create_grid_and_time(p)
+    baseline = create_sinusoid(dates, p)
 
-# Load the scenario metadata from the authoritative Excel source.
-lake = load_scenario_metadata(9999003, p)
+    n = len(dates)
+    first_change, second_change = create_daily_sections(n)
 
-# Create the daily time axis, pixel coordinates, and lake boundary.
-dates, lat, lon, geometry = create_grid_and_time(p)
+    offsets = np.zeros(n, dtype=float)
+    offsets[first_change:second_change] = -2.0
+    offsets[second_change:] = 2.0
 
-# Generate one noise-free baseline concentration value for each date.
-baseline = create_sinusoid(dates, p)
+    reference = baseline + offsets
 
-# Split the daily time series into three nearly equal sections.
-n = len(dates)
-first_change, second_change = create_daily_sections(n)
+    lake["offsets_ug_l"] = [0.0, -2.0, 2.0]
+    lake["offset_reference"] = "original baseline"
+    lake["split_method"] = "daily observation index"
+    lake["change_indices"] = [first_change, second_change]
+    lake["change_dates"] = [
+        dates[first_change].isoformat(),
+        dates[second_change].isoformat(),
+    ]
 
-# Define the mean shifts for the three sections.
-offsets = np.zeros(n, dtype=float)
-offsets[first_change:second_change] = -2.0
-offsets[second_change:] = 2.0
+    values = broadcast_reference_to_grid(reference, lat, lon)
+    values, noise_type = add_gaussian_noise(
+        values,
+        dates,
+        p,
+        std_ug_l=p["noise"]["std_ug_l"],
+    )
 
-# Apply the offsets to the original baseline.
-reference = baseline + offsets
-
-# Add the scenario-specific provenance fields to the Excel metadata.
-lake["offsets_ug_l"] = [0.0, -2.0, 2.0]
-lake["offset_reference"] = "original baseline"
-lake["split_method"] = "daily observation index"
-lake["change_indices"] = [first_change, second_change]
-lake["change_dates"] = [
-    dates[first_change].isoformat(),
-    dates[second_change].isoformat(),
-]
-
-# Broadcast the shifted reference across the full pixel grid.
-values = broadcast_reference_to_grid(reference, lat, lon)
-
-if np.any(values < 0):
+    if np.any(values < 0):
         raise ValueError(
-            "Negative concentrations generated. "
-            "Review the baseline and offsets; values have not been clipped."
+            "Negative concentrations generated. Review mean, amplitude "
+            "and noise settings; values have not been clipped."
         )
 
-save_results(
-    lake=lake,
-    dates=dates,
-    lat=lat,
-    lon=lon,
-    geometry=geometry,
-    values=values,
-    reference=reference,
-    p=p,
-)
+    save_results(
+        lake=lake,
+        dates=dates,
+        lat=lat,
+        lon=lon,
+        geometry=geometry,
+        values=values,
+        reference=reference,
+        p=p,
+    )
 
-print("\nMean shifts:")
-print(f"  Before {dates[first_change].date()}: offset 0 ug/L")
-print(f"  From   {dates[first_change].date()}: offset -2 ug/L")
-print(f"  From   {dates[second_change].date()}: offset +2 ug/L")
+    print(f"\nNoise type: {noise_type}")
+    print("Mean shifts:")
+    print(f"  Before {dates[first_change].date()}: offset 0 ug/L")
+    print(f"  From   {dates[first_change].date()}: offset -2 ug/L")
+    print(f"  From   {dates[second_change].date()}: offset +2 ug/L")
 
 
 if __name__ == "__main__":
