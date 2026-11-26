@@ -258,7 +258,7 @@ class MapVisualization(PhenologyVisualizationBase):
         return cid
     
 
-    def time_map(self, fig, ax, year, peaks=True, max = True, colorbar=True, DOY_range=None):
+    def time_map(self, fig, ax, year, peaks=True, max = True, colorbar=True, DOY_range=None,cmap = "rainbow"):
         """Map the day-of-year of a phenological event across all pixels for one year.
 
         For each valid pixel within the 1 km-inset lake boundary, extracts the
@@ -303,7 +303,7 @@ class MapVisualization(PhenologyVisualizationBase):
         map_data, extent = f.grab_time_data(self.e_path, self.p_path, self.valid_coords,
                                             buffered_geom_prepared, var_x, var_y, year, max, 
                                             DOY_start = DOY_range[0], DOY_end = DOY_range[1])
-        im = f.plot_map_data("rainbow", map_data, extent, ax, cmap_extent=DOY_range)
+        im = f.plot_map_data(cmap, map_data, extent, ax, cmap_extent=DOY_range)
         f.plot_lake_outline(geometry=geom, ax=ax)
         if colorbar:
             f.set_labels(ax, fig, im,
@@ -390,8 +390,8 @@ class MapVisualization(PhenologyVisualizationBase):
         time_index = idx[0, 0]
 
         with netCDF4.Dataset(self.e_path) as nc:
-            values = np.array(nc.variables[g["variable"]][time_index, :, :])
-            qa     = np.array(nc.variables[g["qa"]][time_index, :, :])
+            values = np.array(nc.variables[self.variable][time_index, :, :])
+            qa     = np.array(g["qa"][time_index, :, :])
             lats   = nc.variables["lat"][:]
             lons   = nc.variables["lon"][:]
 
@@ -408,7 +408,7 @@ class MapVisualization(PhenologyVisualizationBase):
                 if mask[i, j] and buffered_geom_prepared.contains(Point(lons[j], lats[i])):
                     map_data[i, j] = values[i, j]
         fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-        im = ax.imshow(map_data, cmap="winter", aspect="auto", origin="lower",
+        im = ax.imshow(map_data, cmap="winter", aspect="auto", origin="lower",vmin=0,
                         extent=[lons.min(), lons.max(), lats.min(), lats.max()])
 
         label = False
