@@ -219,6 +219,48 @@ class BloomProb(PixelCalcBase):
 
         return output_vars
 
+    def write_bloom_region_csv(self, region_df):
+        """
+        Write bloom region statistics to a CSV with metadata stored
+        in commented header lines.
+
+        Parameters
+        ----------
+        region_df : pandas.DataFrame
+            Region summary table. Typically contains columns such as:
+            region_id, area_cells, centroid_x, centroid_y.
+        """
+        region_dir = f.construct_recurring_bloom_dirpath(self.out_folder, self.variable)
+        os.makedirs(region_dir, exist_ok=True)
+
+        region_fp = region_dir / f.construct_recurring_bloom_filename(self.lakeID)
+
+        region_df = region_df.assign(
+            lake_id=self.lakeID,
+            variable=self.variable,
+            version=self.version,
+            qa_value=(
+                "all"
+                if self.qa_value is None
+                else "qa" + "".join(map(str, sorted(self.qa_value)))
+            ),
+            start_year=self.start_year,
+            end_year=self.end_year,
+            bloom_prob_threshold=self.bloom_prob_threshold,
+            interval=self.interval,
+            resolution=self.resolution,
+            timestamp=pd.Timestamp.now(),
+        )
+
+        region_df.to_csv(
+            region_fp,
+            mode="a",
+            header=not region_fp.exists(),
+            index=False,
+        )
+
+        return region_fp
+    
 
     def write_output(self):
         """Write the complete in-memory result."""
@@ -241,13 +283,14 @@ class BloomProb(PixelCalcBase):
                 if self.result_qa is None
                 else ",".join(map(str, sorted(self.result_qa)))
             )
-            ds.bloom_count, _ = f.count_probability_regions(
+            ds.bloom_count, region_df = f.count_probability_regions(
                 self.bloom_prob_df,
                 threshold=self.bloom_prob_threshold,
             )
 
             ds.bloom_prob_threshold = float(self.bloom_prob_threshold)
-        print('Used write_output for calcution. Metadata should be saved.')
+        self.write_bloom_region_csv(region_df)
+        print('Used write_output for calcution. Bloom values should be saved.')
 
     def calculate_and_write_chunked(self,block_size = 64):
         """Calculate and write probability windows in row blocks."""
@@ -320,13 +363,14 @@ class BloomProb(PixelCalcBase):
                 all_blocks.append(block_df)
 
             full_df = pd.concat(all_blocks, ignore_index=True)
-            ds.bloom_count , _ = f.count_probability_regions(
+            ds.bloom_count , region_df = f.count_probability_regions(
                             full_df,
                             threshold=self.bloom_prob_threshold,
             )
 
             ds.bloom_prob_threshold = float(self.bloom_prob_threshold)
-            
+        self.write_bloom_region_csv(region_df)
+        print('Used write_output for calcution. Bloom values should be saved.')   
         return self.save_fp
 
 

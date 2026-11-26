@@ -2488,6 +2488,12 @@ def read_background_agg_pixel(full_fp, latitude_idx, longitude_idx):
     return time, values
 
 
+def construct_recurring_bloom_filename(lakeID):
+    return f"ID{lakeID}_recurring_blooms.csv"
+
+def construct_recurring_bloom_dirpath(data_dir, var):
+    return Path(data_dir) / "calculated_values" / "recurring_blooms" / var
+
 def count_probability_regions(
     probs,
     threshold=0.05,
@@ -2497,7 +2503,12 @@ def count_probability_regions(
 
     Returns
     -------
-    tuple : (n_regions, region_areas_cells)
+    n_regions : int
+    region_df : pd.DataFrame
+        region_id
+        area_cells
+        centroid_x
+        centroid_y
     """
 
     grid = probs.pivot(
@@ -2510,11 +2521,64 @@ def count_probability_regions(
         grid.values > threshold
     )
 
-    region_areas = []
+    regions = []
+    
+    x_coords = grid.columns.values
+    y_coords = grid.index.values
 
     for region_id in range(1, n_regions + 1):
-        region_areas.append(
-            int(np.sum(labels == region_id))
-        )
+        
+        region_mask = labels == region_id
+        area_cells = int(region_mask.sum())
+        row_idx, col_idx = np.where(region_mask)
 
-    return n_regions, region_areas
+        centroid_x = np.mean(x_coords[col_idx])
+        centroid_y = np.mean(y_coords[row_idx])
+
+        regions.append({
+            "region_id": region_id,
+            "area_cells": area_cells,
+            "centroid_x": centroid_x,
+            "centroid_y": centroid_y,
+        })
+
+    if n_regions == 0:
+        regions.append({
+            "region_id": 0,
+            "area_cells": 0,
+            "centroid_x": np.nan,
+            "centroid_y": np.nan,
+        })
+        
+    region_df = pd.DataFrame(regions)
+
+    return n_regions, region_df
+
+
+def parse_bloom_assembly_to_paired_df(assembly_df):
+    """
+    Convert the Bloom Assembly saved data into a paired (bloom_up,bloom_down) dataframe.
+    """
+    paired_df = assembly_df.set_index('year.DOY').groupby(['i','j']).apply(find_preceding_and_following, include_groups=False).dropna()
+    paired_df['year'] = paired_df.index.get_level_values(2).astype(int)
+    return paired_df
+
+
+def filter_pairs_qa_year(paired_df, year_list, qa_vals):
+    if "year" not in paired_df.columns:
+        paired_df = paired_df.copy()
+        paired_df['year'] = paired_df.index.get_level_values('year.DOY').astype(int)
+    if isinstance(qa_vals, str):
+        qa_vals = f.qa_str_to_set(qa_vals)
+    if not qa_vals:
+        qa_vals = {0,1,2}
+    filtered_df = paired_df.loc[paired_df['year'].isin(year_list) & paired_df['qa_column'].isin(qa_vals)].copy()
+    filtered_df['qa_column'] = filtered_df['qa_column'].astype('category')
+    return filtered_df
+
+
+def yearDOY_to_DOY(df, col_list):
+    for col in col_list:
+        df[f"{col}_DOY"] = (df[col] % 1 * 1000).round().astype(int)
+    return df
+
