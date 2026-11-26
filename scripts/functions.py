@@ -1,15 +1,43 @@
 import os
+import re
 import sys
+import json
+import subprocess
 import logging
 import netCDF4
 import numpy as np
+from pathlib import Path
 from csaps import csaps
 from scipy.signal import find_peaks
 from datetime import datetime, timezone
 import warnings
+import multiprocessing
 from scipy.sparse import SparseEfficiencyWarning
+from scipy.ndimage import label
+from scipy.stats import pearsonr, gaussian_kde, mannwhitneyu
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from shapely.geometry import Point
+import pandas as pd
+import plotly.graph_objects as go
+from matplotlib.patches import Rectangle
+from sklearn.metrics import mean_squared_error, r2_score
+
 
 warnings.filterwarnings("ignore", category=SparseEfficiencyWarning)
+
+
+def sanitize_filename(name):
+    """Strip characters that are invalid in Windows file/folder names.
+
+    Windows reserves <>:"/\\|?* and disallows trailing dots/spaces; shapefile
+    'name' fields (e.g. mis-encoded diacritics) can contain these and break
+    os.makedirs with WinError 123.
+    """
+    cleaned = re.sub(r'[<>:"/\\|?*]', "", str(name))
+    return cleaned.strip(" .")
 
 def parse_args(args):
     default_args = {
@@ -20,8 +48,30 @@ def parse_args(args):
         "end_index": False,
         "lakes": [],
         "out_folder": "",
+        "images": "",  #
         "extract": True,
         "phenology": True,
+        "postprocess" : True,
+        "plot" : True,
+        "analysis": False,
+        "maps": False,
+        "pixel_plots": False,
+        "timing_plots": False,
+        "comparison": False,
+        "comparison_classes": ["chla21", "chla3", "phycocyanin3"],
+        "comparison_plot_types": ["chla21 vs chla3", "chla21 vs phyco", "chla3 vs phyco", "triple"],
+        "background_pts": True,
+        "purple_chla21": True,
+        "ratio_qa_source": "self", # which side's QA to group the ratio boxplot by: 'self', 'other', or 'matched'
+        "kde_qa": None, # list of QA filters, one KDE plot per entry, e.g. [[0], [0,1], null] (null = all levels). None (unset) = a single all-levels plot
+        "time_splits" : [(0,9999)], 
+        # "drop":0,
+        # "end":9999,
+        # "split_start": 2016,
+        # "split_end": 2012,
+        "provenance": False,
+        "aggregation": True,
+        "save_format": "csv", # cache format for spatial_aggregation(): "csv" or "netcdf"
         "qa_filter": True, # Only accept qa_flag = 0
         "spline_min_phase_length": 14,
         "spline_min_relative_amplitude": 0,
@@ -30,12 +80,18 @@ def parse_args(args):
         "spline_data_gap_size_buffer": 0,
         "spline_subs_peak_win_size": 365,
         "spline_subs_peak_ampl_frac": 0.05, # 0.35 removes lower peaks & 0.05 adds lower peaks
+        "recurring_bloom_prob_threshold": 0.05,
+        "outliers": False,
+        "drop_max": 5,
+        "z_thresh": 3,
     }
     return default_args | args
+
 
 def chunked(iterable, n):
     for i in range(0, len(iterable), n):
         yield iterable[i:i + n]
+
 
 def set_logging(save):
     if save:
@@ -53,12 +109,72 @@ def set_logging(save):
             level=logging.INFO
         )
 
+
 def verify_arg_file(value):
     arg_folder = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "../args"))
     for file in os.listdir(arg_folder):
         if os.path.splitext(file)[0] == value or file == value:
             return os.path.join(arg_folder, file)
     raise ValueError("Argument file {} not found in the args folder.".format(value))
+
+
+def get_git_commit():
+    """Return the short hash of the currently checked-out commit, or None if unavailable."""
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=repo, stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        return None
+
+
+def write_provenance(out_folder, stage, args, args_file=None, extra=None, run_id=None):
+    """Append a provenance record for one pipeline stage to out_folder/provenance.json.
+
+    out_folder is the version-named run directory (e.g. .../v3.0) that the
+    extract/phenology/analysis stage just wrote into. Each call appends a new
+    entry to the "runs" list rather than overwriting the file, so partial or
+    resumed runs build up a full history instead of erasing prior stages' records.
+
+    Parameters
+    ----------
+    out_folder : str
+        The run's out_folder (must be named v{version}; see README).
+    stage : str
+        Which pipeline stage produced this entry: "extract", "phenology", or "analysis".
+    args : dict
+        The resolved parameters dict used for this run (post parse_args defaults).
+    args_file : str, optional
+        Name of the args/ JSON file this run was launched from.
+    extra : dict, optional
+        Additional stage-specific fields (e.g. lakes processed, thread count).
+    """
+    provenance_dir = os.path.join(out_folder, "provenance_logs")
+    os.makedirs(provenance_dir, exist_ok=True)
+    if run_id is None:
+        run_id = datetime.now(timezone.utc).isoformat().replace(":", "-")
+    path = os.path.join(provenance_dir, f"provenance_{run_id}.json")
+
+    if os.path.isfile(path):
+        with open(path) as f:
+            record = json.load(f)
+    else:
+        record = {"out_folder": os.path.basename(out_folder), "runs": []}
+
+    entry = {
+        "stage": stage,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "git_commit": get_git_commit(),
+        "args_file": args_file,
+        "args": args,
+    }
+    if extra:
+        entry.update(extra)
+    record["runs"].append(entry)
+
+    with open(path, "w") as f:
+        json.dump(record, f, indent=2, default=str)
 
 
 def _datenum_to_unix(datenum):
@@ -85,6 +201,822 @@ def unix_to_datetime(arr):
 def remove_nan(arr):
     arr = np.array(arr)
     return arr[~np.isnan(arr)]
+
+# define year range for plotting 
+def define_year_range(start, end, years):
+                return(years.min() if start == 0 else start, 
+                       years.max() if end == 9999 else end)
+
+# find closest factor for nice plotting
+def close_factors(number):
+    ''' 
+    find the closest pair of factors for a given number
+    '''
+    factor1 = 0
+    factor2 = number
+    while factor1 +1 <= factor2:
+        factor1 += 1
+        if number % factor1 == 0:
+            factor2 = number // factor1
+        
+    return factor1, factor2
+
+def plot_lake_outline(geometry, ax):
+    if geometry.geom_type == "Polygon":
+        x, y = geometry.exterior.xy
+        ax.plot(x, y, color="black", linewidth=1, label=None)
+    elif geometry.geom_type == "MultiPolygon":
+        for i, poly in enumerate(geometry.geoms):
+            x, y = poly.exterior.xy
+            ax.plot(x, y, color="black", linewidth=1, label= None)
+
+def grab_metrics(e_path, metric_scores, buffered_geom_prep):
+    with netCDF4.Dataset(e_path) as nc:
+        summary = np.array(nc.variables["summary"][:, :])
+        lats = nc.variables["lat"][:]
+        lons = nc.variables["lon"][:]
+        map_data = np.full(summary.shape, np.nan)
+        extent = [lons.min(), lons.max(), lats.min(), lats.max()]
+        for (i, j), r2 in metric_scores.items():
+            lon = lons[j]
+            lat = lats[i]
+            if buffered_geom_prep.contains(Point(lon, lat)):
+                map_data[i, j] = r2
+        return map_data, extent
+
+def plot_map_data(colormap, map_data, extent, ax, cmap_extent=None):
+    cmap = colormap if colormap else "RdYlBu"
+    if cmap_extent is not None:
+        im = ax.imshow(map_data, cmap=cmap, aspect="auto", origin="lower",
+                       vmin=cmap_extent[0], vmax=cmap_extent[1], extent=extent)
+    else:
+        im = ax.imshow(map_data, cmap=cmap, aspect="auto", origin="lower", extent=extent)
+    return im
+
+def set_labels(ax, fig, im, title, colorbar_label, colorbar_ticks=None):
+    ax.set_xlabel("Lon index")
+    ax.set_ylabel("Lat index")
+    ax.set_title(title)
+    cbar = fig.colorbar(im, ax=ax, label=colorbar_label)
+    if colorbar_ticks is not None:
+        cbar.set_ticks(colorbar_ticks)
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend()
+
+def grab_time_data(e_path, p_path, valid_coords, buffered_geom_prep,
+                   var_x, var_y, year, use_max, DOY_start = 160, DOY_end = 250):
+    with netCDF4.Dataset(e_path) as nc:
+        summary = np.array(nc.variables["summary"][:, :])
+        lats = nc.variables["lat"][:]
+        lons = nc.variables["lon"][:]
+
+    map_data = np.full(summary.shape, np.nan)
+    neg_warned = False
+    extent = [lons.min(), lons.max(), lats.min(), lats.max()]
+
+    with netCDF4.Dataset(p_path) as nc_p:
+        vx = nc_p.variables[var_x]
+        vy = nc_p.variables[var_y]
+
+        for (i, j) in valid_coords:
+            lon, lat = lons[j], lats[i]
+            if not buffered_geom_prep.contains(Point(lon, lat)):
+                continue
+            # read this pixel directly (nc_p.variables[var][i, j, :]) rather than slicing
+            # a bulk nc_p.variables[var][:, :, :] read - netCDF4 1.7.4 silently misattributes
+            # data between pixels when read this way for files with an unlimited 'record'
+            # dimension (verified against the trusted per-pixel access pattern used
+            # elsewhere in this codebase, e.g. PhenologyVisualization._load_pixel_data)
+            x_arr = np.array(unix_to_datetime(remove_nan(np.array(vx[i, j, :]))))
+            y_arr = np.array(remove_nan(np.array(vy[i, j, :])))
+            if len(x_arr) == 0:
+                continue
+            year_arr = np.array([d.year for d in x_arr])
+            doys = np.array([d.timetuple().tm_yday for d in x_arr])
+            mask = (year_arr == year) & (doys >= DOY_start) & (doys <= DOY_end)
+            x_sub, y_sub = x_arr[mask], y_arr[mask]
+            if len(x_sub) == 0:
+                continue
+            if (y_sub < 0).any() and not neg_warned:
+                warnings.warn(f"Negative values in {year}", Warning)
+                neg_warned = True
+            if use_max:
+                map_data[i, j] = float(x_sub[int(np.argmax(y_sub))].timetuple().tm_yday)
+            else:
+                map_data[i, j] = float(x_sub[0].timetuple().tm_yday)
+
+    return map_data, extent
+
+
+def grab_plotting_variables(start, end, pixel_data, variables = None):  
+    """
+    valid variables = ['pks', 'trgs',
+                'midUP', 'midDOWN', 
+                'onsetUP', 'onsetDOWN',
+                'advUP', 'advDOWN']
+    """
+    if variables is None:
+        variables = ["pks", "trgs", "midUP", "midDOWN"]
+    result = {}
+    for var in variables:
+        var_x = f"{var}_x"
+        var_y = f"{var}_y"
+        
+        if var_x not in pixel_data or var_y not in pixel_data:
+            continue
+
+        date_mask = np.array([(d.year <= end) & (d.year >= start) for d in pixel_data[var_x]])
+        var_x_sub    = pixel_data[var_x][date_mask]
+        var_y_sub    = pixel_data[var_y][date_mask]
+        if var in ["pks","trgs"]:
+            var_qa = str(var) + "_qa"
+            if var_qa not in pixel_data:
+                continue
+            var_qa_sub  = pixel_data[var_qa][date_mask]
+
+            result[var] = [var_x_sub, var_y_sub, var_qa_sub]
+        else:
+            result[var] = [var_x_sub, var_y_sub]
+    return result
+
+
+def calculate_spline(whole_timeframe, masked_values, masked_time, smoothing_parameter ):
+    if len(masked_values) > 1:
+        smooth_x = np.arange(whole_timeframe.min(), whole_timeframe.max() + 1, 1)
+        smooth_y = csaps(masked_time, masked_values, smooth_x, smooth=smoothing_parameter)
+        return smooth_x, smooth_y
+    else:
+        warnings.warn("not enough data to plot")
+                
+
+def calculate_metrics_to_plot(start, end, masked_values, masked_time, smoothing_parameter):
+    limits = sorted(datenum_to_datetime(masked_time))
+    if start == 0:
+        function_start = min(limits).year
+    else:
+        function_start = start
+    if end == 9999:
+        function_end= max(limits).year
+    else:
+        function_end = end
+    y_pred =csaps(masked_time, masked_values, masked_time, smooth=smoothing_parameter)
+    y_true = masked_values
+
+    time_slice = np.array(datenum_to_datetime(masked_time))
+
+    mask_sub = np.array([(d.year <=function_end) & (d.year >= function_start) for d in time_slice])
+
+    if mask_sub.sum()>2:
+        rmse_sub = np.sqrt(mean_squared_error(y_true[mask_sub], y_pred[mask_sub]))
+        r2_sub = r2_score(y_true[mask_sub], y_pred[mask_sub])
+        mad_sub = np.median(np.abs(y_true[mask_sub]-y_pred[mask_sub]))
+
+        rmse_tot = np.sqrt(mean_squared_error(y_true, y_pred))
+        r2_tot = r2_score(y_true, y_pred)
+        mad_tot = np.median(np.abs(y_true-y_pred))
+
+        return {"rmse": [rmse_sub, rmse_tot],
+                "r2": [r2_sub, r2_tot],
+                "mad":[mad_sub, mad_tot]}, [function_start, function_end]
+    else:
+        warnings.warn("Not enough data to plot or compute metrics for chosen time interval")
+        return None, [function_start, function_end]
+
+
+def mark_negative_values_timeseries_plot(ax,plotting_data,time_frame):
+    start , end = time_frame
+    vars = list(plotting_data.keys())
+    neg_dates = {}
+    neg_label = False
+    for var in vars:
+        if (plotting_data[var][1] >= 0).all():
+            continue
+        mask =  plotting_data[var][1]<0
+        var_x_neg = plotting_data[var][0][mask]
+        var_y_neg = plotting_data[var][1][mask]
+        label = "Negative Value" if not neg_label else None
+        ax.scatter(var_x_neg, var_y_neg, color="red", s=50, marker="x", zorder=6, label=label)
+        neg_label = True
+        neg_count = len(var_x_neg)
+        neg_dates[var] = neg_count
+        warnings.warn(f"{neg_count} negative {var} in time period {start}-{end}", Warning)
+    return list(neg_dates.values()) # convert to list for backwards compatibility
+
+
+def plot_variables(ax, plotting_data, spline_x, spline_y, time_frame, variables = None):
+
+    if variables is None:
+        variables = ["pks", "trgs", "midUP", "midDOWN"]
+
+    ax.plot(datenum_to_datetime(spline_x), spline_y, color="black", linewidth=1, label="Spline")
+
+    used_labels = set()
+    qa_colors = {0: "blue", 1: "orange", 2: "red"}
+    qa_labels = {0: "Good", 1: "Fair", 2: "Poor"}
+    qa_vars = {'pks','trgs'}
+    for var in variables:
+        if var in qa_vars:
+            qa_vals = plotting_data[var][2]
+
+            for qa in (0, 1, 2):
+                pm =  qa_vals == qa
+                if not pm.any():
+                    continue
+                label = qa_labels[qa]
+                ax.scatter(plotting_data[var][0][pm], plotting_data[var][1][pm], color=qa_colors[qa], s=50,
+                                marker="o", edgecolors="black", linewidths=0.5,
+                                zorder=4, label=label if label not in used_labels else None)
+                used_labels.add(label)
+
+        elif "UP" in var:
+            label = "Green Up"
+            ax.scatter(plotting_data[var][0], plotting_data[var][1], color="mediumseagreen", s=30, marker="^", zorder=4, label=label if label not in used_labels else None)
+            used_labels.add(label)
+        elif "DOWN" in var:
+            label = "Green Down"
+            ax.scatter(plotting_data[var][0], plotting_data[var][1], color="darkgreen", s=30, marker="v", zorder=4, label=label if label not in used_labels else None)
+            used_labels.add(label)
+        else:
+            ax.scatter(plotting_data[var][0], plotting_data[var][1], color="green", s=30, marker="o", zorder=4, label=str(var))
+            
+
+    neg_values_sub = mark_negative_values_timeseries_plot(ax,plotting_data,time_frame)
+    return neg_values_sub
+
+
+def save_maps(eda_instance, lake_analysis_folder, lake_str,  time_splits, metrics = None):
+    if metrics is None:
+        metrics = ["r2", "MAD", "RMSE", "correlation", "values_per_pixel"]
+    for m in metrics:
+
+        text_strings = []
+        num_splits = len(time_splits)
+        
+        out_path = os.path.join(lake_analysis_folder, lake_str, "plots", "metric_maps")
+        os.makedirs(out_path, exist_ok= True)
+    
+        if m == "r2":
+            metric_str = "R$^2$"
+            cmap = "RdYlBu"
+            colorbar_extent = [0, 1]
+        elif m == "MAD":
+            metric_str = "MAD"
+            cmap = "RdYlBu_r"
+            colorbar_extent = [0, 1]
+        elif m == "RMSE":
+            metric_str = "RMSE"
+            cmap = "RdYlBu_r"
+            colorbar_extent = [0, 1]
+        elif m == "correlation":
+            metric_str = "correlation"
+            cmap = "RdYlBu"
+            colorbar_extent = [0, 1]
+        elif m == "values_per_pixel":
+            metric_str = "values_per_pixel"
+            cmap = "winter"
+            colorbar_extent = None
+        else:
+            raise ValueError(
+                f"Unsupported metric: {m}"
+            )
+        
+        for start, end in time_splits:
+            if start > end:
+                raise ValueError("Beginning of time split cannot be larger than the end")
+
+        rows, cols = close_factors(num_splits)
+        fig, axs = plt.subplots(rows, cols, constrained_layout=True)
+
+        if num_splits > 1:
+            axs = axs.ravel()
+
+        for i, (start, end) in enumerate(time_splits):
+            if start == 0 and end == 9999:
+                text_strings.append(f"{metric_str}-scores {eda_instance.variable} {eda_instance.version} full ts")
+            elif start == 0:
+                text_strings.append(f"{metric_str}-scores {eda_instance.variable} {eda_instance.version} {2002}-{end}")
+            elif end == 9999:
+                text_strings.append(f"{metric_str}-scores {eda_instance.variable} {eda_instance.version} {start}-{2024}")
+            else:
+                text_strings.append(f"{metric_str}-scores {eda_instance.variable} {eda_instance.version} {start}-{end}")
+
+            scores = eda_instance.read_metric_lake(m, start, end)
+
+            if num_splits == 1:
+                eda_instance.metric_map(scores, metric_str, fig, axs, cmap, colorbar_extent=colorbar_extent)
+                axs.set_title(text_strings[0])
+            else:
+                eda_instance.metric_map(scores, metric_str, fig, axs[i], cmap, colorbar_extent=colorbar_extent)
+                axs[i].set_title(text_strings[i])
+
+        if num_splits == 1 and time_splits[0] == (0, 9999):
+            file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{m}_full_ts.png"
+        elif num_splits == 2:
+            file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{m}_split_ts.png"
+        else:
+            file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{m}_{num_splits}_split_ts.png"
+        fig.savefig(os.path.join(out_path, file_name), dpi=600)
+        plt.close(fig)
+       
+
+def save_pixel_plots(eda_instance, pixels, lake_analysis_folder, lake_str, time_splits, aggregation = True):
+    for i,j in pixels:
+        if aggregation:
+            out_path = os.path.join(lake_analysis_folder, lake_str, "plots", "pixel_plots", "aggregated", f"{i}_{j}")
+        else:
+            out_path = os.path.join(lake_analysis_folder, lake_str, "plots", "pixel_plots", "not_aggregated", f"{i}_{j}")
+        os.makedirs(out_path, exist_ok=True)
+        fig, ax = plt.subplots(1,1)
+        eda_instance.pixel_map(i,j, ax)
+        
+        fig.savefig(os.path.join(out_path, "location.png"),dpi=600)
+        plt.close(fig)
+
+        num_splits = len(time_splits)
+        rows, cols = close_factors(num_splits)
+
+        # Single plots
+        fig, axs = plt.subplots(rows, cols, constrained_layout=True, figsize = (10,5))
+        for num, (start, end) in enumerate(time_splits):
+            if start > end:
+                raise ValueError("Beginning of time split cannot be larger than the end")
+            ax = axs if num_splits == 1 else np.atleast_1d(axs).flatten()[num]
+            eda_instance.single_plot(ax=ax, latitude_idx=i, longitude_idx=j, aggregation=aggregation, start=start, end=end)
+            ax.set_ylim(bottom=-0.5)
+            
+
+        if num_splits == 1:
+            start, end = time_splits[0]
+            if start == 0 and end == 9999:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_full_ts.png"
+            elif start == 0:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_ts_{2002}_to_{end}.png"
+            elif end == 9999:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_ts_{start}_to_{2024}.png"
+            else:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_ts_{start}_to_{end}.png"
+        elif num_splits == 2:
+            file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_split_ts.png"
+        else:
+            file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{num_splits}_split_ts.png"
+        fig.savefig(os.path.join(out_path, file_name), dpi=600)
+        plt.close(fig)
+
+        # Peaks plots
+        fig, axs = plt.subplots(rows, cols, constrained_layout=True, figsize = (10,5))
+        for num, (start, end) in enumerate(time_splits):
+            if start > end:
+                raise ValueError("Beginning of time split cannot be larger than the end")
+            ax = axs if num_splits == 1 else np.atleast_1d(axs).flatten()[num]
+            eda_instance.extrema_plot(ax=ax, latitude_idx=i, longitude_idx=j, aggregation=aggregation, start=start, end=end, peak=True)
+            ax.set_ylim(bottom=-0.5)
+         
+
+        if num_splits == 1:
+            start, end = time_splits[0]
+            if start == 0 and end == 9999:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_full_ts.png"
+            elif start == 0:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_ts_{2002}_to_{end}.png"
+            elif end == 9999:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_ts_{start}_to_{2024}.png"
+            else:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_ts_{start}_to_{end}.png"
+        elif num_splits == 2:
+            file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_peaks_split_ts.png"
+        else:
+            file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{num_splits}_peaks_split_ts.png"
+        fig.savefig(os.path.join(out_path, file_name), dpi=600)
+        plt.close(fig)
+
+        # QA boxplots (peaks and troughs)
+        for metric_key, metric_name in (("pks", "peaks"), ("trgs", "troughs")):
+            fig, axs = plt.subplots(rows, cols, constrained_layout=True, figsize=(8,8))
+            for num, (start, end) in enumerate(time_splits):
+                ax = axs if num_splits == 1 else np.atleast_1d(axs).flatten()[num]
+                eda_instance.qa_boxplot(ax=ax, latitude_idx=i, longitude_idx=j, metric=metric_key, start=start, end=end)
+
+            if num_splits == 1:
+                start, end = time_splits[0]
+                if start == 0 and end == 9999:
+                    file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{metric_name}_qa_boxplot_full_ts.png"
+                elif start == 0:
+                    file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{metric_name}_qa_boxplot_ts_{2002}_to_{end}.png"
+                elif end == 9999:
+                    file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{metric_name}_qa_boxplot_ts_{start}_to_{2024}.png"
+                else:
+                    file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{metric_name}_qa_boxplot_ts_{start}_to_{end}.png"
+            elif num_splits == 2:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{metric_name}_qa_boxplot_split_ts.png"
+            else:
+                file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_{num_splits}_{metric_name}_qa_boxplot_split_ts.png"
+            fig.savefig(os.path.join(out_path, file_name), dpi=600)
+            plt.close(fig)
+
+        # Per-pixel heatmap
+        fig, _ = eda_instance.yearly_heatmap_pixel(latitude_idx=i, longitude_idx=j)
+        heatmap_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_heatmap_{i}_{j}.png"
+        fig.savefig(os.path.join(out_path, heatmap_file_name), dpi=600, bbox_inches="tight")
+        plt.close(fig)
+
+
+def create_summary(eda_instance, pixels, lake_analysis_folder, lake_str, time_splits, summary_types = None):
+    if summary_types is None:
+        summary_types = ["n_peaks", "r2", "rmse", "mad", "correlation", "values", "qa"]
+
+    with netCDF4.Dataset(eda_instance.p_path) as nc:
+        smoothing_arr = nc.variables["smoothing_parameter"][:]
+
+    for i, j in pixels:
+        out_path = os.path.join(lake_analysis_folder, lake_str, "summaries", f"{i}_{j}")
+        os.makedirs(out_path, exist_ok=True)
+        txt_path = os.path.join(out_path, f"summary_{eda_instance.variable}.txt")
+        lat, lon = index_to_lat_lon(eda_instance.e_path, i, j)
+        with open(txt_path, "w") as file:
+            file.write(f"Pixel: ({i}, {j})\n")
+            file.write(f"Latitude: {lat:.6f}, Longitude: {lon:.6f}\n")
+            file.write(f"{eda_instance.variable} {eda_instance.version}:\n")
+            
+            file.write(f"    Smoothing Parameter: {float(smoothing_arr[i, j])}\n")
+            for start, end in time_splits:
+                if start == 0 and end == 9999:
+                    label = "full ts"
+                elif start == 0:
+                    label = f"2002-{end}"
+                elif end == 9999:
+                    label = f"{start}-2024"
+                else:
+                    label = f"{start}-{end}"
+
+                metric_dict = eda_instance.read_pixel_metrics(i,j,start,end)
+
+                file.write(f"    {label}:\n")
+                if "n_peaks" in summary_types:
+                    file.write(f"        Number of Peaks: {count_extrema(eda_instance.p_path,i, j, start=start, end=end, peaks = True)}\n")
+                if "r2" in summary_types:
+                    file.write(f"        R2: {round(metric_dict['r2'].item(), 4)}\n")
+                if "rmse" in summary_types:
+                    file.write(f"        RMSE: {round(metric_dict['RMSE'].item(), 4)}\n")
+                if "mad" in summary_types:
+                    file.write(f"        MAD: {round(metric_dict['MAD'].item(), 4)}\n")
+                if "correlation" in summary_types:
+                    file.write(f"        Correlation: {round(metric_dict['correlation'].item(), 4)}\n")
+                if "values" in summary_types:
+                    file.write(f"        Values: {round(metric_dict['values_per_pixel'].item(), 4)}\n")
+
+            if "qa" in summary_types:
+                px = eda_instance._load_pixel_data(i, j)
+                pks_x  = px["pks_x"]
+                pks_qa = px["pks_qa"]
+
+                trgs_x  = px["trgs_x"]
+                trgs_qa = px["trgs_qa"]
+
+                qa_periods = [
+                    ("full ts",   0,    9999),
+                    ("2002-2012", 2002, 2012),
+                    ("2016-2024", 2016, 2024),
+                ]
+                file.write(f"    Peak QA:\n")
+                file.write(f"        {'Period':<14}  {'Good':>6}  {'Fair':>6}  {'Poor':>6}\n")
+                for period_label, s, e in qa_periods:
+                    mask   = np.array([(d.year >= s) & (d.year <= e) for d in pks_x])
+                    qa_sub_pks = pks_qa[mask]
+                    file.write(f"        {period_label:<14}  {int(np.sum(qa_sub_pks == 0)):>6}  {int(np.sum(qa_sub_pks == 1)):>6}  {int(np.sum(qa_sub_pks == 2)):>6}\n")
+
+                file.write(f"    Trough QA:\n")
+                file.write(f"        {'Period':<14}  {'Good':>6}  {'Fair':>6}  {'Poor':>6}\n")
+                for period_label, s, e in qa_periods:
+                    mask   = np.array([(d.year >= s) & (d.year <= e) for d in trgs_x])
+                    qa_sub_trgs = trgs_qa[mask]
+                    file.write(f"        {period_label:<14}  {int(np.sum(qa_sub_trgs == 0)):>6}  {int(np.sum(qa_sub_trgs == 1)):>6}  {int(np.sum(qa_sub_trgs == 2)):>6}\n")
+
+            file.write("\n")
+
+
+def save_timing_plots(eda_instance, lake_analysis_folder, lake_str, time_splits, kde_qa=None):
+    if kde_qa is None:
+        kde_qa = [None]
+    timing_plots_path = os.path.join(lake_analysis_folder, lake_str, "plots", "timing_plots")
+    os.makedirs(timing_plots_path, exist_ok=True)
+
+    def _year(v, zero_val=2002, max_val=2023):
+        return zero_val if v == 0 else (max_val if v == 9999 else v)
+
+    # Lake-wide DOY plots (peaks and green-up midpoint), one panel per configured time split
+    for start, end in time_splits:
+        if start > end:
+            raise ValueError("Beginning of time split cannot be larger than the end")
+        years = list(range(_year(start), _year(end) + 1))
+        # close_factors degenerates to a 1-wide grid for prime counts (e.g. 23 years),
+        # which blows up the figure into a huge vertical strip - cap columns instead
+        cols = min(len(years), 6)
+        rows = -(-len(years) // cols)  # ceil division
+        ts_suffix = "full_ts" if (start == 0 and end == 9999) else f"{_year(start)}_to_{_year(end)}"
+
+        for peaks, metric_name in ((True, "peaks"), (False, "green_up_mid")):
+            fig , axs = eda_instance.time_map_panel(years=years, nrow=rows, ncol=cols, peaks=peaks)
+            file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_doy_{metric_name}_{ts_suffix}.png"
+            fig.savefig(os.path.join(timing_plots_path, file_name), dpi=600, bbox_inches="tight")
+            plt.close(fig)
+
+    # Lake-wide heatmap
+    fig, _ = eda_instance.yearly_heatmap_lake()
+    heatmap_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_lake_heatmap.png"
+    fig.savefig(os.path.join(timing_plots_path, heatmap_file_name), dpi=600, bbox_inches="tight")
+    plt.close(fig)
+
+    # Lake-wide KDE - one plot per requested QA filter x time split, e.g. kde_qa=[None, {0}, {0,1}]
+    bloom_prob_dir = Path(eda_instance.data_folder) / "calculated_values" / "bloom_prob" / eda_instance.variable
+    for qa_spec in kde_qa:
+        qa_set = set(qa_spec) if qa_spec is not None else None
+        qa_suffix = "all" if qa_set is None else "".join(str(q) for q in sorted(qa_set))
+        for start, end in time_splits:
+            ts_suffix = "full_ts" if (start == 0 and end == 9999) else f"{_year(start)}_to_{_year(end)}"
+            matching_file = None
+
+            for fp in list(bloom_prob_dir.glob(f"ID{eda_instance.lakeID}_*.nc")):             
+                metadata = parse_bloom_probability_filename(fp)
+                if (
+                    metadata["start_year"] == _year(start)
+                    and metadata["end_year"] == _year(end)
+                    and metadata["qa_label"] == qa_suffix
+                ):
+                    matching_file = fp
+                    break
+
+            fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+            eda_instance.lake_bloom_kde_from_fp(ax, matching_file, plt_kwargs=None)
+            kde_file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_kde_qa{qa_suffix}_{ts_suffix}.png"
+            fig.savefig(os.path.join(timing_plots_path, kde_file_name), dpi=600, bbox_inches="tight")
+            plt.close(fig)
+
+    # Lake-wide QA boxplots (peaks and troughs), one panel per configured time split
+    for metric_key, metric_name in (("pks", "peaks"), ("trgs", "troughs")):
+        num_splits = len(time_splits)
+        rows, cols = close_factors(num_splits)
+        fig, axs = plt.subplots(rows, cols, constrained_layout=True, figsize=(5 * cols, 5 * rows))
+        for num, (start, end) in enumerate(time_splits):
+            ax = axs if num_splits == 1 else np.atleast_1d(axs).flatten()[num]
+            eda_instance.qa_boxplot_lake(ax=ax, metric=metric_key, start=start, end=end)
+
+        if num_splits == 1:
+            start, end = time_splits[0]
+            ts_suffix = "full_ts" if (start == 0 and end == 9999) else f"{_year(start)}_to_{_year(end)}"
+        else:
+            ts_suffix = f"{num_splits}_split_ts"
+        file_name = f"{eda_instance.variable}_v{eda_instance.version.replace('.', '')}_lake_{metric_name}_qa_boxplot_{ts_suffix}.png"
+        fig.savefig(os.path.join(timing_plots_path, file_name), dpi=600)
+        plt.close(fig)
+
+
+def save_comparison_plots(instances, pixels, lake_analysis_folder, lake_str,
+                          time_splits, comparison_plot_types,
+                          aggregation=True, background_pts=False, purple_chla21=False,
+                          ratio_qa_source="self"):
+    chla21 = instances.get("chla21")
+    chla3 = instances.get("chla3")
+    phyco  = instances.get("phycocyanin3")
+    agg = "_agg" if aggregation else ""
+
+    for start, end in time_splits:
+        if start > end:
+            raise ValueError("Beginning of time split cannot be larger than the end")
+
+    pair_plots = []
+    if "chla21 vs chla3" in comparison_plot_types and chla21 and chla3:
+        pair_plots.append((chla21, chla3, None, "chla21_chla3"))
+    if "chla21 vs phyco" in comparison_plot_types and chla21 and phyco:
+        pair_plots.append((chla21, phyco, None, "chla2_phyco"))
+    if "chla3 vs phyco" in comparison_plot_types and chla3 and phyco:
+        pair_plots.append((chla3, phyco, None, "chla3_phyco"))
+    if "triple" in comparison_plot_types and chla21 and chla3 and phyco:
+        pair_plots.append((chla21, chla3, phyco, "chla2_chla3_phyco"))
+
+    n = len(time_splits)
+
+    def _year(v, zero_val=2002, max_val=2024):
+        return zero_val if v == 0 else (max_val if v == 9999 else v)
+
+    if n == 1 and time_splits[0] ==[0, 9999]:
+        ts_suffix = "full_ts"
+    elif n == 2:
+        s1, e1 = time_splits[0]
+        s2, e2 = time_splits[1]
+        ts_suffix = f"{_year(s1)}_{_year(e1)}_vs_{_year(s2)}_{_year(e2)}"
+    else:
+        ts_suffix = f"{n}_split_ts"
+
+    for i, j in pixels:
+        save_path = os.path.join(lake_analysis_folder, lake_str, "plots", "pixel_plots", "comparisons", f"{i}_{j}")
+        os.makedirs(save_path, exist_ok=True)
+
+        for inst1, inst2, inst3, label in pair_plots:
+            file_name = f"comparison_pks_{label}_{ts_suffix}{agg}.png"
+
+            rows, cols = close_factors(n)
+            fig, axs = plt.subplots(rows, cols, figsize=(15 * cols, 5 * rows), constrained_layout=True)
+            axs_flat = np.atleast_1d(axs).flatten()
+
+            for k, (start, end) in enumerate(time_splits):
+                inst1.extrema_comparison(
+                    inst2, i, j, axs_flat[k],
+                    aggregation=aggregation, start=start, end=end,
+                    background_pts=background_pts,
+                    other2=inst3,
+                    purple_chla21=purple_chla21
+                )
+
+            fig.savefig(os.path.join(save_path, file_name), dpi=600)
+            plt.close(fig)
+
+            # ratio QA boxplot - only defined for a pair of products, not the triple overlay
+            if inst3 is None:
+                # phycocyanin is always the numerator (dividend) when it's part of the pair
+                ratio_self, ratio_other = (inst2, inst1) if inst2 is phyco else (inst1, inst2)
+
+                ratio_file_name = f"comparison_pks_ratio_qa_boxplot_{label}_{ts_suffix}{agg}.png"
+
+                fig, axs = plt.subplots(rows, cols, figsize=(5 * cols, 5 * rows), constrained_layout=True)
+                axs_flat = np.atleast_1d(axs).flatten()
+
+                for k, (start, end) in enumerate(time_splits):
+                    ratio_self.qa_boxplot(
+                        latitude_idx=i, longitude_idx=j, ax=axs_flat[k],
+                        metric="pks", start=start, end=end,
+                        other=ratio_other, qa_source=ratio_qa_source,
+                    )
+
+                fig.savefig(os.path.join(save_path, ratio_file_name), dpi=600)
+                plt.close(fig)
+
+    # Lake-wide ratio QA boxplot - only defined for a pair of products, not the triple overlay.
+    # Lake-wide (unlike the per-pixel one above), so it goes into timing_plots, not comparisons/{i}_{j}
+    timing_plots_path = os.path.join(lake_analysis_folder, lake_str, "plots", "timing_plots")
+    os.makedirs(timing_plots_path, exist_ok=True)
+    rows, cols = close_factors(n)
+
+    for inst1, inst2, inst3, label in pair_plots:
+        if inst3 is not None:
+            continue
+
+        ratio_self, ratio_other = (inst2, inst1) if inst2 is phyco else (inst1, inst2)
+        ratio_file_name = f"lake_ratio_qa_boxplot_{label}_{ts_suffix}{agg}.png"
+
+        fig, axs = plt.subplots(rows, cols, figsize=(5 * cols, 5 * rows), constrained_layout=True)
+        axs_flat = np.atleast_1d(axs).flatten()
+
+        for k, (start, end) in enumerate(time_splits):
+            ratio_self.qa_boxplot_lake(
+                ax=axs_flat[k], metric="pks", start=start, end=end,
+                other=ratio_other, qa_source=ratio_qa_source,
+            )
+
+        fig.savefig(os.path.join(timing_plots_path, ratio_file_name), dpi=600)
+        plt.close(fig)
+
+
+def prep_dimark_data(insitu_df,start=0, end=9999,  insitu_date_col="datetime", insitu_value_col="chlorophyll_a", insitu_station_col=None, station_id=None, max_depth = 5):
+    insitu = insitu_df.copy()
+    insitu[insitu_date_col] = pd.to_datetime(
+            insitu[insitu_date_col], format = "mixed", dayfirst = True)
+
+    # optional station filtering
+    if (insitu_station_col is not None) and (station_id is not None):
+            insitu = insitu[
+            insitu[insitu_station_col] == station_id
+            ]
+
+    # time filtering
+    insitu = insitu[
+        (insitu[insitu_date_col].dt.year >= start) &
+        (insitu[insitu_date_col].dt.year <= end)
+    ]
+
+    # remove invalid values
+    insitu = insitu[np.isfinite(insitu[insitu_value_col])]
+    insitu[insitu_date_col] = pd.to_datetime(insitu["datetime"]).dt.date
+    insitu = insitu[insitu["depth"]< max_depth]
+    insitu_mean = (insitu.groupby("datetime", as_index=False)[insitu_value_col].mean())
+    return insitu_mean
+
+
+def bivariate_legend( ax, color_set):
+
+    labels = ["0", "1", "2", "2+"]
+    cell_size = 1
+
+    for row in range(4):
+        for col in range(4):
+            idx = col * 4 + row
+            ax.add_patch(
+                Rectangle(
+                    (col, row),          # x,y
+                    cell_size,           # width
+                    cell_size,           # height
+                    facecolor=color_set[idx],
+                    edgecolor="black"
+                )
+            )
+
+    ax.set_xlim(0, 4)
+    ax.set_ylim(0, 4)
+
+    ax.set_xticks([0.5, 1.5, 2.5, 3.5])
+    ax.set_xticklabels(labels)
+
+    ax.set_yticks([0.5, 1.5, 2.5, 3.5])
+    ax.set_yticklabels(labels)
+
+    ax.set_xlabel("# Troughs")
+    ax.set_ylabel("# Peaks")
+
+    ax.set_aspect("equal")
+
+
+def interpolate_from_color_set(pks_fraction, trgs_fraction, color_set):
+    """Bilinearly interpolate an RGB color from a 4×4 color_set grid.
+
+    Maps pk_frac and trg_frac (both in [0, 1]) onto the [0, 3] grid axes and
+    interpolates between the four surrounding grid-point colors.
+    """
+
+    # map fractions to positions in the 4×4 color grid (indices 0–3)
+    pk_pos = float(np.clip(pks_fraction * 3, 0, 3))
+    trg_pos = float(np.clip(trgs_fraction * 3, 0, 3))
+
+    # find the neighboring grid cell indices
+    pk0 = int(np.floor(pk_pos))
+    pk1 = min(pk0 + 1, 3)
+    trg0 = int(np.floor(trg_pos))
+    trg1 = min(trg0 + 1, 3)
+
+    # compute interpolation weights within the grid cell
+    t_pk = pk_pos - pk0
+    t_trg = trg_pos - trg0
+    c00 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk0]))
+    c10 = np.array(mcolors.to_rgb(color_set[trg0 * 4 + pk1]))
+    c01 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk0]))
+    c11 = np.array(mcolors.to_rgb(color_set[trg1 * 4 + pk1]))
+    return (c00 * (1 - t_pk) * (1 - t_trg) + c10 * t_pk * (1 - t_trg) +
+           c01 * (1 - t_pk) * t_trg + c11 * t_pk * t_trg)
+
+
+def bivariate_continuous_legend(ax, color_set, n=64):
+    """Render a smooth 2D gradient legend for a continuous bivariate colormap.
+
+    Bilinearly interpolates over the 4×4 color_set grid to produce a continuous
+    gradient image. X-axis = peaks fraction, Y-axis = troughs fraction (both 0–1).
+    """
+    grid = np.zeros((n, n, 3))
+    for row in range(n):
+        for col in range(n):
+            # normalize pixel coordinates to fractions in [0, 1]
+            trg_frac = col / (n - 1)
+            pk_frac = row / (n - 1)
+
+            # bilinearly interpolate between the four colors
+            grid[row, col] = interpolate_from_color_set(pk_frac, trg_frac, color_set=color_set)
+    ax.imshow(grid, origin='lower', extent=[0, 1, 0, 1], aspect='equal')
+    ax.set_xticks([0, 0.5, 1])
+    ax.set_yticks([0, 0.5, 1])
+    ax.set_xlabel("Troughs fraction")
+    ax.set_ylabel("Peaks fraction")
+
+
+def create_empty_heatmap(nrows=4, ncols=4):
+
+    data = np.full((nrows, ncols), np.nan)
+    fig, ax = plt.subplots(figsize=(5, 5))
+
+    ax.set_xlim(0, 3)
+    ax.set_ylim(int(2001), int(2024))
+
+    # Draw grid lines
+    ax.set_xticks(np.arange(0, 5, 1), minor=True)
+    ax.grid(which='minor')
+    ax.set_yticks(np.arange(2001, 2024), minor = True)
+
+
+    ax.set_xticks(np.arange(0.5, 4, 1))
+    ax.set_yticks(np.arange(2001.5, 2024.5, 1))
+    months = ["Jan-Mar", "Apr-Jun", "Jul-Sep", "Oct-Dec"]
+    years = [str(yr) for yr in range(2002,2025)]
+    ax.set_xticklabels(months, horizontalalignment = "center")
+    ax.set_yticklabels(years, horizontalalignment = "center")
+
+    # Hide tick marks
+    ax.tick_params(axis='x', length=0)
+    ax.tick_params(axis='y', length=0, pad = 20)
+
+    return fig, ax, data
+
+def to_frac_month(dates):
+    result = []
+    for d in dates:
+        days_in_month = (pd.Timestamp(d.year, d.month % 12 + 1, 1) - pd.Timedelta(days=1)).day if d.month < 12 else 31
+        result.append(d.month + (d.day - 1) / days_in_month)
+    return np.array(result)
 
 
 def init_phenology_output(out, lat, lon, p=None):
@@ -783,3 +1715,870 @@ def extract_phenology_metrics(x_pks, y_pks, x_trgs, y_trgs,
         'data_gap_end_days': gap_end_days,
         'smooth_qa_data': smooth_qa_data
     }
+
+
+def lakeID_to_name(metadata_df, id:int):
+    """
+    Look up the lake name corresponding to a given lake ID.
+
+    Parameters
+    ----------
+    metadata_df : pandas.DataFrame
+        DataFrame containing lake metadata, including at least
+        columns "id" and "name".
+    id : int
+        Numeric lake identifier to search for.
+
+    Returns
+    -------
+    str
+        Name of the lake corresponding to the given ID.
+
+    Raises
+    ------
+    IndexError
+        If the provided ID is not found in the DataFrame.
+
+    """
+    matches = metadata_df.loc[metadata_df["id"] == id, "name"]
+    if matches.empty:
+        raise ValueError(f"Lake ID {id} not found")
+    return matches.iloc[0]
+
+
+def shortname_to_name(metadata_df, short_name:str):
+    """Return the full lake name for a given short_name identifier.
+
+    Parameters
+    ----------
+    short_name : str
+        The short_name value to look up in the shapefile attribute table.
+
+    Returns
+    -------
+    str
+        Formatted string containing the lake name.
+    """
+    matches = metadata_df.loc[metadata_df["short_name"] == short_name, "name"]
+    if matches.empty:
+        raise ValueError(f"Lake ID {id} not found")
+    return matches.iloc[0]
+
+
+def name_to_lakeID(metadata_df, name:str):
+    """Return the lake ID for a given lake name.
+
+    Parameters
+    ----------
+    name : str
+        The lake name to look up in the shapefile attribute table.
+
+    Returns
+    -------
+    str
+        Formatted string containing the lake ID.
+    """
+    matches = metadata_df.loc[metadata_df["name"].str.casefold() == name.casefold(), "id"]
+    if matches.empty:
+        raise ValueError(f"Lake name {name} not found")
+    return matches.iloc[0]
+
+
+def name_to_shortname(metadata_df, name:str):
+    """Return the short_name for a given lake name.
+
+    Parameters
+    ----------
+    name : str
+        The lake name to look up in the shapefile attribute table.
+
+    Returns
+    -------
+    str
+        Formatted string containing the short_name.
+    """
+    matches = metadata_df.loc[metadata_df["name"].str.casefold() == name.casefold(), "short_name"]
+    if matches.empty:
+        raise ValueError(f"Lake name {name} not found")
+    return matches.iloc[0]
+
+
+def parse_qa_var_from_str(qa_var):
+    if 'pks' in qa_var:
+        qa_var = 'pks_qa'
+    elif 'trgs' in qa_var:
+        qa_var = 'trgs_qa'
+    else:
+        qa_var = None
+    return qa_var
+
+
+def coerce_varname_to_var_x(var):
+    if var.endswith(('_y','_qa')): # if provided a non-x variable, manipulate.
+        var = var.removesuffix('_qa').removesuffix('_y') + '_x'
+    elif not var.endswith('_x'):
+        var = var + '_x'
+    return var
+
+def ID_to_name(gdf, id):
+    """Return the lake name for a given lake ID from the shapefile.
+
+    Parameters
+    ----------
+    id : int
+        Lake ID matching the 'id' column in the CCI shapefile.
+
+    Returns
+    -------
+    str
+        Lake name from the 'name' column.
+
+    Raises
+    ------
+    ValueError
+        If the ID is not found in the shapefile.
+    """
+    matches = gdf.loc[gdf["id"] == int(id), "name"]
+    if matches.empty:
+        raise ValueError(f"Lake ID {id} not found in shapefile.")
+    return matches.iloc[0]
+
+
+def index_to_lat_lon(e_path, lat_index, lon_index):
+    """Return the geographic coordinates for a grid index pair.
+
+    Parameters
+    ----------
+    lat_index : int
+        Row index in the extract grid.
+    lon_index : int
+        Column index in the extract grid.
+
+    Returns
+    -------
+    str
+        Formatted string with the latitude and longitude values.
+    """
+    with netCDF4.Dataset(e_path) as nc:
+        lats = nc.variables["lat"][:]
+        lons = nc.variables["lon"][:]
+        lat = lats[lat_index]
+        lon = lons[lon_index]
+    return lat , lon
+
+    
+def get_year_edges(e_path):
+    """Return the first and last year of the extract time series.
+
+    Returns
+    -------
+    tuple of int
+        (first_year, last_year) in the extract NetCDF.
+    """
+    with netCDF4.Dataset(e_path) as nc:
+        time_raw = nc.variables["time"][:]
+        t_all = unix_to_datenum(time_raw)
+        time_dt = np.array(datenum_to_datetime(t_all))
+        years_all = np.array([d.year for d in time_dt])
+        return years_all.min(), years_all.max()
+
+    
+def valid_index_pairs(e_path):
+    """Return grid index pairs that have more than one valid QA-passing observation.
+
+    Reads the extract NetCDF and identifies pixels where the observation count
+    (non-fill, QA==0) exceeds one — the minimum required for spline fitting.
+
+    Returns
+    -------
+    list of tuple of int
+        List of (row, col) index pairs with sufficient valid observations.
+    """
+    with netCDF4.Dataset(e_path) as nc:
+        variable = getattr(nc, "variable")
+        qa_variable = getattr(nc, "qa")
+
+        values = np.asarray(nc.variables[variable][:])
+        qa = np.asarray(nc.variables[qa_variable][:])
+
+        valid_mask = (values != -9999) & (qa == 0)
+        valid_counts = np.sum(valid_mask, axis=0)
+
+        return [tuple(int(x) for x in idx) for idx in np.argwhere(valid_counts > 1)]
+
+
+def create_DataFrame(p_path, latitude_idx, longitude_idx):
+    """Build a combined long-format DataFrame of all phenology variables for a single pixel.
+
+    Reads all _x (time) and _y (value) variable pairs from the phenology NetCDF
+    and concatenates them into a single DataFrame.
+
+    Parameters
+    ----------
+    latitude_idx : int
+        Row (lat) index of the pixel in the grid.
+    longitude_idx : int
+        Column (lon) index of the pixel in the grid.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Long-format DataFrame with columns Value, Variable, latitude_idx, longitude_idx
+        and a datetime index named Time.
+    """
+    p = netCDF4.Dataset(p_path)
+    exclude = ['lat','lon','smoothing_parameter','trgs_qa','data_gap_start','data_gap_end']
+    l = list(set(list(p.variables))-set(exclude))
+    variables_x = sorted([i for i in l if i[-1]== "x"])
+    variables_y = sorted([i for i in l if i[-1]== "y"])
+    lat = np.array(p.variables["lat"])
+    lon = np.array(p.variables["lon"])
+
+    result = {}
+
+    for x,y in zip(variables_x, variables_y):
+        var_x =unix_to_datetime(remove_nan(p[x][latitude_idx,longitude_idx,:]))
+        var_y = remove_nan(p[y][latitude_idx,longitude_idx,:])
+        var_label = [x[:-2]]*len(var_y)
+        df = pd.DataFrame({"Value":var_y,
+                        "Variable": var_label,
+                        "latitude": lat[latitude_idx],
+                        "longitude": lon[longitude_idx]},
+                        index = var_x)
+        df.index.names = ["Time"]
+        result[y[:-2]] = df
+    combined_df = pd.concat(result.values())
+
+    return combined_df
+
+
+def sort_by_year(df, start_year=None, end_year=None):
+    """Filter a prep_kde_data DataFrame to rows whose bloom overlaps [start_year, end_year].
+
+    Each row is treated as a triple (green_up_advanced, peak_qa, green_down_onset).
+    A row is kept when its bloom interval [adv_year, onset_year] overlaps the
+    requested range. Cross-year blooms (e.g. green_up_advanced in December,
+    green_down_onset in January of the next year) are included if either end
+    falls within the range — the whole triple is kept rather than dropped.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Output of prep_kde_data (columns: green_up_advanced, peak_qa, green_down_onset).
+    start_year : int or None
+        Earliest year to include. None means no lower bound.
+    end_year : int or None
+        Latest year to include. None means no upper bound.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Filtered copy of df.
+    """
+    if start_year is None and end_year is None:
+        return df
+
+    adv_year = df["primary"].astype(int)
+    onset_year = df["secondary"].astype(int)
+
+    mask = pd.Series(True, index=df.index)
+    if start_year is not None:
+        # keep rows where the bloom ends at or after start_year
+        mask &= onset_year >= start_year
+    if end_year is not None:
+        # keep rows where the bloom begins at or before end_year
+        mask &= adv_year <= end_year
+
+    return df[mask]
+
+def find_preceding_and_following(pixel_df):
+    """Vectorized bracket-finder for a single pixel's long-format event DataFrame.
+
+    For each peak row (qa_column not NaN), finds the most recent preceding
+    green_up_advanced event (primary=True) and the earliest following
+    green_down_onset event (secondary=True) using ffill/bfill on the year.DOY index.
+
+    Parameters
+    ----------
+    pixel_df : pandas.DataFrame
+        Single-pixel slice of the output of assemble_kde_data. Index is year.DOY,
+        columns include primary (bool), qa_column (float), secondary (bool).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns: prev_var1_time, next_var2_time, qa_column.
+        Only peak rows are returned; NaN in either bracket column means
+        the peak is not fully bracketed.
+    """
+    df = pixel_df.copy()
+    df["var1_time"] = df.index.where(df["primary"].fillna(False).astype(bool))
+    df["var2_time"] = df.index.where(df["secondary"].fillna(False).astype(bool))
+    df.sort_index(inplace=True)
+    df["prev_var1_time"] = df["var1_time"].ffill()
+    df["next_var2_time"] = df["var2_time"].bfill()
+    mask = df["qa_column"].notna()
+    return df.loc[mask, ["prev_var1_time", "next_var2_time", "qa_column"]]
+
+
+def greedy_match_within_tolerance(time_self, time_other, tolerance_days):
+    """Match each self event to at most one other event within tolerance_days.
+
+    Core matching logic shared by pair_phenology_events (single pixel) and
+    qa_boxplot_lake's ratio mode (bulk, all lake pixels). Candidate pairs are
+    ranked by time gap and claimed closest-first, so no event is ever paired
+    twice - see pair_phenology_events's docstring for the full rationale.
+
+    Parameters
+    ----------
+    time_self, time_other : numpy.ndarray of numpy.datetime64
+        Event timestamps to match against each other.
+    tolerance_days : int
+        Maximum gap in days between two events for them to count as a pair.
+
+    Returns
+    -------
+    self_idx, other_idx : numpy.ndarray of int
+        Index arrays into time_self/time_other for matched pairs.
+    day_diff : numpy.ndarray of float
+        Matching day gap for each pair, same length as self_idx/other_idx.
+    """
+    empty = np.array([], dtype=int)
+    if len(time_self) == 0 or len(time_other) == 0:
+        return empty, empty, np.array([], dtype=float)
+
+    day_diff = np.abs(time_self[:, None] - time_other[None, :]) / np.timedelta64(1, "D")
+    self_idx, other_idx = np.where(day_diff <= tolerance_days)
+    if len(self_idx) == 0:
+        return empty, empty, np.array([], dtype=float)
+
+    candidates = pd.DataFrame({
+        "self_idx": self_idx,
+        "other_idx": other_idx,
+        "day_diff": day_diff[self_idx, other_idx],
+    }).sort_values("day_diff", kind="stable")
+
+    # claim closest pairs first; once an event is claimed on either side,
+    # drop_duplicates removes every other candidate row that reuses it
+    candidates = candidates.drop_duplicates(subset="self_idx", keep="first")
+    candidates = candidates.drop_duplicates(subset="other_idx", keep="first")
+
+    return (candidates["self_idx"].to_numpy(), candidates["other_idx"].to_numpy(),
+            candidates["day_diff"].to_numpy())
+
+
+def prep_kde_pixel_worker(pixel_df):
+    """Multiprocessing worker for a single pixel's bracket-matching step.
+
+    Designed to be dispatched by multiprocessing.Pool in prep_kde_data.
+    No initializer needed — all data is passed directly as a DataFrame.
+
+    Parameters
+    ----------
+    pixel_df : pandas.DataFrame
+        Single-pixel slice of the kde_df produced by assemble_kde_data.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns: primary, qa_column, secondary. Empty if no fully-bracketed
+        peaks exist for this pixel.
+    """
+    bracketed = find_preceding_and_following(
+        pixel_df.sort_index()
+    ).dropna(subset=["prev_var1_time", "next_var2_time"])
+    if bracketed.empty:
+        return pd.DataFrame(columns=["primary", "qa_column", "secondary"])
+    bracketed = bracketed.rename(columns={
+        "prev_var1_time": "primary",
+        "next_var2_time": "secondary",
+    })
+    bracketed["qa_column"] = bracketed["qa_column"].astype(int)
+    return bracketed[["primary", "qa_column", "secondary"]]
+
+def prep_kde_data(kde_df):
+    """Pair each peak with its bracketing green-up advanced and green-down onset, per pixel.
+
+    For each pixel, finds all peaks and matches each one with the most recent
+    green-up advanced event before it and the earliest green-down onset event
+    after it (within that same pixel). Peaks that cannot be fully bracketed are
+    dropped. Results from all pixels are then pooled into a single DataFrame.
+
+    Parameters
+    ----------
+    kde_df : pandas.DataFrame
+        Output of assemble_kde_data. Index is year.DOY (float), columns include
+        i, j (pixel indices), green_up_advanced (bool), peaks (float QA or NaN),
+        green_down_onset (bool).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns:
+            green_up_advanced : float — year.DOY of the bracketing green-up advanced event.
+            peak_qa           : int   — QA indicator of the peak (0=Good, 1=Fair, 2=Poor).
+            green_down_onset  : float — year.DOY of the bracketing green-down onset event.
+        Each row is one fully-bracketed peak. Duplicates across pixels are retained.
+    """
+
+    print(f"prep kde started at: {datetime.datetime.now()}")
+
+    pixel_groups = [pixel_df for _, pixel_df in kde_df.groupby(["i", "j"])]
+
+    with multiprocessing.Pool(processes=os.cpu_count()) as pool:
+        results = pool.map(prep_kde_pixel_worker, pixel_groups)
+
+    frames = [df for df in results if not df.empty]
+    if not frames:
+        return pd.DataFrame(columns=["primary", "qa_column", "secondary"])
+    print(f"prep kde finished at: {datetime.datetime.now()}")
+    return pd.concat(frames, ignore_index=True)
+
+
+def gap_rectangles(gap_starts, gap_ends):
+    """Convert data gap intervals into heatmap cell coordinates.
+
+    For each gap, finds every year/quarter cell it overlaps and returns the
+    proportional position of the gap within that cell (matching how axvspan
+    renders gaps in single_plot, but mapped onto the heatmap grid).
+
+    Parameters
+    ----------
+    gap_starts, gap_ends : array-like of timezone-aware datetime
+
+    Returns
+    -------
+    list of (year, q_idx, x_offset, x_width)
+        x_offset and x_width are in [0, 1] relative to the cell width.
+    """
+    import calendar as _cal
+    quarters_def = [(1, 3), (4, 6), (7, 9), (10, 12)]
+    rects = []
+    for gs, ge in zip(gap_starts, gap_ends):
+        for year in range(gs.year, ge.year + 1):
+            for q_idx, (m_start, m_end) in enumerate(quarters_def):
+                q_start = datetime.datetime(year, m_start, 1, tzinfo=datetime.timezone.utc)
+                last_day = _cal.monthrange(year, m_end)[1]
+                q_end = datetime.datetime(year, m_end, last_day, 23, 59, 59,
+                                            tzinfo=datetime.timezone.utc)
+                q_duration = (q_end - q_start).total_seconds()
+                clipped_start = max(gs, q_start)
+                clipped_end = min(ge, q_end)
+                if clipped_end <= clipped_start or q_duration <= 0:
+                    continue
+                x_offset = (clipped_start - q_start).total_seconds() / q_duration
+                x_width = (clipped_end - clipped_start).total_seconds() / q_duration
+                rects.append((year, q_idx, x_offset, x_width))
+    return rects
+
+
+def parse_mask_cells(mask_cells):
+    """Parse a list of 'YYYY Quarter' strings into (year, q_idx) tuples.
+
+    Parameters
+    ----------
+    mask_cells : list of str
+        Each entry is '<year> <quarter>', e.g. '2015 Apr-Jun'.
+        Valid quarter labels: 'Jan-Mar', 'Apr-Jun', 'Jul-Sep', 'Oct-Dec'.
+
+    Returns
+    -------
+    list of (int, int)
+        (year, q_idx) pairs where q_idx is 0–3.
+    """
+    quarter_map = {"Jan-Mar": 0, "Apr-Jun": 1, "Jul-Sep": 2, "Oct-Dec": 3}
+    result = []
+    for entry in mask_cells:
+        parts = entry.strip().split()
+        if len(parts) != 2:
+            raise ValueError(f"Invalid mask entry '{entry}'. Expected '<year> <quarter>'.")
+        year = int(parts[0])
+        quarter = parts[1]
+        if quarter not in quarter_map:
+            raise ValueError(f"Unknown quarter '{quarter}'. Must be one of {list(quarter_map)}.")
+        result.append((year, quarter_map[quarter]))
+    return result
+
+
+def annotate_pairwise_significance(ax, groups):
+    """Draw pairwise Mann-Whitney U significance brackets above a boxplot.
+
+    Compares every pair of groups (by their 1-indexed boxplot position) with
+    a two-sided Mann-Whitney U test. Brackets are stacked bottom-to-top by
+    increasing span (adjacent groups first) so they don't overlap. Pairs with
+    fewer than 2 samples in either group are skipped (test undefined).
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axes already containing the boxplot to annotate.
+    groups : list of array-like
+        The same group arrays passed to ax.boxplot, in boxplot position order.
+    """
+    pairs = [(a, b) for a in range(len(groups)) for b in range(a + 1, len(groups))]
+    pairs = [p for p in pairs if len(groups[p[0]]) >= 2 and len(groups[p[1]]) >= 2]
+    if not pairs:
+        return
+
+    pairs.sort(key=lambda p: p[1] - p[0])
+
+    y_max = max(g.max() for g in groups if len(g))
+    y_min = min(g.min() for g in groups if len(g))
+    y_range = (y_max - y_min) or abs(y_max) or 1.0
+    step = y_range * 0.08
+
+    for level, (a, b) in enumerate(pairs):
+        _, p_value = mannwhitneyu(groups[a], groups[b], alternative="two-sided")
+        if p_value < 0.001:
+            sig = "***"
+        elif p_value < 0.01:
+            sig = "**"
+        elif p_value < 0.05:
+            sig = "*"
+        else:
+            sig = "ns"
+
+        y = y_max + step * (1 + level * 1.6)
+        x1, x2 = a + 1, b + 1
+        ax.plot([x1, x1, x2, x2], [y, y + step * 0.2, y + step * 0.2, y],
+                color="black", linewidth=1)
+        ax.text((x1 + x2) / 2, y + step * 0.25, sig, ha="center", va="bottom", fontsize=10)
+
+    ax.set_ylim(top=y_max + step * (1 + len(pairs) * 1.6) + step)
+
+
+def extract_pixel_timing_OHE(nc, i, j, vars= None, qa_var = 'pks'):
+    frames = {}
+    if vars is None:
+        vars = ['pks','trgs','midUP','midDOWN']
+
+    for var in vars:
+        var = coerce_varname_to_var_x(var)
+
+        var_raw = remove_nan(nc.variables[var][i,j,:])
+        if len(var_raw) <1:
+            continue
+        var_dt = pd.to_datetime(var_raw, unit='s',utc=True)
+        doy = var_dt.year + var_dt.day_of_year / 1000
+        frames[var] = pd.Series(index=doy,dtype=bool)
+
+    qa_var = parse_qa_var_from_str(qa_var)
+    if qa_var is not None:
+        qa_x = coerce_varname_to_var_x(qa_var)
+        qa_x_raw = np.array(nc.variables[qa_x][i, j, :])
+        qa_mask = ~np.isnan(qa_x_raw)
+        if len(qa_x_raw) <1:
+            pass
+        qa_dt = pd.to_datetime(qa_x_raw[qa_mask], unit="s", utc=True)
+        qa_doy = qa_dt.year + qa_dt.day_of_year / 1000
+        qa = np.array(nc.variables[qa_var][i, j, :])[qa_mask].astype(int)
+        frames[qa_var] = pd.Series(index=qa_doy, data= qa)
+    return pd.DataFrame(frames)
+
+def load_extract_meta_from_path(e_path):
+    with netCDF4.Dataset(e_path) as nc:
+        extracted_globals= {
+            "lat": np.asarray(nc.variables["lat"]),
+            "lon": np.asarray(nc.variables["lon"]),
+            "t_all":    unix_to_datenum(nc.variables["time"]),
+            "variable_name": getattr(nc, "variable"),
+            "qa_label":       getattr(nc, "qa"),
+            "variable": np.asarray(
+                nc.variables[getattr(nc, "variable")]
+            ),
+            "qa": np.asarray(
+                nc.variables[getattr(nc, "qa")]
+            )
+        }
+    return extracted_globals
+
+
+def load_pixel_cs_from_path(p_path,i,j):
+    with netCDF4.Dataset(p_path) as nc:
+        smoothing = float(nc.variables["smoothing_parameter"][i, j])
+        pks_x_raw = np.array(nc.variables["pks_x"][i, j, :])
+        pk_mask   = ~np.isnan(pks_x_raw)
+        pks_x  =unix_to_datetime(pks_x_raw[pk_mask])
+        pks_y  = np.array(nc.variables["pks_y"][i, j, :])[pk_mask]
+        pks_qa = np.array(nc.variables["pks_qa"][i, j, :])[pk_mask]
+        trgs_x_raw = np.array(nc.variables["trgs_x"][i, j, :])
+        trg_mask   = ~np.isnan(trgs_x_raw)
+        trgs_x  = unix_to_datetime(trgs_x_raw[trg_mask])
+        trgs_y  = np.array(nc.variables["trgs_y"][i, j, :])[trg_mask]
+        trgs_qa = np.array(nc.variables["trgs_qa"][i, j, :])[trg_mask]
+        midUP_x    = unix_to_datetime(remove_nan(nc.variables["green_up_mid_x"][i, j, :]))
+        midUP_y    = remove_nan(nc.variables["green_up_mid_y"][i, j, :])
+        midDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_mid_x"][i, j, :]))
+        midDOWN_y  = remove_nan(nc.variables["green_down_mid_y"][i, j, :])
+        onsetUP_x    = unix_to_datetime(remove_nan(nc.variables["green_up_onset_x"][i, j, :]))
+        onsetUP_y    = remove_nan(nc.variables["green_up_onset_y"][i, j, :])
+        onsetDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_onset_x"][i, j, :]))
+        onsetDOWN_y  = remove_nan(nc.variables["green_down_onset_y"][i, j, :])
+        advUP_x    = unix_to_datetime(remove_nan(nc.variables["green_up_advanced_x"][i, j, :]))
+        advUP_y    = remove_nan(nc.variables["green_up_advanced_y"][i, j, :])
+        advDOWN_x  = unix_to_datetime(remove_nan(nc.variables["green_down_advanced_x"][i, j, :]))
+        advDOWN_y  = remove_nan(nc.variables["green_down_advanced_y"][i, j, :])
+
+        gap_starts = unix_to_datetime(remove_nan(nc.variables["data_gap_start"][i, j, :]))
+        gap_ends   = unix_to_datetime(remove_nan(nc.variables["data_gap_end"][i, j, :]))
+    return {
+        "smoothing": smoothing,
+        "pks_x": pks_x, "pks_y": pks_y, "pks_qa": pks_qa,
+        "trgs_x": trgs_x, "trgs_y": trgs_y, "trgs_qa": trgs_qa,
+        "midUP_x": midUP_x, "midUP_y": midUP_y,
+        "midDOWN_x": midDOWN_x, "midDOWN_y": midDOWN_y,
+        "onsetUP_x": onsetUP_x, "onsetUP_y": onsetUP_y,
+        "onsetDOWN_x": onsetDOWN_x, "onsetDOWN_y": onsetDOWN_y,
+        "advUP_x": advUP_x, "advUP_y": advUP_y,
+        "advDOWN_x": advDOWN_x, "advDOWN_y": advDOWN_y,
+        "gap_starts": gap_starts, "gap_ends": gap_ends,
+    }
+
+
+def count_extrema(p_path, latitude_idx, longitude_idx, start= 0, end= 9999, peaks = True):
+    """Return the number of detected peaks for a pixel within a year range.
+
+    Parameters
+    ----------
+    latitude_idx : int
+        Row (lat) index of the pixel.
+    longitude_idx : int
+        Column (lon) index of the pixel.
+    start : int, optional
+        First year to include (inclusive). 0 = earliest in the series.
+    end : int, optional
+        Last year to include (inclusive). 9999 = latest in the series.
+
+    Returns
+    -------
+    int
+        Number of peaks falling within the specified year range.
+    """
+    var = "pks" if peaks else "trgs"
+    pixel_data = load_pixel_cs_from_path(p_path,latitude_idx, longitude_idx)
+    plotting_data = grab_plotting_variables(start=start, end=end, pixel_data=pixel_data, variables=[var])
+    return len(plotting_data[var][0])
+
+
+def read_bloom_probability(file_path):
+    """Read bloom probability data from NetCDF."""
+
+    with netCDF4.Dataset(file_path, "r") as ds:
+
+        cols = ["x_low", "x_high", "y_low", "y_high", "probability"]
+
+        missing = set(cols) - set(ds.variables)
+
+        if missing:
+            raise ValueError(
+                f"Bloom probability cache {file_path} is missing variables: {sorted(missing)}"
+            )
+
+        return pd.DataFrame({col: np.asarray(ds.variables[col][:]) for col in cols})[cols]
+
+
+def parse_bloom_probability_filename(file_path):
+    """Extract metadata encoded in bloom probability filename."""
+
+    filename = Path(file_path).name
+
+    pattern = (
+        r"^ID(?P<lake_id>[^_]+)_"
+        r"(?P<start>\d+)_"
+        r"(?P<end>\d+)_"
+        r"(?P<qa>all|qa[0-9]+)_"
+        r"i(?P<interval>[0-9.]+)_"
+        r"r(?P<resolution>[0-9.]+)_"
+        r"x(?P<x_max>[0-9.]+)_"
+        r"y(?P<y_max>[0-9.]+)"
+        r"\.(?P<extension>csv|nc)$"
+    )
+
+    match = re.match(pattern, filename)
+
+    if match is None:
+        raise ValueError(
+            f"Invalid bloom probability filename: {filename}"
+        )
+
+    values = match.groupdict()
+
+    qa_label = values["qa"]
+
+    return {
+        "lake_id": values["lake_id"],
+        "start_year": int(values["start"]),
+        "end_year": int(values["end"]),
+        "qa_label": (
+            "all"
+            if qa_label == "all"
+            else qa_label.removeprefix("qa")
+        ),
+        "interval": int(values["interval"]),
+        "resolution": float(values["resolution"]),
+        "x_max": float(values["x_max"]),
+        "y_max": float(values["y_max"]),
+    }
+
+
+def read_bloom_probability_with_metadata(file_path):
+    """Read bloom probability cache and associated metadata."""
+
+    suffix = Path(file_path).suffix
+
+    if suffix == ".nc":
+        bloom_df = read_bloom_probability(file_path)
+    elif suffix == ".csv":
+        bloom_df = pd.read_csv(file_path)
+    else:
+        raise ValueError(f"Unsupported file type: {suffix}")
+
+    metadata = parse_bloom_probability_filename(file_path)
+
+    return bloom_df, metadata
+
+
+def qa_set_to_str(qa_set):
+    return "all" if qa_set is None else "qa"+"".join(str(q) for q in sorted(qa_set))
+
+def qa_str_to_set(qa_str):
+    return None if qa_str == "all" else {int(value) for value in qa_str.removeprefix("qa")}
+
+def construct_background_agg_filename(lakeID):
+    return f"ID{lakeID}_background_agg.nc"
+
+def construct_background_agg_dirpath(data_dir, var):
+    return Path(data_dir) / "calculated_values" / "spatial_aggregation_values" / var
+
+def construct_fit_metric_filename(lakeID, start_year, end_year):
+    return f"ID{lakeID}_{start_year}_{end_year}.nc"
+
+def construct_fit_metric_dirpath(data_dir, var):
+    return Path(data_dir) / "calculated_values" / "metrics" / var
+
+def construct_bloom_assembly_filename(lakeID):
+    return f"ID{lakeID}_bloom_assembly.nc"
+
+def construct_bloom_assembly_dirpath(data_dir, var):
+    return Path(data_dir) / "calculated_values" / "bloom_assembly_data"/ var
+
+def construct_bloom_prob_filename(lakeID, start_year, end_year, qa_label,
+                                  interval = 21, resolution = 1, x_max = 400, y_max = 730):
+    return f"ID{lakeID}_{start_year}_{end_year}_{qa_label}_i{interval}_r{resolution}_x{x_max}_y{y_max}.nc"
+
+def construct_bloom_prob_dirpath(data_dir, var):
+    return Path(data_dir) / "calculated_values" / "bloom_prob" / var
+
+def read_background_agg_pixel(full_fp, latitude_idx, longitude_idx):
+
+    with netCDF4.Dataset(full_fp, "r") as ds:
+
+        pixel_lookup = {
+            (int(i), int(j)): idx for idx, (i, j) in enumerate(zip(ds.variables["pixel_i"][:], ds.variables["pixel_j"][:]))
+        }
+
+        pixel_idx = pixel_lookup.get((latitude_idx, longitude_idx))
+
+        if pixel_idx is None:
+            return np.array([]), np.array([])
+
+        time = np.asarray(ds.variables["time"][:])
+        values = np.asarray(ds.variables["MA_value"][:, pixel_idx])
+
+    return time, values
+
+
+def construct_recurring_bloom_filename(lakeID):
+    return f"ID{lakeID}_recurring_blooms.csv"
+
+def construct_recurring_bloom_dirpath(data_dir, var):
+    return Path(data_dir) / "calculated_values" / "recurring_blooms" / var
+
+def count_probability_regions(
+    probs,
+    threshold=0.05,
+):
+    """
+    Determine connected probability regions above threshold.
+
+    Returns
+    -------
+    n_regions : int
+    region_df : pd.DataFrame
+        region_id
+        area_cells
+        centroid_x
+        centroid_y
+    """
+
+    grid = probs.pivot(
+        index="y_low",
+        columns="x_low",
+        values="probability",
+    )
+
+    labels, n_regions = label(
+        grid.values > threshold
+    )
+
+    regions = []
+    
+    x_coords = grid.columns.values
+    y_coords = grid.index.values
+
+    for region_id in range(1, n_regions + 1):
+        
+        region_mask = labels == region_id
+        area_cells = int(region_mask.sum())
+        row_idx, col_idx = np.where(region_mask)
+
+        centroid_x = np.mean(x_coords[col_idx])
+        centroid_y = np.mean(y_coords[row_idx])
+
+        regions.append({
+            "region_id": region_id,
+            "area_cells": area_cells,
+            "centroid_x": centroid_x,
+            "centroid_y": centroid_y,
+        })
+
+    if n_regions == 0:
+        regions.append({
+            "region_id": 0,
+            "area_cells": 0,
+            "centroid_x": np.nan,
+            "centroid_y": np.nan,
+        })
+        
+    region_df = pd.DataFrame(regions)
+
+    return n_regions, region_df
+
+
+def parse_bloom_assembly_to_paired_df(assembly_df):
+    """
+    Convert the Bloom Assembly saved data into a paired (bloom_up,bloom_down) dataframe.
+    """
+    paired_df = assembly_df.set_index('year.DOY').groupby(['i','j']).apply(find_preceding_and_following, include_groups=False).dropna()
+    paired_df['year'] = paired_df.index.get_level_values(2).astype(int)
+    return paired_df
+
+
+def filter_pairs_qa_year(paired_df, year_list, qa_vals):
+    if "year" not in paired_df.columns:
+        paired_df = paired_df.copy()
+        paired_df['year'] = paired_df.index.get_level_values('year.DOY').astype(int)
+    if isinstance(qa_vals, str):
+        qa_vals = f.qa_str_to_set(qa_vals)
+    if not qa_vals:
+        qa_vals = {0,1,2}
+    filtered_df = paired_df.loc[paired_df['year'].isin(year_list) & paired_df['qa_column'].isin(qa_vals)].copy()
+    filtered_df['qa_column'] = filtered_df['qa_column'].astype('category')
+    return filtered_df
+
+
+def yearDOY_to_DOY(df, col_list):
+    for col in col_list:
+        df[f"{col}_DOY"] = (df[col] % 1 * 1000).round().astype(int)
+    return df
+

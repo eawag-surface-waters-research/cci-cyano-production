@@ -6,14 +6,19 @@ import itertools
 import logging
 import geopandas as gpd
 from concurrent.futures import ProcessPoolExecutor
+import os
+from pathlib import Path
+from datetime import datetime, timezone
 
-from functions import set_logging, verify_arg_file, parse_args
+from functions import set_logging, verify_arg_file, parse_args, save_maps, save_pixel_plots, create_summary, save_comparison_plots, save_timing_plots, write_provenance, sanitize_filename
 from extract import extract
 from phenology import phenology
+from postprocess import postprocess
 
-def main(args, log=False, threads=1, parallel="lake", batch_size=100):
+def main(args, log=False, threads=1, parallel="lake", batch_size=100, args_file=None):
     set_logging(log)
     args = parse_args(args)
+    run_id = datetime.now(timezone.utc).isoformat().replace(":", "-")
 
     logging.info("Reading lake shapefile from: {}".format(args["shapefile"]))
     gdf = gpd.read_file(args["shapefile"])
@@ -35,6 +40,9 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
         else:
             with ProcessPoolExecutor(max_workers=threads) as executor:
                 executor.map(extract, lakes, itertools.repeat(args), itertools.repeat(files))
+        if args["provenance"]:
+            write_provenance(args["out_folder"], "extract", args, args_file=args_file,
+                             extra={"lakes": [int(lake["id"]) for lake in lakes], "threads": threads, "parallel": parallel}, run_id=run_id)
     else:
         logging.info("Skipping extraction step.")
 
@@ -47,6 +55,29 @@ def main(args, log=False, threads=1, parallel="lake", batch_size=100):
             with ProcessPoolExecutor(max_workers=threads) as executor:
                 executor.map(phenology, lakes, itertools.repeat(args),
                              itertools.repeat(1), itertools.repeat(batch_size))
+        if args["provenance"]:
+            write_provenance(args["out_folder"], "phenology", args, args_file=args_file,
+                             extra={"lakes": [int(lake["id"]) for lake in lakes], "threads": threads,
+                                    "parallel": parallel, "batch_size": batch_size}, run_id=run_id)
+    else:
+        logging.info("Skipping phenology step.")
+
+    if args["postprocess"]:
+        logging.info("Postprocessing fit metrics and bloom probabilities.")
+        if parallel == "pixels" or threads == 1:
+            for lake in lakes:
+                postprocess(lake, args, threads=threads, batch_size=batch_size)
+        else:
+            with ProcessPoolExecutor(max_workers=threads) as executor:
+                executor.map(postprocess, lakes, itertools.repeat(args),
+                                itertools.repeat(1), itertools.repeat(batch_size))
+        if args["provenance"]:
+            write_provenance(args["out_folder"], "postprocess", args, args_file=args_file,
+                                extra={"lakes": [int(lake["id"]) for lake in lakes], "threads": threads,
+                                    "parallel": parallel, "batch_size": batch_size}, run_id=run_id)
+    else:
+        logging.info("Skipping postprocessing step.")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Parse data from satellite images')
@@ -58,4 +89,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     with open(args.file) as f:
         file_args = json.load(f)
-    main(file_args, log=args.logs, threads=int(args.threads), parallel=args.parallel, batch_size=args.batch_size)
+    main(file_args, log=args.logs, threads=int(args.threads), parallel=args.parallel,
+         batch_size=args.batch_size, args_file=os.path.splitext(os.path.basename(args.file))[0])

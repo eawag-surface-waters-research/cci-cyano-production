@@ -1,0 +1,19 @@
+{
+  "variable": "sinusoidal",
+  "qa": "lwlr_quality_flag",
+  "shapefile": "C:/Users/schelian/OneDrive - Eawag/phytoplankton_phenology/synthetic_lake_data/shapefile/synth_meta.shp",
+  "images": "D:/lakecci_data/raw/v3.0/merged_product",
+  "out_folder": "C:/Users/schelian/OneDrive - Eawag/phytoplankton_phenology/synthetic_lake_data/data/v2.1",
+  "lakes": [9999001],
+  "extract": false,
+  "qa_filter": true,
+  "phenology": true,
+  "analysis": true,
+  "purple_chla21": true,
+  "maps": true,
+  "aggregation": false,
+  "background_pts": true,
+  "comparison": false,
+  "time_splits": [[0,9999]], 
+  "pixel_plots": "C:\\Users\\schelian\\cci-cyano-production\\pixel_dicts\\v3_chla_pixels.json"
+}
